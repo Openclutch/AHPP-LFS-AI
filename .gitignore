@@ -1,0 +1,23 @@
+
+/.vscode
+/.vs
+/packages
+/AHPP_TougeBattle/bin/Debug/logs
+/AHPP_TougeBattle/bin/Release/logs
+AHPP_TougeBattle/obj/Debug/build.force
+
+*.dll
+*.exe
+*.pdb
+*.cache
+*.xml
+*.config
+
+# Build outputs
+**/bin/
+**/obj/
+
+# Runtime data
+*.db
+dialogue.csv
+

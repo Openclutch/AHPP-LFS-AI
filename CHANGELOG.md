@@ -1,0 +1,145 @@
+# Changelog
+
+- Restore pits upgrade buttons to hide when leaving car selection and reappear beside the buy control once a car is chosen.
+- Fix connection HUD substate display when IS_CIM reports byte-based submodes.
+- Add debug HUD button to display the current UI substate beneath the connection state indicator.
+- Remove the always-on-top configuration flag from GUI buttons so they behave as they did prior to the recent regression.
+- Track LFS interface submodes so pit controls only show while the garage or pit setup screens display the selected car.
+- Hide pit upgrade buttons while browsing the mod selection list so they only appear with the current car on screen.
+- Clear the selected car when reopening the mod browser so pits buy and upgrade buttons immediately hide.
+- Refresh pits buy/sell controls as soon as a car is selected so garage prices appear without reopening the menu.
+- Keep buy and price buttons visible after selecting a car in the pits so drivers always see purchase options.
+- Show drag races with a single opponent using both driver names and reserve "vs others" for larger lobbies in pending and active lists.
+- Show pits buy/sell buttons when browsing the garage so new players can purchase cars without pitting first.
+- Restore pit buttons when entering the garage immediately after joining so new players can manage cars.
+- Keep upgrade controls visible in the garage even when arriving directly from the race screen.
+- Show Tycoon missions as Undercover when players start them in cop cars.
+- Add beta tester flag with red prestige badge support and a database column for tracking testers.
+- Add developer badge support, including database storage and nameplate rendering alongside beta tester tags.
+- Display GET VIDEO button for every campaign stage that has a configured YouTube link using the standard youtube{Stage} keys (R1, D1, etc.).
+- Load campaign YouTube links from configuration instead of hardcoding them.
+- Prevent completed battles from being aborted again so boss victories don't show failure dialogue.
+- Spawn pit upgrade buttons only when entering pits to avoid flashing during other UI interactions.
+- Hide mission leaderboard for Tycoon missions.
+- Only display pit upgrade buttons when a car is selected and the driver is in the pits.
+- Add button on How To menu to send configurable music stream link.
+- Move accept battle button to the left side of the screen so challenges appear at x=0.
+- Display remaining cop chase cooldown time when attempting a chase too soon.
+- Clarify delay drag battle announcements and join prompts so players know all drivers are welcome.
+- Fix compile error in pits dialog by removing stray closing brace.
+- Hide upgrade buttons when no car is selected to avoid showing them before choosing a vehicle.
+- Align How To and campaign dialogue text to the left to prevent random shifts.
+
+## [0.8.5.4] - 2025-08-20
+### Gameplay
+- Hide damage button on connection HUD unless in Touge, Practice, Legend, or Attack battles.
+- Hide HUD and pits buttons while the menu is open so menu clicks don't trigger underlying controls.
+- Reset sell-car warning when switching vehicles so each selection prompts again.
+- Log driver and nearby player positions during teleport safety checks to diagnose occupied warnings.
+- Default buttons to use LFS always-on-top mode so closing the menu restores all UI elements.
+- Link Prologue campaign GET VIDEO button to introductory YouTube video.
+- Ensure pit upgrade and HUD buttons use the always-on flag so they remain visible over the LFS interface.
+
+### Tech stuff
+- Ensure logs are written to the application directory so Windows services produce log files as expected.
+- Automatically create the `AHPP_TougeBattle` service during deployment if it is missing.
+- Update deployment workflow to manage `AHPP_TougeBattle` service directly and remove watchdog script.
+- Convert Touge racing program to run as a Windows service.
+- Fix watchdog service start failure by locating executable relative to script
+  when run from the service root.
+- Move service binaries to `C:\AHPP_INSIM\bin\Release` and load configuration,
+  database, and dialogue files from the `AHPP_INSIM` base directory.
+- Install NuGet CLI in CI workflow to ensure `nuget` command is available.
+- Restore NuGet packages in CI before building to ensure all dependencies are available.
+- Updated GitHub Actions to build the AHPP_TougeBattle project instead of AHPP_Server.
+- Use parent directory above executable for configuration, database, and dialogue files.
+- Corrected GitHub Actions restart step to reference InSim DLL in Release folder.
+- Load configuration, database and dialogue files from directory above Release.
+- Updated restart script default config path.
+- Ignore build output directories and runtime data.
+- Ensure dialogue CSV is loaded from AHPP_INSIM base directory rather than Release.
+- Resolve log directory from configuration and convert it to an absolute path so services write logs to the expected folder.
+
+## [0.8.5.3] - 2025-08-18
+### Added
+- Battle payouts for drag, touge, and attack races are now configurable via `config.ini`.
+### Changed
+- Battle classes now reference program-level payout values loaded from the config file, standardizing `Attack` payout key.
+- Reduced payback amount for Ange car to 250k credits.
+### Fixed
+- MissionInsertResult now logs SQL with parameter values, aiding debugging of mission activity inserts.
+- Reuse existing value formatter in SQL logging helper to avoid duplicate conversion logic.
+
+## [0.8.5.2] - 2025-08-17
+### Fixed
+- Ensures the main menu and menu button use the always-on flag so they display above LFS interface.
+
+## [0.8.5.1] - 2025-08-16
+### Fixed
+- Mission payout decay now only counts successful missions so failed attempts no longer reduce rewards.
+- Avoided running track payout scaling before the server reports its track, preventing startup warnings.
+
+## [0.8.5] - 2025-08-14
+- Hides battle accept button after acceptance and resolves dialog persistence issues.
+- Clears drift and speed scores and health bars on race exit, CatMouse abort, or battle entry.
+- Adds drag race delay configuration for faster cars, increases handicap scale, and improves false start handling and countdown behavior.
+- Introduces mission payout decay configuration with updated scaling.
+- Adds restart notification script with INI configuration, disconnect support, and reduced chat spam.
+- Adds menu button above system buttons and logs SQL queries with parameter values.
+- Adds unit test for CarManager progress and cleans up tracked artifacts.
+- Refines CI workflows and deployment scripts for reliable service management.
+
+
+## [0.8.1] - 2025-06-18
+### Fixed
+- When doing a campaign action like blackout and teleport with story, it should cancel current pending and active battles, or active mission, this avoids the menu from disappearing when doing a campaign sequence
+- Fixed boss battle references to legend battles
+- Fixed pending legend battles showing as practice with mission text
+- Selling car now should sell the upgrades that you owned as well
+- Did a few fixes for false starts to wait a second before tracking that. Also added logic to avoid doing the same state multiple times (potentially causing multiple actions like multiple pits when moving, etc, we should see no more duplicate messages now)
+- Moved the legend text if you win, lose, or leave to the mission code to try and more reliability tell the player the message. Before it would only work sometimes since the mission is cleaned up before it can send the message (race condition)
+- Ignore battle insim circles while not in battle (circles 0-10) This was causing the “unknown event”
+- Close mission dialog or any menu actually when the player spectates or pits
+- Fixed text formatting so we can import descriptions for mods into the database, was previously skipped but is now fixed. Needed this for reviewing not the game lol
+- Adjusted the drifting speed to 30 from 20 kmh, making the missions a bit harder to just do donuts and get the mission done
+- Fixed level progress when using !rm, it used to a bad ref to connection
+- Added fix for cleaning up drivers when the player leaves the game, causing the lvl 1 glitch for missions
+- Adjusted payback text for ange car
+- Fixed bug to allow selling cars, but not the car if its anges and you didn't pay her back yet
+- Fixed bug in !rm where it didn't set payback car to 0, and now removes dragbattles
+- Updated text for selling anges car mods
+- Added logic to prevent players from purchasing mods for ange car, that could potentially soft lock if they spent their money before removing the car, being stuck with the kei van
+
+## [0.8.3] - 2025-07-15
+- change seconds to time stamp on missions
+- added freeroam drift points 2k culm to go towards drift missions (going towards that path)
+- fixes for teleporting
+- fixed crash when pitting while battling, and during countdown 
+- added threshold to only track payouts for freeroam speeding or drifting if you get over 500 points
+- added logging for when server is taking too long and slowing down
+- fixed cop pull over cooldown bug
+- added health system for touge
+- added legend stars at the top
+- added attack battle health system
+- added brand deal bonus feature
+- fixes for drag races
+- added order to accept things, if you have a mission up, !a will accept that, otherwise touge challenge, otherwise, attack, last is drag race
+- reduces attack battle damage to only 25% of touge values
+- added drag stats in the menu, if you aren't in a car, it will show all times, if you are in a car, it will only show you 20% up or down od bhp/ton of the car you are in
+
+## [0.8.4] - 2025-07-23
+- Drift missions now accumulate drift score instead of one shot chain
+- Added new command !dragdelay (temp name) so it will launch a drag race, but delay the start for the faster cars by tier. the stats should still individually track, but makes for hopefully a fun close finish
+- fixed bug when damage happens in freeroam
+- fix for drag to teleport all at once, added more time to the tree countdown
+- fix for paying back ange car so you can upgrade it after
+- only let the player to do the architect if they finished the previous legends first
+- fixed button id issue
+
+## [0.8.5] - 2025-07-25
+- fixed bug in drag where if you left, the lights would stay up
+- fixed more bugs with drag battles crashing when pitting at times before the battle starts
+- now clear drift and speed score when starting any battle to prevent stale points giving lots of money
+- Missions now will be worth less if you continue grinding the same one within an hour. Encouraging a variety of activities.
+- Added real brand names for the brand deals!
+

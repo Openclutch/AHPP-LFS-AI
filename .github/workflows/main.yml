@@ -1,0 +1,106 @@
+name: Deploy InSim server
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-restart:
+    runs-on: self-hosted
+    env:
+      RESTART_DELAY: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Set up NuGet
+        uses: nuget/setup-nuget@v1
+
+      - name: Show runner account
+        shell: powershell
+        run: |
+          Write-Host "Runner is running as:"; whoami
+          whoami /groups
+
+      - name: Announce restart to players
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\NotifyRestart.ps1" -CountdownSeconds $env:RESTART_DELAY -ConfigPath 'C:\\AHPP_INSIM\\config.ini' -DllPath 'C:\\AHPP_INSIM\\bin\\Release\\InSimDotNet.dll'
+
+      # Stop TougeBattle service only if it's running
+      - name: Stop service (if running)
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+          # Does the service exist?
+          sc.exe query AHPP_TougeBattle > $null 2>&1
+          if ($LASTEXITCODE -eq 1060) {
+            Write-Host "Service AHPP_TougeBattle not found; skipping stop."
+            exit 0
+          }
+
+          $status = (sc.exe query AHPP_TougeBattle) -join "`n"
+          if ($status -match 'STATE\s*:\s*\d+\s+RUNNING') {
+            sc.exe stop AHPP_TougeBattle
+            if ($LASTEXITCODE -ne 0) { throw "Failed to stop AHPP_TougeBattle (exit $LASTEXITCODE)" }
+          } else {
+            Write-Host "Service AHPP_TougeBattle not running; skipping stop."
+          }
+
+      - name: Restore NuGet packages
+        run: nuget restore AHPP_Insim.sln
+
+      - name: Build AHPP TougeBattle
+        run: msbuild AHPP_TougeBattle/AHPP_TougeBattle.csproj /t:Rebuild /p:Configuration=Release /p:OutDir="C:\\AHPP_INSIM\\bin\\Release\\"
+
+      - name: Publish
+        shell: powershell
+        run: |
+          if (-not (Test-Path 'C:\\AHPP_INSIM\\bin\\Release')) {
+            New-Item -ItemType Directory -Path 'C:\\AHPP_INSIM\\bin\\Release' | Out-Null
+          }
+          Write-Host "Binaries placed in C:\\AHPP_INSIM\\bin\\Release"
+
+      - name: Copy changelog for InSim
+        shell: powershell
+        run: |
+          $targetDirectory = 'C:\\AHPP_INSIM'
+          if (-not (Test-Path $targetDirectory)) {
+            New-Item -ItemType Directory -Path $targetDirectory | Out-Null
+          }
+
+          $sourceChangelog = Join-Path $env:GITHUB_WORKSPACE 'CHANGELOG.md'
+          if (-not (Test-Path $sourceChangelog)) {
+            throw "Expected changelog not found at $sourceChangelog"
+          }
+
+          $destinationChangelog = Join-Path $targetDirectory 'CHANGELOG.md'
+          Copy-Item -Path $sourceChangelog -Destination $destinationChangelog -Force
+          Write-Host "Copied changelog to $destinationChangelog"
+
+      # Ensure the service exists, start it, and verify it's RUNNING
+      - name: Create and start service
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+          # Create service if it does not already exist
+          sc.exe query AHPP_TougeBattle > $null 2>&1
+          if ($LASTEXITCODE -eq 1060) {
+            sc.exe create AHPP_TougeBattle binPath= "C:\\AHPP_INSIM\\bin\\Release\\AHPP_TougeBattle.exe" start= auto
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create AHPP_TougeBattle service (exit $LASTEXITCODE)" }
+          }
+
+          sc.exe start AHPP_TougeBattle
+          if ($LASTEXITCODE -ne 0) { throw "Failed to start AHPP_TougeBattle (exit $LASTEXITCODE)" }
+
+          Start-Sleep -Seconds 2
+          $status = (sc.exe query AHPP_TougeBattle) -join "`n"
+          if ($status -notmatch 'STATE\s*:\s*\d+\s+RUNNING') {
+            throw "Service not RUNNING after start. Full state:`n$status"
+          } else {
+            Write-Host "AHPP_TougeBattle is RUNNING."
+          }

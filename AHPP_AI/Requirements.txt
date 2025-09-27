@@ -1,0 +1,120 @@
+Product Requirements Document: AI Racing Driver System for Live for Speed
+Overview
+The AI Racing Driver System is a comprehensive solution that enables autonomous racing vehicles in the Live for Speed (LFS) racing simulation. The system controls AI cars to navigate tracks, follow racing lines, handle vehicle dynamics, and simulate realistic racing behavior without human input.
+
+Core Features
+1. AI Navigation and Route Following
+
+Waypoint Navigation: AI vehicles follow track-derived waypoints with appropriate cornering speeds and racing lines
+Track Learning: System extracts waypoints from track maps or LYT files to create optimized racing paths
+Dynamic Path Selection: Intelligently selects appropriate paths based on car position and heading
+Smooth Curve Transitions: Uses Bezier curves for smooth entry into racing lines
+
+2. Vehicle Control Systems
+
+Realistic Driving Controls: Manages throttle, brake, steering, gears, and clutch with human-like inputs
+Engine Management: Handles engine starting, stall recovery, and appropriate throttle application
+Gearbox Control: Implements realistic shifting with proper clutch coordination and timing
+Vehicle Recovery: Detects and recovers from incidents like wall collisions and being stuck
+
+3. Telemetry and Feedback
+
+Vehicle State Monitoring: Tracks speed, position, heading, progress, and other telemetry data
+Performance Analytics: Measures progress toward waypoints and ability to maintain target speeds
+Debug Visualization: Displays real-time data on vehicle state and decision-making processes
+Logging System: Records detailed logs of all AI operations for analysis and troubleshooting 
+
+4. Physics-Aware Racing Behavior
+
+Speed Management: Calculates appropriate speeds for different track segments based on curvature
+Cornering Optimization: Adjusts steering, throttle, and braking for optimal cornering performance
+Stall Prevention: Manages clutch engagement to prevent stalling during low-speed maneuvers
+Adaptive Steering: Calculates steering angles based on heading errors with progressive control
+
+Technical Requirements
+Integration with Live for Speed
+
+InSim Protocol: Full compatibility with LFS InSim protocol for bidirectional communication
+Car Control Interface: Use IS_AIC packets to send control inputs to AI vehicles
+Telemetry Reception: Process IS_MCI and IS_AII packets for vehicle data
+Object Visualization: Support for track object placement and waypoint visualization
+
+System Architecture
+
+Modular Design: Maintain separation of concerns with specialized components
+Real-time Processing: Handle control decisions with minimal latency (<100ms)
+Error Handling: Robust error detection and recovery throughout the system
+Thread Safety: Proper synchronization for concurrent operations
+
+User Interface
+
+Debug UI: Interactive overlay showing AI state, waypoints, and performance metrics
+Command Interface: Allow basic controls for spawning and managing AI cars
+Visualization Tools: Display racing lines, coordinate systems, and navigation paths
+Logging Interface: Provide detailed logs with configurable verbosity
+
+Functional Requirements
+Waypoint Management
+
+Extract racing lines from track images or LYT files
+Calculate optimal speeds for different track segments
+Generate smooth transition paths between waypoints
+Support multiple racing lines (inside, outside, optimal)
+
+Vehicle Control
+
+Manage throttle application based on target speed and track position
+Apply appropriate braking force approaching corners
+Execute realistic gear changes with proper clutch coordination
+Implement progressive steering with direction memory to prevent oscillation
+
+Recovery Systems
+
+Detect when vehicle is stuck against walls or obstacles
+Implement multi-stage recovery procedure (reverse, turn, move forward)
+Recover from engine stalls with realistic startup sequence
+Advance to next waypoint when progress is impossible
+
+Debugging and Development
+
+Provide real-time telemetry visualization
+Display waypoints and racing lines in-game
+Log all significant events and decisions
+Enable dynamic configuration adjustments
+
+Configuration Requirements
+AI Behavior Parameters
+
+Throttle/Brake Settings: Base values and response curves
+Steering Parameters: Sensitivity, limits, and centering values
+Gearbox Settings: Shift timing, clutch control, and speed thresholds
+Recovery Parameters: Timeout thresholds and attempt limits
+
+Track and Navigation Settings
+
+Waypoint Thresholds: Distance required to consider waypoint reached
+Speed Profiles: Cornering speed calculation parameters
+Progress Monitoring: Minimum required progress and check intervals
+Path Generation: Curve smoothness and sampling intervals
+
+Performance Requirements
+
+Support for multiple simultaneous AI vehicles
+Maintain consistent racing line following within 2 meters
+Execute recovery maneuvers within 5 seconds
+Process telemetry and send control updates at minimum 10Hz
+
+Future Enhancement Opportunities
+
+AI Competition: Enable AI cars to race against each other with passing logic
+Learning System: Implement reinforcement learning to improve lap times
+Weather Adaptation: Adjust driving behavior based on track conditions
+Advanced Racing Tactics: Implement defensive/offensive racing maneuvers
+Performance Profiles: Create different skill levels from novice to professional
+
+Constraints and Limitations
+
+System must operate within the constraints of the LFS InSim protocol
+AI behavior limited by the physics simulation capabilities of LFS
+Visualizations constrained to available object types in LFS
+Performance depends on available computational resources and network latency
