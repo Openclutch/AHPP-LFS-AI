@@ -436,7 +436,7 @@ namespace AHPP_AI.AI
 
         public void RemoveAllAICars()
         {
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in aiPLIDs.Where(p => p > 0))
             {
                 insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             }
@@ -446,7 +446,7 @@ namespace AHPP_AI.AI
 
         public void StopAllAIs()
         {
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in aiPLIDs.Where(p => p > 0))
             {
                 waypointFollower.SetManualTargetSpeed(plid, 0);
                 driver.ParkCar(plid);
@@ -458,7 +458,7 @@ namespace AHPP_AI.AI
         /// </summary>
         public void StartAllAIs()
         {
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in aiPLIDs.Where(p => p > 0))
             {
                 waypointFollower.ClearManualTargetSpeed(plid);
                 driver.StartCar(plid);

@@ -16,6 +16,7 @@
 - Reduced main UI buttons (including the Record control) to width 20 to match the compact debug buttons.
 - Added configurable waypoint lookahead so AI target selection can be tuned via `LookaheadWaypoints` in config.
 - Added configurable recording interval (meters between points) with both config support and an in-game type-in control.
+- Skip sending /spec to invalid PLIDs when resetting or stopping AI fleets to avoid “parameter invalid” errors.
 - Add a route library and JSON templates for main loop, pit entry, and detour recordings with metadata.
 - Record routes with typed presets, per-node speed limits, and saved metadata for editing later.
 - Visualize recorded routes in LFS with color-coded cones so waypoints can be selected and tweaked in the layout editor.
