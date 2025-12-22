@@ -38,6 +38,8 @@ namespace AHPP_AI.AI
         private readonly WaypointManager waypointManager;
         private readonly PathManager pathManager;
         private readonly RouteRecorder routeRecorder;
+        private readonly RouteLibrary routeLibrary;
+        private readonly Dictionary<string, RouteMetadata> routePresets = new Dictionary<string, RouteMetadata>(StringComparer.OrdinalIgnoreCase);
         private readonly MainUI mainUI;
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Random branchRandom = new Random();
@@ -61,12 +63,14 @@ namespace AHPP_AI.AI
             Logger logger,
             WaypointManager waypointManager,
             LFSLayout lfsLayout,
+            RouteLibrary routeLibrary,
             bool debugEnabled = false)
         {
             this.insim = insim;
             this.logger = logger;
             this.waypointManager = waypointManager;
             this.lfsLayout = lfsLayout;
+            this.routeLibrary = routeLibrary;
 
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
@@ -82,10 +86,115 @@ namespace AHPP_AI.AI
             waypointFollower = new WaypointFollower(config, logger, steeringCalculator);
             gearboxController = new GearboxController(config, logger);
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim);
-            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI);
+            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary);
             mainUI = new MainUI(insim, logger);
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
+            InitializeRoutePresets();
+        }
+
+        /// <summary>
+        /// Seed the default recording presets for the main loop, pit entry and detours.
+        /// </summary>
+        private void InitializeRoutePresets()
+        {
+            routePresets["main_loop"] = new RouteMetadata
+            {
+                Name = "main_loop",
+                Type = RouteType.MainLoop,
+                Description = "Primary loop that AIs can circulate on continuously.",
+                IsLoop = true,
+                DefaultSpeedLimit = 60
+            };
+
+            routePresets["pit_entry"] = new RouteMetadata
+            {
+                Name = "pit_entry",
+                Type = RouteType.PitEntry,
+                Description = "Route from pits or spawn to the main loop entry point.",
+                AttachMainIndex = 0,
+                DefaultSpeedLimit = 50
+            };
+
+            routePresets["detour1"] = new RouteMetadata
+            {
+                Name = "detour1",
+                Type = RouteType.Detour,
+                Description = "Optional detour route (slot 1).",
+                DefaultSpeedLimit = 60
+            };
+
+            routePresets["detour2"] = new RouteMetadata
+            {
+                Name = "detour2",
+                Type = RouteType.Detour,
+                Description = "Optional detour route (slot 2).",
+                DefaultSpeedLimit = 60
+            };
+
+            routePresets["detour3"] = new RouteMetadata
+            {
+                Name = "detour3",
+                Type = RouteType.Detour,
+                Description = "Optional detour route (slot 3).",
+                DefaultSpeedLimit = 60
+            };
+
+            // Legacy mappings to keep the debug buttons usable
+            routePresets["route1"] = CloneMetadata(routePresets["main_loop"]);
+            routePresets["route2"] = CloneMetadata(routePresets["pit_entry"]);
+            routePresets["route3"] = CloneMetadata(routePresets["detour1"]);
+        }
+
+        /// <summary>
+        /// Make a copy of route metadata to avoid mutating presets.
+        /// </summary>
+        private static RouteMetadata CloneMetadata(RouteMetadata metadata)
+        {
+            if (metadata == null) return null;
+            return new RouteMetadata
+            {
+                Name = metadata.Name,
+                Type = metadata.Type,
+                Description = metadata.Description,
+                IsLoop = metadata.IsLoop,
+                AttachMainIndex = metadata.AttachMainIndex,
+                RejoinMainIndex = metadata.RejoinMainIndex,
+                DefaultSpeedLimit = metadata.DefaultSpeedLimit
+            };
+        }
+
+        /// <summary>
+        /// Build recording metadata using presets and any overrides provided by the caller.
+        /// </summary>
+        private RouteMetadata BuildRecordingMetadata(string name, RouteType type, int? attachIndex, int? rejoinIndex)
+        {
+            var key = string.IsNullOrWhiteSpace(name) ? "route" : name;
+            RouteMetadata metadata;
+
+            if (routePresets.TryGetValue(key, out var preset) && preset != null)
+            {
+                metadata = CloneMetadata(preset);
+            }
+            else
+            {
+                metadata = new RouteMetadata
+                {
+                    Name = key,
+                    Type = type == RouteType.Unknown ? routeLibrary.GuessRouteType(key) : type,
+                    IsLoop = type == RouteType.MainLoop,
+                    DefaultSpeedLimit = 60
+                };
+            }
+
+            if (type != RouteType.Unknown) metadata.Type = type;
+            if (metadata.Type == RouteType.MainLoop) metadata.IsLoop = true;
+            if (attachIndex.HasValue) metadata.AttachMainIndex = attachIndex;
+            if (rejoinIndex.HasValue) metadata.RejoinMainIndex = rejoinIndex;
+            if (metadata.Type == RouteType.Unknown) metadata.Type = routeLibrary.GuessRouteType(metadata.Name);
+            if (!metadata.DefaultSpeedLimit.HasValue) metadata.DefaultSpeedLimit = 60;
+
+            return metadata;
         }
 
         public void ConnectOutGauge(string host, int port)
@@ -125,9 +234,14 @@ namespace AHPP_AI.AI
             }
         }
 
-        public void StartRecording(string name, string type = "main")
+        /// <summary>
+        /// Start recording a route with metadata for later editing.
+        /// </summary>
+        public void StartRecording(string name, RouteType type = RouteType.Unknown, int? attachIndex = null,
+            int? rejoinIndex = null)
         {
-            routeRecorder.Start(name, type);
+            var metadata = BuildRecordingMetadata(name, type, attachIndex, rejoinIndex);
+            routeRecorder.Start(metadata);
         }
 
         public void UpdateUIForView(byte viewPlid)
@@ -154,6 +268,44 @@ namespace AHPP_AI.AI
         public void StopRecording()
         {
             routeRecorder.Stop();
+        }
+
+        /// <summary>
+        /// Toggle visualization of recorded routes in the layout editor for the current viewer.
+        /// </summary>
+        public void ToggleRouteVisualization(byte viewPlid)
+        {
+            if (viewPlid == 0)
+            {
+                logger.LogWarning("Cannot visualize routes: no player in view");
+                insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
+                return;
+            }
+
+            if (lfsLayout.WaypointsVisualized)
+            {
+                lfsLayout.ClearAllVisualizations();
+                lfsLayout.WaypointsVisualized = false;
+                insim.Send(new IS_MST { Msg = "Layout visualization hidden." });
+                return;
+            }
+
+            // Always refresh the recorded routes before visualizing so recent recordings appear.
+            var routeNames = new List<string>();
+            if (!string.IsNullOrWhiteSpace(config.SpawnRouteName)) routeNames.Add(config.SpawnRouteName);
+            if (!string.IsNullOrWhiteSpace(config.MainRouteName)) routeNames.Add(config.MainRouteName);
+            if (config.BranchRouteNames != null) routeNames.AddRange(config.BranchRouteNames);
+
+            foreach (var name in routeNames)
+            {
+                waypointManager.LoadTrafficRoute(name);
+                var recorded = waypointManager.GetRecordedRoute(name);
+                if (recorded != null) lfsLayout.VisualizeRecordedRoute(viewPlid, recorded);
+                else logger.LogWarning($"No recorded route found for visualization: {name}");
+            }
+
+            lfsLayout.WaypointsVisualized = true;
+            insim.Send(new IS_MST { Msg = $"Visualized {routeNames.Count} recorded routes." });
         }
 
         public bool IsRecording => routeRecorder.IsRecording;
@@ -501,6 +653,56 @@ namespace AHPP_AI.AI
             {
                 yield return (plid, $"AI {plid}");
             }
+        }
+
+        /// <summary>
+        /// Reload all route files from disk and reapply paths to active AIs.
+        /// </summary>
+        public void ReloadRoutes()
+        {
+            pathManager.LoadRoutes(config);
+
+            foreach (var plid in aiPLIDs)
+            {
+                if (!currentRoute.TryGetValue(plid, out var routeName))
+                    continue;
+
+                switch (routeName)
+                {
+                    case "spawn":
+                        waypointFollower.SetPath(plid, pathManager.SpawnRoute);
+                        break;
+                    case "main":
+                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        break;
+                    case "branch":
+                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        currentRoute[plid] = "main";
+                        break;
+                    default:
+                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        currentRoute[plid] = "main";
+                        break;
+                }
+            }
+
+            insim.Send(new IS_MST { Msg = "Routes reloaded from disk" });
+            logger.Log("Routes reloaded and reapplied to active AIs");
+        }
+
+        /// <summary>
+        /// Visualize a recorded route in the layout so it can be edited in LFS.
+        /// </summary>
+        public void VisualizeRouteForEditing(string routeName, byte plid)
+        {
+            var recorded = waypointManager.GetRecordedRoute(routeName);
+            if (recorded == null)
+            {
+                logger.LogWarning($"Cannot visualize route {routeName}: no recorded data found");
+                return;
+            }
+
+            lfsLayout.VisualizeRecordedRoute(plid, recorded);
         }
     }
 }

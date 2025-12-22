@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text.Json;
 using AHPP_AI.AI;
 using AHPP_AI.Debug;
 using AHPP_AI.Util;
@@ -14,12 +12,14 @@ namespace AHPP_AI.Waypoint
     public class WaypointManager
     {
         private readonly Logger logger;
+        private readonly RouteLibrary routeLibrary;
         private readonly Dictionary<string, List<Util.Waypoint>> trafficRoutes = new Dictionary<string, List<Util.Waypoint>>();
-        private readonly Dictionary<string, string> routeTypes = new Dictionary<string, string>();
+        private readonly Dictionary<string, RecordedRoute> recordedRoutes = new Dictionary<string, RecordedRoute>();
 
-        public WaypointManager(Logger logger)
+        public WaypointManager(Logger logger, RouteLibrary routeLibrary)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            this.routeLibrary = routeLibrary ?? throw new ArgumentNullException(nameof(routeLibrary));
             logger.Log("WaypointManager initialized");
         }
 
@@ -101,54 +101,17 @@ namespace AHPP_AI.Waypoint
             return (closestIndex, true);
         }
 
+        /// <summary>
+        /// Load a traffic route from disk using the route library.
+        /// </summary>
         public void LoadTrafficRoute(string name)
         {
-            var file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{name}.json");
-            if (!File.Exists(file))
-            {
-                logger.LogWarning($"Route file not found: {file}. Creating empty file.");
-                File.WriteAllText(file, "[]");
-            }
+            var route = routeLibrary.Load(name);
+            recordedRoutes[name] = route;
 
-            try
-            {
-                var json = File.ReadAllText(file);
-                List<RoutePoint> points = null;
-                try
-                {
-                    var saved = JsonSerializer.Deserialize<SavedRoute>(json);
-                    if (saved != null && saved.Nodes != null)
-                    {
-                        points = saved.Nodes;
-                        routeTypes[name] = saved.Type;
-                    }
-                }
-                catch { }
-
-                if (points == null)
-                {
-                    points = JsonSerializer.Deserialize<List<RoutePoint>>(json);
-                    routeTypes[name] = "main";
-                }
-
-                if (points == null)
-                {
-                    logger.LogError($"Failed to parse route file {file}");
-                    return;
-                }
-
-                var list = new List<Util.Waypoint>();
-                byte idx = 0;
-                foreach (var p in points)
-                    list.Add(new Util.Waypoint(p.X, p.Y, p.Speed, idx++));
-
-                trafficRoutes[name] = list;
-                logger.Log($"Loaded traffic route {name} with {list.Count} points");
-            }
-            catch (Exception ex)
-            {
-                logger.LogException(ex, $"Error loading route {name}");
-            }
+            var list = routeLibrary.ConvertToWaypoints(route);
+            trafficRoutes[name] = list;
+            logger.Log($"Loaded traffic route {name} ({route.Metadata.Type}) with {list.Count} points");
         }
 
         public List<Util.Waypoint> GetTrafficRoute(string name)
@@ -158,9 +121,21 @@ namespace AHPP_AI.Waypoint
             return new List<Util.Waypoint>();
         }
 
-        public string GetRouteType(string name)
+        /// <summary>
+        /// Get the recorded route including metadata for editing.
+        /// </summary>
+        public RecordedRoute GetRecordedRoute(string name)
         {
-            return routeTypes.TryGetValue(name, out var t) ? t : "main";
+            return recordedRoutes.TryGetValue(name, out var route) ? route : null;
+        }
+
+        /// <summary>
+        /// Get the detected route type for a named route.
+        /// </summary>
+        public RouteType GetRouteType(string name)
+        {
+            if (recordedRoutes.TryGetValue(name, out var route)) return route.Metadata.Type;
+            return routeLibrary.GuessRouteType(name);
         }
     }
 }

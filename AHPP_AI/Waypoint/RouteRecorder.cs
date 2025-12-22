@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Text.Json;
 using AHPP_AI.Debug;
 using AHPP_AI.Util;
 
@@ -16,9 +14,8 @@ namespace AHPP_AI.Waypoint
         private readonly Logger logger;
         private readonly LFSLayout layout;
         private readonly DebugUI debugUI;
-        private List<RoutePoint> currentRoute = new List<RoutePoint>();
-        private string currentName = string.Empty;
-        private string currentType = "main";
+        private readonly RouteLibrary routeLibrary;
+        private RecordedRoute currentRoute = new RecordedRoute();
         private double captureInterval = 1.0;
         private Vec? lastPos = null;
         private int pointCount = 0;
@@ -30,27 +27,51 @@ namespace AHPP_AI.Waypoint
             captureInterval = Math.Max(0.1, meters);
         }
 
-        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI debugUI)
+        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI debugUI, RouteLibrary routeLibrary)
         {
             this.logger = logger;
             this.layout = layout;
             this.debugUI = debugUI;
+            this.routeLibrary = routeLibrary;
         }
 
         /// <summary>
-        /// Start recording a new route with the given name and type.
+        /// Start recording a new route with the supplied metadata.
         /// </summary>
-        public void Start(string name, string type = "main")
+        public void Start(RouteMetadata metadata)
         {
+            if (metadata == null) throw new ArgumentNullException(nameof(metadata));
             if (IsRecording) Stop();
-            currentRoute = new List<RoutePoint>();
-            currentName = name;
-            currentType = type;
+
+            currentRoute = new RecordedRoute
+            {
+                Metadata = CloneMetadata(metadata),
+                Nodes = new List<RoutePoint>()
+            };
+
+            if (currentRoute.Metadata.Type == RouteType.Unknown)
+                currentRoute.Metadata.Type = routeLibrary.GuessRouteType(currentRoute.Metadata.Name);
+            if (currentRoute.Metadata.Type == RouteType.MainLoop) currentRoute.Metadata.IsLoop = true;
+            if (!currentRoute.Metadata.DefaultSpeedLimit.HasValue) currentRoute.Metadata.DefaultSpeedLimit = 60;
+
             lastPos = null;
             pointCount = 0;
             IsRecording = true;
-            logger.Log($"Started route recording: {name}");
-            debugUI?.UpdateRecordingButton(name, pointCount, true);
+            logger.Log($"Started route recording: {currentRoute.Metadata.Name} ({currentRoute.Metadata.Type})");
+            debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
+        }
+
+        /// <summary>
+        /// Start recording with just a name and optional type.
+        /// </summary>
+        public void Start(string name, RouteType type = RouteType.Unknown)
+        {
+            var metadata = new RouteMetadata
+            {
+                Name = name,
+                Type = type
+            };
+            Start(metadata);
         }
 
         /// <summary>
@@ -60,24 +81,15 @@ namespace AHPP_AI.Waypoint
         {
             if (!IsRecording) return;
             IsRecording = false;
-            var file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{currentName}.json");
             try
             {
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                var saved = new SavedRoute
-                {
-                    Name = currentName,
-                    Type = currentType,
-                    Nodes = currentRoute
-                };
-                File.WriteAllText(file, JsonSerializer.Serialize(saved, options));
-                logger.Log($"Saved route {currentName} with {currentRoute.Count} points to {file}");
+                routeLibrary.Save(currentRoute);
             }
             catch (Exception ex)
             {
-                logger.LogException(ex, $"Failed to save route {currentName}");
+                logger.LogException(ex, $"Failed to save route {currentRoute.Metadata.Name}");
             }
-            debugUI?.UpdateRecordingButton(currentName, pointCount, false);
+            debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, false);
         }
 
         /// <summary>
@@ -90,12 +102,13 @@ namespace AHPP_AI.Waypoint
             if (lastPos != null && Vec.Distance(lastPos.Value, pos) < captureInterval)
                 return;
 
-            currentRoute.Add(new RoutePoint
+            currentRoute.Nodes.Add(new RoutePoint
             {
                 X = pos.X / 65536.0,
                 Y = pos.Y / 65536.0,
                 Z = pos.Z / 65536.0,
                 Speed = speedKmh,
+                SpeedLimit = currentRoute.Metadata.DefaultSpeedLimit ?? speedKmh,
                 Throttle = throttle,
                 Brake = brake,
                 Steering = steering,
@@ -105,33 +118,28 @@ namespace AHPP_AI.Waypoint
             pointCount++;
             lastPos = pos;
 
-            layout?.PlaceArrowMarker(plid, (float)(pos.X / 65536.0), (float)(pos.Y / 65536.0), (byte)(heading / 4096));
-            debugUI?.UpdateRecordingButton(currentName, pointCount, true);
+            // Convert 0-65535 car heading to 0-255 object heading so the Chalk Ahead arrow matches the car
+            // and flip 180 degrees because the chalk asset points opposite the car heading by default.
+            var chalkHeading = (byte)((heading / 256 + 128) % 256);
+            var xMeters = (float)(pos.X / 65536.0);
+            var yMeters = (float)(pos.Y / 65536.0);
+            var zMeters = (float)(pos.Z / 65536.0);
+            layout?.PlaceArrowMarker(plid, xMeters, yMeters, zMeters, chalkHeading);
+            debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
         }
-    }
 
-    /// <summary>
-    /// Single recorded position for a route.
-    /// </summary>
-    public struct RoutePoint
-    {
-        public double X { get; set; }
-        public double Y { get; set; }
-        public double Z { get; set; }
-        public double Speed { get; set; }
-        public float Throttle { get; set; }
-        public float Brake { get; set; }
-        public float Steering { get; set; }
-        public int Heading { get; set; }
-    }
-
-    /// <summary>
-    /// Metadata wrapper for saved routes.
-    /// </summary>
-    public class SavedRoute
-    {
-        public string Name { get; set; }
-        public string Type { get; set; }
-        public List<RoutePoint> Nodes { get; set; }
+        private static RouteMetadata CloneMetadata(RouteMetadata metadata)
+        {
+            return new RouteMetadata
+            {
+                Name = metadata.Name,
+                Type = metadata.Type,
+                Description = metadata.Description,
+                IsLoop = metadata.IsLoop,
+                AttachMainIndex = metadata.AttachMainIndex,
+                RejoinMainIndex = metadata.RejoinMainIndex,
+                DefaultSpeedLimit = metadata.DefaultSpeedLimit
+            };
+        }
     }
 }

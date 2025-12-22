@@ -1,5 +1,20 @@
 # Changelog
 
+- Add a route library and JSON templates for main loop, pit entry, and detour recordings with metadata.
+- Record routes with typed presets, per-node speed limits, and saved metadata for editing later.
+- Visualize recorded routes in LFS with color-coded cones so waypoints can be selected and tweaked in the layout editor.
+- Make debug recording buttons clickable again so route recording can be started and stopped from the UI.
+- Move debug UI button IDs up to the 240 range (descending) to avoid clashes with pit/menu UI elements.
+- Add a Layout toggle button to load recorded routes and visualize their layout objects on demand.
+- Switch recorded route visualization to chalk arrows with forward headings instead of cones for clearer flow.
+- Avoid re-placing the active waypoint cone when the target hasn't changed to reduce layout spam.
+- Swap route recording visualizer to Chalk Ahead arrows and align their heading with the driver's car so they follow movement direction.
+- Raise Chalk Ahead markers to the car's Z position when recording so arrows no longer stick at a fixed 0.5m height.
+- Flip Chalk Ahead marker heading 180° so route recording arrows point forward along the car's travel direction.
+- Add recording button color cues so active recordings are obvious in the debug UI.
+- Move the Add AI input box below the AI controls to stop it overlapping existing AI buttons.
+- Wire the Load button to reload route JSON files and refresh active AI paths.
+- Shift spawned AI list buttons further right to avoid overlapping other controls.
 - Upgrade AHPP_AI and AHPP_AI_Tests to SDK-style .NET 6 projects with cross-platform dependencies (ImageSharp replacing System.Drawing).
 - Configure AHPP_AI to produce a Windows x86 RID for publishing an .exe alongside cross-platform builds.
 - Restore pits upgrade buttons to hide when leaving car selection and reappear beside the buy control once a car is chosen.

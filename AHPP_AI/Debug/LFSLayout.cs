@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AHPP_AI.Util;
+using AHPP_AI.Waypoint;
 using InSimDotNet.Helpers;
 using InSimDotNet.Packets;
 using InSimClient = InSimDotNet.InSimClient;
@@ -14,11 +15,10 @@ namespace AHPP_AI.Debug
     public class LFSLayout
     {
         // Object IDs from ObjectHelper
-        private const byte CHALK_LINE = 5; // White chalk to show where it's going
+        private const byte CHALK_AHEAD = 6; // Chalk arrow that points in the heading direction
         private const byte CONE_RED = 21; // Cone Red
         private const byte CONE_BLUE = 24; // Cone Blue
         private const byte CONE_GREEN = 26; // Cone Green
-        private const byte CHALK_LINE_LONG = 4; // Chalk Line Long (needs heading)
 
         private const float WAYPOINT_RADIUS = 2.5f; // Radius of waypoint visualization in meters
         private const int CONES_PER_CIRCLE = 0; // Number of cones to place around each waypoint
@@ -27,6 +27,7 @@ namespace AHPP_AI.Debug
 
         // Track active waypoint marker per PLID to remove old ones
         private readonly Dictionary<byte, ObjectInfo> activeWaypointMarkerIds = new Dictionary<byte, ObjectInfo>();
+        private readonly Dictionary<byte, (int X, int Y)> lastActiveWaypointPos = new Dictionary<byte, (int X, int Y)>();
 
         private readonly InSimClient insim;
         public readonly List<ObjectInfo> layoutObjects = new List<ObjectInfo>();
@@ -98,7 +99,7 @@ namespace AHPP_AI.Debug
             ClearPlayerVisualizations(plid);
             waypointPositions.Clear();
 
-            logger.Log($"Visualizing waypoints for PLID {plid} with {ObjectHelper.GetObjName(CHALK_LINE)}");
+            logger.Log($"Visualizing waypoints for PLID {plid} with {ObjectHelper.GetObjName(CHALK_AHEAD)}");
 
             // First visualize coordinate system for reference
             VisualizeCoordinateSystem(plid);
@@ -117,6 +118,15 @@ namespace AHPP_AI.Debug
             {
                 var idx = (startIdx + i) % waypointCount;
                 var waypoint = path[idx];
+                var nextWaypoint = path[(idx + 1) % waypointCount];
+
+                // Estimate heading to the next waypoint so arrows point along the route direction.
+                var dx = (nextWaypoint.Position.X - waypoint.Position.X) / 65536.0;
+                var dy = (nextWaypoint.Position.Y - waypoint.Position.Y) / 65536.0;
+                var desiredHeading = dx == 0 && dy == 0
+                    ? 0
+                    : CoordinateUtils.CalculateHeadingToTarget(dx, dy);
+                var arrowHeading = (byte)((desiredHeading / 256 + 128) % 256);
 
                 // Convert LFS coordinates (65536 units/meter) to meters
                 var centerX = waypoint.Position.X / 65536.0f;
@@ -131,7 +141,7 @@ namespace AHPP_AI.Debug
                 if (waypointPositions.Contains(positionKey)) continue;
 
                 // Place cones in a circle around the waypoint
-                PlaceWaypointCircle(plid, centerX, centerY, waypoint.RouteIndex);
+                PlaceWaypointCircle(plid, centerX, centerY, waypoint.RouteIndex, arrowHeading);
                 waypointPositions.Add(positionKey);
                 placedCount++;
 
@@ -146,9 +156,40 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
-        ///     Place objects in a circle to visualize a waypoint
+        /// Visualize a recorded route with color-coded cones so it can be edited in the LFS layout editor.
         /// </summary>
-        private void PlaceWaypointCircle(byte plid, float centerX, float centerY, int routeIndex)
+        public void VisualizeRecordedRoute(byte plid, RecordedRoute route)
+        {
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                logger.LogWarning("No route data available to visualize");
+                return;
+            }
+
+            ClearPlayerVisualizations(plid);
+            waypointPositions.Clear();
+
+            var waypoints = route.ToWaypoints();
+            logger.Log(
+                $"Visualizing recorded route {route.Metadata.Name} ({route.Metadata.Type}) for editing with {waypoints.Count} nodes");
+
+            var count = 0;
+            var max = Math.Min(waypoints.Count, MAX_VISIBLE_WAYPOINTS);
+            for (var i = 0; i < max; i++)
+            {
+                var heading = CalculateHeadingForIndex(waypoints, i, route.Metadata.IsLoop);
+                PlaceEditableWaypoint(plid, waypoints[i], heading);
+                count++;
+            }
+
+            WaypointsVisualized = true;
+            insim.Send(new IS_MST { Msg = $"Visualized {count} nodes for {route.Metadata.Name}" });
+        }
+
+        /// <summary>
+        ///     Place objects to visualize a waypoint with an optional heading for arrows
+        /// </summary>
+        private void PlaceWaypointCircle(byte plid, float centerX, float centerY, int routeIndex, byte heading = 0)
         {
             // Ensure we have storage for this player's objects
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
@@ -166,8 +207,8 @@ namespace AHPP_AI.Debug
 
             try
             {
-                // Place a single cone at the exact waypoint position for precise visualization
-                var chalkObj = PlaceObject(plid, CHALK_LINE, centerX, centerY, 0.5f);
+                // Place an arrow at the exact waypoint position for precise visualization
+                var chalkObj = PlaceObject(plid, CHALK_AHEAD, centerX, centerY, 0.5f, heading);
                 if (chalkObj != null) placedObjectsByPlid[plid].Add(chalkObj);
 
                 // Mark this position as having cones
@@ -177,6 +218,44 @@ namespace AHPP_AI.Debug
             {
                 logger.LogException(ex, $"Error placing waypoint circle at X={centerX}, Y={centerY}");
             }
+        }
+
+        /// <summary>
+        /// Place a chalk arrow marker for a recorded route node to support manual editing.
+        /// </summary>
+        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading)
+        {
+            if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
+
+            var xMeters = waypoint.Position.X / 65536.0f;
+            var yMeters = waypoint.Position.Y / 65536.0f;
+
+            var marker = PlaceObject(plid, CHALK_AHEAD, xMeters, yMeters, 0.5f, heading);
+            if (marker != null) placedObjectsByPlid[plid].Add(marker);
+        }
+
+        /// <summary>
+        /// Calculate an arrow heading toward the next waypoint so arrows show flow direction.
+        /// </summary>
+        private byte CalculateHeadingForIndex(IReadOnlyList<Util.Waypoint> waypoints, int index, bool isLoop)
+        {
+            if (waypoints == null || waypoints.Count == 0) return 0;
+
+            var current = waypoints[index];
+            var nextIndex = index + 1;
+            if (nextIndex >= waypoints.Count)
+            {
+                if (!isLoop) return 0;
+                nextIndex = 0;
+            }
+
+            var next = waypoints[nextIndex];
+            var dx = (next.Position.X - current.Position.X) / 65536.0;
+            var dy = (next.Position.Y - current.Position.Y) / 65536.0;
+            if (Math.Abs(dx) < 0.0001 && Math.Abs(dy) < 0.0001) return 0;
+
+            var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
+            return (byte)((desiredHeading / 256 + 128) % 256);
         }
 
         /// <summary>
@@ -262,11 +341,11 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
-        /// Place a directional arrow marker at the specified position.
+        /// Place a Chalk Ahead arrow marker aligned to the supplied heading.
         /// </summary>
-        public void PlaceArrowMarker(byte plid, float xMeters, float yMeters, byte heading)
+        public void PlaceArrowMarker(byte plid, float xMeters, float yMeters, float zMeters, byte heading)
         {
-            PlaceObject(plid, CHALK_LINE_LONG, xMeters, yMeters, 0.5f, heading);
+            PlaceObject(plid, CHALK_AHEAD, xMeters, yMeters, zMeters, heading);
         }
 
 
@@ -277,6 +356,12 @@ namespace AHPP_AI.Debug
         {
             try
             {
+                // Skip if the active waypoint hasn't changed to avoid spamming identical objects.
+                var currentPos = (waypoint.Position.X, waypoint.Position.Y);
+                if (lastActiveWaypointPos.TryGetValue(plid, out var lastPos) &&
+                    lastPos.X == currentPos.X && lastPos.Y == currentPos.Y)
+                    return;
+
                 // Remove the previous active waypoint marker if it exists
                 if (activeWaypointMarkerIds.ContainsKey(plid))
                 {
@@ -310,6 +395,8 @@ namespace AHPP_AI.Debug
                     if (placedObjectsByPlid.ContainsKey(plid))
                         placedObjectsByPlid[plid].Add(newMarker);
                 }
+
+                lastActiveWaypointPos[plid] = currentPos;
             }
             catch (Exception ex)
             {
@@ -384,6 +471,7 @@ namespace AHPP_AI.Debug
 
                 waypointPositions.Clear();
                 activeWaypointMarkerIds.Clear();
+                lastActiveWaypointPos.Clear();
                 logger.Log("All waypoint visualizations cleared");
             }
             catch (Exception ex)

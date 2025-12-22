@@ -35,18 +35,18 @@ namespace AHPP_AI.Debug
         // official InSim specification.
         private readonly Dictionary<string, byte> aiButtonIds = new Dictionary<string, byte>
         {
-            { "Position", 215 },
-            { "Speed", 216 },
-            { "Heading", 217 },
-            { "Direction", 218 },
-            { "Angle", 219 },
-            { "Steering", 220 },
-            { "Waypoint", 221 },
-            { "Distance", 222 },
-            { "HeadingError", 223 },
-            { "TargetSpeed", 224 },
-            { "ControlInfo", 225 },
-            { "RouteInfo", 226 }
+            { "Position", 224 },
+            { "Speed", 223 },
+            { "Heading", 222 },
+            { "Direction", 221 },
+            { "Angle", 220 },
+            { "Steering", 219 },
+            { "Waypoint", 218 },
+            { "Distance", 217 },
+            { "HeadingError", 216 },
+            { "TargetSpeed", 215 },
+            { "ControlInfo", 214 },
+            { "RouteInfo", 213 }
         };
 
         // Track button states and update timing
@@ -58,21 +58,31 @@ namespace AHPP_AI.Debug
         // Button IDs by category and type
         private readonly Dictionary<string, byte> playerButtonIds = new Dictionary<string, byte>
         {
-            { "Position", 200 },
-            { "Speed", 201 },
-            { "Heading", 202 },
-            { "Direction", 203 },
-            { "Angle", 204 },
-            { "Steering", 205 },
-            { "Waypoint", 206 },
-            { "Distance", 207 },
-            { "HeadingError", 208 },
-            { "TargetSpeed", 209 },
-            { "ControlInfo", 210 },
-            { "RouteInfo", 211 },
-            { "RecRoute1", 212 },
-            { "RecRoute2", 213 },
-            { "RecRoute3", 214 }
+            { "RecRoute1", 239 },
+            { "RecRoute2", 238 },
+            { "RecRoute3", 237 },
+            { "Position", 236 },
+            { "Speed", 235 },
+            { "Heading", 234 },
+            { "Direction", 233 },
+            { "Angle", 232 },
+            { "Steering", 231 },
+            { "Waypoint", 230 },
+            { "Distance", 229 },
+            { "HeadingError", 228 },
+            { "TargetSpeed", 227 },
+            { "ControlInfo", 226 },
+            { "RouteInfo", 225 }
+        };
+
+        private readonly Dictionary<string, string> recordButtonMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "route1", "RecRoute1" },
+            { "main_loop", "RecRoute1" },
+            { "route2", "RecRoute2" },
+            { "pit_entry", "RecRoute2" },
+            { "route3", "RecRoute3" },
+            { "detour1", "RecRoute3" }
         };
 
         private byte aiPLID;
@@ -111,9 +121,9 @@ namespace AHPP_AI.Debug
 
             if (show)
             {
-                CreateDebugButton(buttons["RecRoute1"], "REC R1", LEFT_COLUMN, row, BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(buttons["RecRoute2"], "REC R2", LEFT_COLUMN, (byte)(row + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(buttons["RecRoute3"], "REC R3", LEFT_COLUMN, (byte)(row + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(buttons["RecRoute1"], BuildRecordLabel("RecRoute1", 0, false), LEFT_COLUMN, row, BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(buttons["RecRoute2"], BuildRecordLabel("RecRoute2", 0, false), LEFT_COLUMN, (byte)(row + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(buttons["RecRoute3"], BuildRecordLabel("RecRoute3", 0, false), LEFT_COLUMN, (byte)(row + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
                 debugButtonsActive[buttons["RecRoute1"]] = 1;
                 debugButtonsActive[buttons["RecRoute2"]] = 1;
                 debugButtonsActive[buttons["RecRoute3"]] = 1;
@@ -131,33 +141,23 @@ namespace AHPP_AI.Debug
 
         public void UpdateRecordingButton(string routeName, int count, bool recording)
         {
-            // C#7.x compatible switch‑statement
-            string key;
-            switch (routeName?.ToLower())
-            {
-                case "route1": key = "RecRoute1"; break;
-                case "route2": key = "RecRoute2"; break;
-                case "route3": key = "RecRoute3"; break;
-                default:       key = "RecRoute1"; break;
-            }
+            if (string.IsNullOrWhiteSpace(routeName)) routeName = "route1";
+            if (!recordButtonMap.TryGetValue(routeName, out var key)) key = "RecRoute1";
 
             if (!playerButtonIds.TryGetValue(key, out var id)) return;
 
-            // No “^1” operator in 7.x, use classic indexing
-            char routeIdx = key[key.Length - 1];
-            string label  = recording ? $"REC {routeIdx}: {count}" : $"REC {routeIdx}";
-            UpdateDebugButton(id, label);
+            UpdateDebugButton(id, BuildRecordLabel(key, count, recording));
         }
 
         public void ShowAIButtons(bool show)
         {
             var baseRow = (byte)(TOP_ROW + ROW_HEIGHT * aiButtonIds.Count);
-            byte spawnId = 227;
-            byte removeId = 228;
-            byte removeAllId = 229;
-            byte stopAllId = 230;
-            byte specAllId = 231;
-            byte speedId = 232;
+            byte spawnId = 212;
+            byte removeId = 211;
+            byte removeAllId = 210;
+            byte stopAllId = 209;
+            byte specAllId = 208;
+            byte speedId = 207;
 
             if (show)
             {
@@ -562,7 +562,7 @@ namespace AHPP_AI.Debug
                     UCID = 0,
                     ClickID = id,
                     Inst = INST_NORMAL,
-                    BStyle = ButtonStyles.ISB_DARK | ButtonStyles.ISB_LEFT,
+                    BStyle = ButtonStyles.ISB_DARK | ButtonStyles.ISB_LEFT | ButtonStyles.ISB_CLICK,
                     TypeIn = 0,
                     L = left,
                     T = top,
@@ -606,6 +606,18 @@ namespace AHPP_AI.Debug
                 // Mark button as inactive to avoid repeated errors
                 debugButtonsActive[id] = 0;
             }
+        }
+
+        /// <summary>
+        /// Build a recording button label with simple color cues for state.
+        /// </summary>
+        private string BuildRecordLabel(string key, int count, bool recording)
+        {
+            // Classic color codes: ^1 red when active, ^2 green when idle
+            var routeIdx = key[key.Length - 1];
+            var color = recording ? "^1" : "^2";
+            var suffix = recording ? $": {count}" : string.Empty;
+            return $"{color}REC {routeIdx}{suffix}";
         }
 
         private void DeleteButton(byte id)

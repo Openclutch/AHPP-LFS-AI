@@ -24,6 +24,7 @@ namespace AHPP_AI
 
         // Core components
         private static readonly Logger logger = new Logger("log.txt");
+        private static readonly RouteLibrary routeLibrary;
         private static readonly WaypointManager waypointManager;
         private static readonly LFSLayout visualizer;
         private static readonly AIController aiController;
@@ -44,11 +45,12 @@ namespace AHPP_AI
         static Program()
         {
             // Initialize components in the correct order
-            waypointManager = new WaypointManager(logger);
+            routeLibrary = new RouteLibrary(logger);
+            waypointManager = new WaypointManager(logger, routeLibrary);
             visualizer = new LFSLayout(logger, insim);
 
             // Create AIController with dependencies
-            aiController = new AIController(insim, logger, waypointManager, visualizer, debugEnabled);
+            aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
         }
 
         /// <summary>
@@ -61,11 +63,11 @@ namespace AHPP_AI
             try
             {
                 // Load recorded traffic routes if present
-                waypointManager.LoadTrafficRoute("spawn");
-                waypointManager.LoadTrafficRoute("main");
-                waypointManager.LoadTrafficRoute("route1");
-                waypointManager.LoadTrafficRoute("route2");
-                waypointManager.LoadTrafficRoute("route3");
+                waypointManager.LoadTrafficRoute("pit_entry");
+                waypointManager.LoadTrafficRoute("main_loop");
+                waypointManager.LoadTrafficRoute("detour1");
+                waypointManager.LoadTrafficRoute("detour2");
+                waypointManager.LoadTrafficRoute("detour3");
 
                 // Register event handlers
                 RegisterEventHandlers();
@@ -227,7 +229,13 @@ namespace AHPP_AI
             {
                 case 1:
                     if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("route1");
+                    else aiController.StartRecording("main_loop", RouteType.MainLoop);
+                    break;
+                case 2:
+                    aiController.ReloadRoutes();
+                    break;
+                case 5:
+                    aiController.ToggleRouteVisualization(currentViewPLID);
                     break;
                 case 101:
                     aiController.ShowAddAIDialog();
@@ -238,34 +246,34 @@ namespace AHPP_AI
                 case 104:
                     aiController.SpectateAllAIs();
                     break;
+                case 239:
+                    if (aiController.IsRecording) aiController.StopRecording();
+                    else aiController.StartRecording("main_loop", RouteType.MainLoop);
+                    break;
+                case 238:
+                    if (aiController.IsRecording) aiController.StopRecording();
+                    else aiController.StartRecording("pit_entry", RouteType.PitEntry);
+                    break;
+                case 237:
+                    if (aiController.IsRecording) aiController.StopRecording();
+                    else aiController.StartRecording("detour1", RouteType.Detour);
+                    break;
                 case 212:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("route1");
-                    break;
-                case 213:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("route2");
-                    break;
-                case 214:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("route3");
-                    break;
-                case 227:
                     aiController.SpawnAICars();
                     break;
-                case 228:
+                case 211:
                     aiController.RemoveLastAICar();
                     break;
-                case 229:
+                case 210:
                     aiController.RemoveAllAICars();
                     break;
-                case 230:
+                case 209:
                     aiController.StopAllAIs();
                     break;
-                case 231:
+                case 208:
                     aiController.SpectateAllAIs();
                     break;
-                case 232:
+                case 207:
                     aiController.SetTargetSpeedForAll(50);
                     break;
             }

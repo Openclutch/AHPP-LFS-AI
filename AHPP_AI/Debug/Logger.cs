@@ -110,7 +110,7 @@ namespace AHPP_AI.Debug
                 case "DEBUG":
                     return ConsoleColor.Cyan;
                 default:
-                    return ConsoleColor.Black;
+                    return ConsoleColor.Gray;
             }
         }
     }

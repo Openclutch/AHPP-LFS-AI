@@ -20,12 +20,12 @@ namespace AHPP_AI.AI
 
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
-        public string TrafficRouteName { get; set; } = "route1";
+        public string TrafficRouteName { get; set; } = "main_loop";
 
         // Advanced route settings
-        public string SpawnRouteName { get; set; } = "spawn";
-        public string MainRouteName { get; set; } = "main";
-        public List<string> BranchRouteNames { get; set; } = new List<string> { "route1", "route2", "route3" };
+        public string SpawnRouteName { get; set; } = "pit_entry";
+        public string MainRouteName { get; set; } = "main_loop";
+        public List<string> BranchRouteNames { get; set; } = new List<string> { "detour1", "detour2", "detour3" };
 
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;

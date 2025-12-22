@@ -18,8 +18,10 @@ namespace AHPP_AI.UI
 
         private const byte LEFT_COL = 5;
         private const byte RIGHT_COL = 50;
+        private const byte AI_LIST_COL = 95; // Separate column for spawned AI buttons to avoid overlap
         private const byte ROW_HEIGHT = 5;
         private const byte BTN_W = 40;
+        private const byte ADD_AI_DIALOG_OFFSET = 21; // Position input below AI controls to avoid overlapping other buttons
 
         public const byte AddAiDialogId = 150;
 
@@ -41,6 +43,8 @@ namespace AHPP_AI.UI
             CreateButton(2, "Load", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(3, "Unload", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(4, "Edit", LEFT_COL, row);
+            row += ROW_HEIGHT;
+            CreateButton(5, "Layout", LEFT_COL, row);
 
             row = 70;
             CreateButton(101, "Add AI", RIGHT_COL, row); row += ROW_HEIGHT;
@@ -65,7 +69,7 @@ namespace AHPP_AI.UI
             foreach (var (id, name) in ai)
             {
                 byte btnId = (byte)(120 + index);
-                CreateButton(btnId, $"{name}", RIGHT_COL, (byte)(row + ROW_HEIGHT * index));
+                CreateButton(btnId, $"{name}", AI_LIST_COL, (byte)(row + ROW_HEIGHT * index));
                 aiListButtons[id] = btnId;
                 index++;
             }
@@ -113,7 +117,8 @@ namespace AHPP_AI.UI
                 BStyle = ButtonStyles.ISB_DARK | ButtonStyles.ISB_CLICK,
                 TypeIn = 3,
                 L = RIGHT_COL,
-                T = (byte)(5 + ROW_HEIGHT * 5),
+                // Keep input box near the AI control cluster without covering AI list or debug buttons.
+                T = (byte)(70 + ROW_HEIGHT * 4 + ADD_AI_DIALOG_OFFSET),
                 W = BTN_W,
                 H = ROW_HEIGHT,
                 Text = string.Empty,

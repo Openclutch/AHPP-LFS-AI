@@ -25,6 +25,8 @@ namespace AHPP_AI.Waypoint
             public string Name { get; set; }
             public List<Util.Waypoint> Path { get; set; }
             public int StartIndex { get; set; }
+            public int RejoinIndex { get; set; }
+            public RouteMetadata Metadata { get; set; }
         }
 
         public PathManager(WaypointManager waypointManager, Logger logger)
@@ -40,22 +42,43 @@ namespace AHPP_AI.Waypoint
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
 
+            // Reset existing routes before reloading from disk.
+            SpawnRoute = new List<Util.Waypoint>();
+            MainRoute = new List<Util.Waypoint>();
+            branches.Clear();
+
             waypointManager.LoadTrafficRoute(config.SpawnRouteName);
             SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
-            logger.Log($"Loaded spawn route {config.SpawnRouteName} with {SpawnRoute.Count} points");
+            var spawnMeta = waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
+            if (spawnMeta != null && spawnMeta.Type == RouteType.Unknown) spawnMeta.Type = RouteType.PitEntry;
+            logger.Log(
+                $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta?.Type ?? RouteType.PitEntry}) with {SpawnRoute.Count} points");
 
             waypointManager.LoadTrafficRoute(config.MainRouteName);
             MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
-            logger.Log($"Loaded main route {config.MainRouteName} with {MainRoute.Count} points");
+            var mainMeta = waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
+            if (mainMeta != null && mainMeta.Type == RouteType.Unknown) mainMeta.Type = RouteType.MainLoop;
+            logger.Log(
+                $"Loaded main route {config.MainRouteName} ({mainMeta?.Type ?? RouteType.MainLoop}) with {MainRoute.Count} points");
 
             foreach (var name in config.BranchRouteNames)
             {
                 waypointManager.LoadTrafficRoute(name);
                 var path = waypointManager.GetTrafficRoute(name);
                 if (path.Count == 0) continue;
-                var startIndex = FindNearestIndex(MainRoute, path[0]);
-                branches[name] = new BranchRoute { Name = name, Path = path, StartIndex = startIndex };
-                logger.Log($"Loaded branch {name} with {path.Count} points starting near index {startIndex}");
+                var metadata = waypointManager.GetRecordedRoute(name)?.Metadata;
+                var startIndex = metadata?.AttachMainIndex ?? FindNearestIndex(MainRoute, path[0]);
+                var rejoinIndex = metadata?.RejoinMainIndex ?? FindNearestIndex(MainRoute, path[path.Count - 1]);
+                branches[name] = new BranchRoute
+                {
+                    Name = name,
+                    Path = path,
+                    StartIndex = startIndex,
+                    RejoinIndex = rejoinIndex,
+                    Metadata = metadata
+                };
+                logger.Log($"Loaded branch {name} ({metadata?.Type ?? RouteType.Detour}) with {path.Count} points " +
+                           $"starting near index {startIndex} and rejoining near {rejoinIndex}");
             }
         }
 
