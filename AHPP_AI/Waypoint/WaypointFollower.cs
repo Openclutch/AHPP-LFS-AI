@@ -25,6 +25,7 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<byte, int> currentApproachPointIndex = new Dictionary<byte, int>();
         private readonly Dictionary<byte, Queue<int>> headingErrorHistory = new Dictionary<byte, Queue<int>>();
         private readonly Dictionary<byte, bool> inRecoveryMode = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, bool> reverseRecoveryRequested = new Dictionary<byte, bool>();
 
         // Path entry handling
         private readonly Dictionary<byte, bool> isFirstApproach = new Dictionary<byte, bool>();
@@ -252,6 +253,25 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        ///     Get a lookahead waypoint based on the configured offset.
+        /// </summary>
+        public Util.Waypoint GetLookaheadWaypoint(byte plid)
+        {
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0)
+                return new Util.Waypoint();
+
+            if (!targetWaypointIndices.ContainsKey(plid))
+                targetWaypointIndices[plid] = 0;
+
+            var path = aiPaths[plid];
+            var currentIndex = targetWaypointIndices[plid] % path.Count;
+            var lookaheadOffset = Math.Max(1, config.LookaheadWaypoints);
+            var lookaheadIndex = (currentIndex + lookaheadOffset) % path.Count;
+
+            return path[lookaheadIndex];
+        }
+
+        /// <summary>
         ///     Get next waypoint index
         /// </summary>
         public int GetNextWaypointIndex(byte plid)
@@ -295,9 +315,10 @@ namespace AHPP_AI.Waypoint
                 if (recoveryAttempts[plid] >= config.MaxRecoveryAttempts)
                 {
                     recoveryAttempts[plid] = 0;
+                    reverseRecoveryRequested[plid] = true;
                     lastDistanceToWaypoint[plid] = currentDistance;
                     lastProgressCheckTimes[plid] = DateTime.Now;
-                    return true;
+                    return false;
                 }
                 else if (progress < 0)
                 {
@@ -315,6 +336,21 @@ namespace AHPP_AI.Waypoint
                 // Update for next check
                 lastDistanceToWaypoint[plid] = currentDistance;
                 lastProgressCheckTimes[plid] = DateTime.Now;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether a reverse/turn recovery was requested due to stalled progress.
+        /// This consumes the flag so it only triggers once per request.
+        /// </summary>
+        public bool ConsumeReverseRecoveryRequest(byte plid)
+        {
+            if (reverseRecoveryRequested.TryGetValue(plid, out var requested) && requested)
+            {
+                reverseRecoveryRequested[plid] = false;
+                return true;
             }
 
             return false;
@@ -408,6 +444,7 @@ namespace AHPP_AI.Waypoint
             logger.Log($"PLID={plid} {reason}: Moving from {currentIndex} to {nextIndex}");
 
             targetWaypointIndices[plid] = nextIndex;
+            UpdateLookaheadIndex(plid);
 
             if (!targetSpeeds.ContainsKey(plid))
                 targetSpeeds[plid] = 30.0; // Default speed
@@ -521,11 +558,32 @@ namespace AHPP_AI.Waypoint
             return aiPaths[plid];
         }
 
-        public void SetPath(byte plid, List<Util.Waypoint> path)
+        public void SetPath(byte plid, List<Util.Waypoint> path, int? startIndex = null)
         {
             aiPaths[plid] = path;
-            targetWaypointIndices[plid] = 0;
-            lookAheadWaypointIndices[plid] = path != null && path.Count > 2 ? 2 : 0;
+            if (path == null || path.Count == 0)
+            {
+                targetWaypointIndices[plid] = 0;
+                lookAheadWaypointIndices[plid] = 0;
+                return;
+            }
+
+            var clampedIndex = Math.Max(0, Math.Min(path.Count - 1, startIndex ?? 0));
+            targetWaypointIndices[plid] = clampedIndex;
+            UpdateLookaheadIndex(plid);
+        }
+
+        private void UpdateLookaheadIndex(byte plid)
+        {
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0)
+                return;
+
+            if (!targetWaypointIndices.ContainsKey(plid))
+                targetWaypointIndices[plid] = 0;
+
+            var lookaheadOffset = Math.Max(1, config.LookaheadWaypoints);
+            lookAheadWaypointIndices[plid] =
+                (targetWaypointIndices[plid] + lookaheadOffset) % aiPaths[plid].Count;
         }
 
         /// <summary>
@@ -581,22 +639,36 @@ namespace AHPP_AI.Waypoint
             }
 
             // Normal waypoint targeting
-            var waypoint = GetTargetWaypoint(plid);
+            if (!targetWaypointIndices.ContainsKey(plid))
+                targetWaypointIndices[plid] = 0;
 
-            // Calculate distance and direction to waypoint
-            var waypointX = waypoint.Position.X / 65536.0;
-            var waypointY = waypoint.Position.Y / 65536.0;
-            var dxToWaypoint = waypointX - carX;
-            var dyToWaypoint = waypointY - carY;
-            var distanceToWaypoint = Math.Sqrt(dxToWaypoint * dxToWaypoint + dyToWaypoint * dyToWaypoint);
+            var path = aiPaths[plid];
+            var currentIndex = targetWaypointIndices[plid] % path.Count;
+            var lookaheadOffset = Math.Max(1, config.LookaheadWaypoints);
+            var lookaheadIndex = (currentIndex + lookaheadOffset) % path.Count;
 
-            // Calculate desired heading to target
+            var currentWaypoint = path[currentIndex];
+            var lookaheadWaypoint = path[lookaheadIndex];
+
+            // Distance to current waypoint drives progress/advancement.
+            var currentX = currentWaypoint.Position.X / 65536.0;
+            var currentY = currentWaypoint.Position.Y / 65536.0;
+            var dxCurrent = currentX - carX;
+            var dyCurrent = currentY - carY;
+            var distanceToCurrent = Math.Sqrt(dxCurrent * dxCurrent + dyCurrent * dyCurrent);
+
+            // Heading aims toward the lookahead waypoint to give more reaction time.
+            var lookX = lookaheadWaypoint.Position.X / 65536.0;
+            var lookY = lookaheadWaypoint.Position.Y / 65536.0;
+            var dxLook = lookX - carX;
+            var dyLook = lookY - carY;
+
             var normalizedHeadingToWaypoint = CoordinateUtils.NormalizeHeading(currentHeading);
-            var desiredHeadingToWaypoint = CoordinateUtils.CalculateHeadingToTarget(dxToWaypoint, dyToWaypoint);
+            var desiredHeadingToWaypoint = CoordinateUtils.CalculateHeadingToTarget(dxLook, dyLook);
             var headingErrorToWaypoint =
                 CoordinateUtils.CalculateHeadingError(normalizedHeadingToWaypoint, desiredHeadingToWaypoint);
 
-            return (distanceToWaypoint, desiredHeadingToWaypoint, headingErrorToWaypoint);
+            return (distanceToCurrent, desiredHeadingToWaypoint, headingErrorToWaypoint);
         }
     }
 }

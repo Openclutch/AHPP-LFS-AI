@@ -17,6 +17,14 @@
 - Added configurable waypoint lookahead so AI target selection can be tuned via `LookaheadWaypoints` in config.
 - Added configurable recording interval (meters between points) with both config support and an in-game type-in control.
 - Skip sending /spec to invalid PLIDs when resetting or stopping AI fleets to avoid “parameter invalid” errors.
+- Replaced “Spec All AI” with “Pit All AI” to send the `/pit_all` command from both UI and controller.
+- Added per-AI “X” buttons to despawn individual bots directly from the list.
+- Fixed AI removal buttons by routing click handling through the controller instead of a missing Program-level UI reference.
+- Guard per-AI removal so /spec is only sent for valid PLIDs to avoid errors when clicking the X control.
+- Steering now aims at a configurable lookahead waypoint while progress uses the current target, giving the car more time to react.
+- Added reverse recovery: after repeated stalled progress, the AI backs up with a turn before retrying.
+- Made waypoint proximity size configurable (`WaypointProximityMultiplier`) and set recording spacing to 5m by default.
+- Record button now receives live updates (including green state and waypoint count) by constructing UI before the recorder.
 - Add a route library and JSON templates for main loop, pit entry, and detour recordings with metadata.
 - Record routes with typed presets, per-node speed limits, and saved metadata for editing later.
 - Visualize recorded routes in LFS with color-coded cones so waypoints can be selected and tweaked in the layout editor.

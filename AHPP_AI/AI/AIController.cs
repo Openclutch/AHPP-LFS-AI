@@ -87,8 +87,8 @@ namespace AHPP_AI.AI
             gearboxController = new GearboxController(config, logger);
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim);
             driver.SetRecoveryFailedHandler(ResetAI);
-            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
             mainUI = new MainUI(insim, logger);
+            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
             InitializeRoutePresets();
@@ -284,6 +284,14 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure multiplier for waypoint proximity threshold.
+        /// </summary>
+        public void SetWaypointProximityMultiplier(double multiplier)
+        {
+            config.WaypointProximityMultiplier = Math.Max(0.1, multiplier);
+        }
+
+        /// <summary>
         /// Set the minimum distance in meters between recorded points.
         /// </summary>
         public void SetRecordingInterval(double meters)
@@ -396,6 +404,37 @@ namespace AHPP_AI.AI
             return aiPLIDs.Count > 0 ? aiPLIDs[0] : (byte)0;
         }
 
+        /// <summary>
+        /// Find the index of the waypoint closest to the given car position.
+        /// </summary>
+        private int FindClosestIndex(List<Util.Waypoint> path, CompCar car)
+        {
+            if (path == null || path.Count == 0 || car.PLID == 0) return 0;
+
+            var carX = car.X / 65536.0;
+            var carY = car.Y / 65536.0;
+
+            var closestIndex = 0;
+            var minDistance = double.MaxValue;
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                var wpX = path[i].Position.X / 65536.0;
+                var wpY = path[i].Position.Y / 65536.0;
+                var dx = wpX - carX;
+                var dy = wpY - carY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+
+                if (distance < minDistance)
+                {
+                    minDistance = distance;
+                    closestIndex = i;
+                }
+            }
+
+            return closestIndex;
+        }
+
         public void SetNumberOfAIs(int count)
         {
             config.NumberOfAIs = Math.Max(0, count);
@@ -432,6 +471,31 @@ namespace AHPP_AI.AI
             insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             aiPLIDs.Remove(plid);
             mainUI.UpdateAIList(GetAiTuples());
+        }
+
+        public void RemoveAICar(byte plid)
+        {
+            if (!aiPLIDs.Contains(plid) || plid == 0) return;
+            insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+            aiPLIDs.Remove(plid);
+            aiSpawnPositions.Remove(plid);
+            engineStateMap.Remove(plid);
+            currentRoute.Remove(plid);
+            mainUI.UpdateAIList(GetAiTuples());
+        }
+
+        /// <summary>
+        /// Try to remove an AI based on a remove-button ClickID from the UI.
+        /// </summary>
+        public bool TryRemoveAiFromButton(byte clickId)
+        {
+            if (mainUI.TryGetAiForRemoveButton(clickId, out var plid))
+            {
+                RemoveAICar(plid);
+                return true;
+            }
+
+            return false;
         }
 
         public void RemoveAllAICars()
@@ -471,6 +535,14 @@ namespace AHPP_AI.AI
             {
                 insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             }
+        }
+
+        /// <summary>
+        /// Send all AI cars to the pits.
+        /// </summary>
+        public void PitAllAIs()
+        {
+            insim.Send(new IS_MST { Msg = "/pit_all" });
         }
 
         public void SetTargetSpeedForAll(double speed)
@@ -570,7 +642,7 @@ namespace AHPP_AI.AI
                     //TeleportAICars(plid);
                     //Thread.Sleep(1000);
 
-                    // Assign spawn path
+                    // Assign spawn path (start at closest point once MCI data is available)
                     waypointFollower.SetPath(plid, pathManager.SpawnRoute);
                     currentRoute[plid] = "spawn";
 
@@ -639,9 +711,9 @@ namespace AHPP_AI.AI
                     controlInfo[plid] = driver.GetControlInfo(plid);
 
                     // Place active waypoint marker
-                    var path = waypointFollower.GetPath(plid);
-                    if (path != null && targetIndex >= 0 && targetIndex < path.Count)
-                        lfsLayout.VisualizeActiveWaypoint(plid, path[targetIndex]);
+                    var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
+                    if (activeWaypoint.Position != null)
+                        lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
                 }
 
                 // Get paths for all AIs
@@ -702,14 +774,16 @@ namespace AHPP_AI.AI
             {
                 if (routeName == "spawn" && targetIndex >= pathManager.SpawnRoute.Count - 1)
                 {
-                    waypointFollower.SetPath(plid, pathManager.MainRoute);
+                    var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                    waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
                     currentRoute[plid] = "main";
                 }
                 else if (routeName == "main")
                 {
                     if (pathManager.TryGetBranch(targetIndex, out var branchPath) && branchRandom.NextDouble() < 0.5)
                     {
-                        waypointFollower.SetPath(plid, branchPath);
+                        var bestIndex = FindClosestIndex(branchPath, car);
+                        waypointFollower.SetPath(plid, branchPath, bestIndex);
                         currentRoute[plid] = "branch";
                     }
                 }
@@ -718,7 +792,8 @@ namespace AHPP_AI.AI
                     var path = waypointFollower.GetPath(plid);
                     if (targetIndex >= path.Count - 1)
                     {
-                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                        waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
                         currentRoute[plid] = "main";
                     }
                 }

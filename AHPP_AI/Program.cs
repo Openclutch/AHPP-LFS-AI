@@ -49,6 +49,7 @@ namespace AHPP_AI
         private static readonly int spawnDelayMs;
         private static readonly int lookaheadWaypoints;
         private static readonly double recordingIntervalMeters;
+        private static readonly double waypointProximityMultiplier;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -78,7 +79,8 @@ namespace AHPP_AI
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
             spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
             lookaheadWaypoints = appConfig.GetInt("AI", "LookaheadWaypoints", 2);
-            recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 1.0);
+            waypointProximityMultiplier = appConfig.GetDouble("AI", "WaypointProximityMultiplier", 1.0);
+            recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
 
             // Initialize components in the correct order
             routeLibrary = new RouteLibrary(logger);
@@ -93,6 +95,7 @@ namespace AHPP_AI
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
             aiController.SetLookaheadWaypoints(lookaheadWaypoints);
             aiController.SetRecordingInterval(recordingIntervalMeters);
+            aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
         }
 
         /// <summary>
@@ -303,7 +306,7 @@ namespace AHPP_AI
                     aiController.StartAllAIs();
                     break;
                 case 104:
-                    aiController.SpectateAllAIs();
+                    aiController.PitAllAIs();
                     break;
                 case 239:
                     if (aiController.IsRecording) aiController.StopRecording();
@@ -333,10 +336,13 @@ namespace AHPP_AI
                     aiController.StopAllAIs();
                     break;
                 case 208:
-                    aiController.SpectateAllAIs();
+                    aiController.PitAllAIs();
                     break;
                 case 207:
                     aiController.SetTargetSpeedForAll(50);
+                    break;
+                default:
+                    aiController.TryRemoveAiFromButton(btc.ClickID);
                     break;
             }
         }

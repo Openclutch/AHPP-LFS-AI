@@ -76,6 +76,10 @@ namespace AHPP_AI.AI
 
         private readonly Dictionary<byte, int> wallRecoverySteeringDirection = new Dictionary<byte, int>();
         private readonly Dictionary<byte, DateTime> wallRecoveryTimers = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, bool> reverseRecoveryActive = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, DateTime> reverseRecoveryTimers = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, int> reverseRecoverySteer = new Dictionary<byte, int>();
+        private readonly Random reverseRecoveryRandom = new Random();
         private readonly WaypointFollower waypointFollower;
 
         public AIDriver(
@@ -179,6 +183,15 @@ namespace AHPP_AI.AI
                 // Calculate distance and heading to target waypoint
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
+
+                // Trigger reverse recovery if requested due to repeated stalled progress.
+                if (waypointFollower.ConsumeReverseRecoveryRequest(plid))
+                {
+                    StartReverseRecovery(plid, headingError);
+                    controlInfo[plid] = "Reverse recovery: backing up";
+                }
+
+                if (HandleReverseRecovery(plid)) return;
 
                 // Check progress toward waypoint and also check if stuck
                 var recoveryFailed = waypointFollower.CheckWaypointProgress(plid, distance);
@@ -492,6 +505,55 @@ namespace AHPP_AI.AI
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// Begin a short reverse-and-turn maneuver to free the car after stalled progress.
+        /// </summary>
+        private void StartReverseRecovery(byte plid, int headingError)
+        {
+            reverseRecoveryActive[plid] = true;
+            reverseRecoveryTimers[plid] = DateTime.Now;
+
+            var steerDir = reverseRecoveryRandom.Next(0, 2) == 0 ? -1 : 1;
+            if (headingError != 0) steerDir = Math.Sign(headingError);
+            reverseRecoverySteer[plid] = steerDir;
+
+            logger.Log($"PLID={plid} REVERSE RECOVERY: starting with steer {(steerDir < 0 ? "left" : "right")}");
+        }
+
+        /// <summary>
+        /// Execute reverse-and-turn for a brief period; returns true while active.
+        /// </summary>
+        private bool HandleReverseRecovery(byte plid)
+        {
+            if (!reverseRecoveryActive.TryGetValue(plid, out var active) || !active)
+                return false;
+
+            var elapsed = DateTime.Now - reverseRecoveryTimers[plid];
+
+            if (elapsed.TotalMilliseconds < 1200)
+            {
+                var steer = reverseRecoverySteer.TryGetValue(plid, out var dir)
+                    ? config.SteeringCenter + dir * 12000
+                    : config.SteeringCenter;
+
+                var inputs = new List<AIInputVal>
+                {
+                    new AIInputVal { Input = AicInputType.CS_GEAR, Value = 1 }, // reverse gear
+                    new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = 20000 },
+                    new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 5000 },
+                    new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steer }
+                };
+
+                insim.Send(new IS_AIC(inputs) { PLID = plid });
+                controlInfo[plid] = "Reverse recovery";
+                return true;
+            }
+
+            reverseRecoveryActive[plid] = false;
+            controlInfo[plid] = "Recovery clear";
+            return false;
         }
 
         /// <summary>

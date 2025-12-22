@@ -25,12 +25,14 @@ namespace AHPP_AI.UI
         private const byte SELECT_BTN_SPACING = 2;
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
+        private const byte REMOVE_BTN_W = 6;
 
         public const byte AddAiDialogId = 150;
         public const byte SpeedInputId = 151;
         public const byte RecordingIntervalId = 152;
 
-        private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>();
+        private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
+        private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly (byte id, string name, string label)[] routeOptions =
         {
             (11, "main_loop", "Main"),
@@ -69,7 +71,7 @@ namespace AHPP_AI.UI
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
             CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
-            CreateButton(104, "Spec All AI", RIGHT_COL, row);
+            CreateButton(104, "Pit All AI", RIGHT_COL, row);
 
             RenderRecordingSelectors();
             RenderRecordButton();
@@ -81,20 +83,34 @@ namespace AHPP_AI.UI
         public void UpdateAIList(IEnumerable<(byte id, string name)> ai)
         {
             byte row = (byte)(5 + ROW_HEIGHT * 4);
-            foreach (var b in aiListButtons.Values)
-            {
-                DeleteButton(b);
-            }
+            foreach (var b in aiListButtons.Values) DeleteButton(b);
+            foreach (var b in aiRemoveButtons.Keys) DeleteButton(b);
             aiListButtons.Clear();
+            aiRemoveButtons.Clear();
 
             byte index = 0;
             foreach (var (id, name) in ai)
             {
-                byte btnId = (byte)(120 + index);
-                CreateButton(btnId, $"{name}", AI_LIST_COL, (byte)(row + ROW_HEIGHT * index));
-                aiListButtons[id] = btnId;
+                var labelId = (byte)(120 + index);
+                var removeId = (byte)(180 + index);
+                var top = (byte)(row + ROW_HEIGHT * index);
+                var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
+
+                CreateButton(removeId, "X", removeLeft, top);
+                CreateButton(labelId, $"{name}", AI_LIST_COL, top);
+
+                aiListButtons[id] = labelId;
+                aiRemoveButtons[removeId] = id;
                 index++;
             }
+        }
+
+        /// <summary>
+        /// Map a remove button ClickID to the AI it controls.
+        /// </summary>
+        public bool TryGetAiForRemoveButton(byte clickId, out byte aiId)
+        {
+            return aiRemoveButtons.TryGetValue(clickId, out aiId);
         }
 
         /// <summary>

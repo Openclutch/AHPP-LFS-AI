@@ -55,6 +55,7 @@ namespace AHPP_AI.AI
         public double MinSpeedThreshold { get; set; } = 0.5;
         public int StationaryCheckCount { get; set; } = 3;
         public int LookaheadWaypoints { get; set; } = 2;
+        public double WaypointProximityMultiplier { get; set; } = 1.0;
 
         // Speed thresholds for gear changes
         public double[] GearSpeedThresholds { get; set; } =
@@ -86,10 +87,12 @@ namespace AHPP_AI.AI
         /// <returns>Appropriate waypoint threshold in meters</returns>
         public double CalculateWaypointThreshold(double speedKmh)
         {
-            return Math.Max(
+            var baseThreshold = Math.Max(
                 WaypointMinThreshold,
                 Math.Min(WaypointMaxThreshold, speedKmh * WaypointThresholdSpeedFactor + WaypointMinThreshold)
             );
+
+            return Math.Max(0.1, baseThreshold * Math.Max(0.1, WaypointProximityMultiplier));
         }
 
         /// <summary>
