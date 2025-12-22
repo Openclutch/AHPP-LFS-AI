@@ -15,6 +15,7 @@ namespace AHPP_AI.Waypoint
         private readonly LFSLayout layout;
         private readonly DebugUI debugUI;
         private readonly RouteLibrary routeLibrary;
+        private readonly UI.MainUI mainUI;
         private RecordedRoute currentRoute = new RecordedRoute();
         private double captureInterval = 1.0;
         private Vec? lastPos = null;
@@ -27,12 +28,13 @@ namespace AHPP_AI.Waypoint
             captureInterval = Math.Max(0.1, meters);
         }
 
-        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI debugUI, RouteLibrary routeLibrary)
+        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI debugUI, RouteLibrary routeLibrary, UI.MainUI mainUI)
         {
             this.logger = logger;
             this.layout = layout;
             this.debugUI = debugUI;
             this.routeLibrary = routeLibrary;
+            this.mainUI = mainUI;
         }
 
         /// <summary>
@@ -59,6 +61,7 @@ namespace AHPP_AI.Waypoint
             IsRecording = true;
             logger.Log($"Started route recording: {currentRoute.Metadata.Name} ({currentRoute.Metadata.Type})");
             debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
+            mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, true);
         }
 
         /// <summary>
@@ -90,6 +93,7 @@ namespace AHPP_AI.Waypoint
                 logger.LogException(ex, $"Failed to save route {currentRoute.Metadata.Name}");
             }
             debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, false);
+            mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, false);
         }
 
         /// <summary>
@@ -108,7 +112,7 @@ namespace AHPP_AI.Waypoint
                 Y = pos.Y / 65536.0,
                 Z = pos.Z / 65536.0,
                 Speed = speedKmh,
-                SpeedLimit = currentRoute.Metadata.DefaultSpeedLimit ?? speedKmh,
+                SpeedLimit = speedKmh,
                 Throttle = throttle,
                 Brake = brake,
                 Steering = steering,
@@ -126,6 +130,7 @@ namespace AHPP_AI.Waypoint
             var zMeters = (float)(pos.Z / 65536.0);
             layout?.PlaceArrowMarker(plid, xMeters, yMeters, zMeters, chalkHeading);
             debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
+            mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, true);
         }
 
         private static RouteMetadata CloneMetadata(RouteMetadata metadata)

@@ -266,9 +266,10 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
-        ///     Check progress toward waypoint and handle recovery if needed
+        ///     Check progress toward waypoint and handle recovery if needed.
+        ///     Returns true if recovery attempts exceeded and a reset is recommended.
         /// </summary>
-        public void CheckWaypointProgress(byte plid, double currentDistance)
+        public bool CheckWaypointProgress(byte plid, double currentDistance)
         {
             // Ensure dictionaries have the necessary keys
             if (!lastDistanceToWaypoint.ContainsKey(plid))
@@ -289,11 +290,13 @@ namespace AHPP_AI.Waypoint
                 logger.Log(
                     $"PLID={plid} PROGRESS CHECK: Previous={previousDistance:F1}m, Current={currentDistance:F1}m, Progress={progress:F1}m");
 
-                // If too many failed attempts, skip to next waypoint
+                // If too many failed attempts, signal reset
                 if (recoveryAttempts[plid] >= config.MaxRecoveryAttempts)
                 {
-                    AdvanceToNextWaypoint(plid, "TOO MANY RECOVERY ATTEMPTS");
                     recoveryAttempts[plid] = 0;
+                    lastDistanceToWaypoint[plid] = currentDistance;
+                    lastProgressCheckTimes[plid] = DateTime.Now;
+                    return true;
                 }
                 else if (progress < 0)
                 {
@@ -312,6 +315,8 @@ namespace AHPP_AI.Waypoint
                 lastDistanceToWaypoint[plid] = currentDistance;
                 lastProgressCheckTimes[plid] = DateTime.Now;
             }
+
+            return false;
         }
 
         /// <summary>

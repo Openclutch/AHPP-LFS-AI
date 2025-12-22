@@ -86,7 +86,8 @@ namespace AHPP_AI.AI
             waypointFollower = new WaypointFollower(config, logger, steeringCalculator);
             gearboxController = new GearboxController(config, logger);
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim);
-            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary);
+            driver.SetRecoveryFailedHandler(ResetAI);
+            routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
             mainUI = new MainUI(insim, logger);
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
@@ -248,26 +249,82 @@ namespace AHPP_AI.AI
         {
             if (!config.DebugEnabled || debugUI == null) return;
 
-            if (viewPlid == playerPLID)
+            if (aiPLIDs.Contains(viewPlid))
             {
-                debugUI.ShowRecordingButtons(true);
-                debugUI.ShowAIButtons(false);
-            }
-            else if (aiPLIDs.Contains(viewPlid))
-            {
-                debugUI.ShowRecordingButtons(false);
                 debugUI.ShowAIButtons(true);
             }
             else
             {
-                debugUI.ShowRecordingButtons(false);
                 debugUI.ShowAIButtons(false);
             }
+        }
+
+        /// <summary>
+        /// Update the record UI selection to highlight the chosen route.
+        /// </summary>
+        public void SetRecordingRouteSelection(string routeName)
+        {
+            mainUI?.UpdateRecordingRouteSelection(routeName);
+        }
+
+        /// <summary>
+        /// Update spawn delay for AI car creation.
+        /// </summary>
+        public void SetSpawnDelayMs(int delayMs)
+        {
+            config.WaitTimeToSpawn = Math.Max(0, delayMs);
+        }
+
+        /// <summary>
+        /// Apply route names from configuration and reload path data.
+        /// </summary>
+        public void ApplyRouteConfig(string spawnRoute, string mainRoute, IEnumerable<string> branches)
+        {
+            if (!string.IsNullOrWhiteSpace(spawnRoute)) config.SpawnRouteName = spawnRoute;
+            if (!string.IsNullOrWhiteSpace(mainRoute)) config.MainRouteName = mainRoute;
+
+            if (branches != null)
+                config.BranchRouteNames = branches
+                    .Where(b => !string.IsNullOrWhiteSpace(b))
+                    .ToList();
+
+            pathManager.LoadRoutes(config);
         }
 
         public void StopRecording()
         {
             routeRecorder.Stop();
+        }
+
+        /// <summary>
+        /// Reset layout visuals and remove all AI cars.
+        /// </summary>
+        public void ResetLayoutAndAI()
+        {
+            lfsLayout.ClearAllVisualizations();
+            lfsLayout.WaypointsVisualized = false;
+            RemoveAllAICars();
+            insim.Send(new IS_MST { Msg = "Layout cleared and all AI removed." });
+        }
+
+        /// <summary>
+        /// Reset a single AI by spectating it and spawning a new one.
+        /// </summary>
+        private void ResetAI(byte plid)
+        {
+            if (!aiPLIDs.Contains(plid))
+                return;
+
+            insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+
+            aiPLIDs.Remove(plid);
+            aiSpawnPositions.Remove(plid);
+            engineStateMap.Remove(plid);
+            currentRoute.Remove(plid);
+
+            insim.Send(new IS_MST { Msg = "/ai" });
+            logger.Log($"Reset AI {plid} after max recovery attempts; spawned replacement");
+            mainUI.UpdateAIList(GetAiTuples());
         }
 
         /// <summary>
@@ -296,11 +353,16 @@ namespace AHPP_AI.AI
             if (!string.IsNullOrWhiteSpace(config.MainRouteName)) routeNames.Add(config.MainRouteName);
             if (config.BranchRouteNames != null) routeNames.AddRange(config.BranchRouteNames);
 
+            var firstRoute = true;
             foreach (var name in routeNames)
             {
                 waypointManager.LoadTrafficRoute(name);
                 var recorded = waypointManager.GetRecordedRoute(name);
-                if (recorded != null) lfsLayout.VisualizeRecordedRoute(viewPlid, recorded);
+                if (recorded != null)
+                {
+                    lfsLayout.VisualizeRecordedRoute(viewPlid, recorded, firstRoute);
+                    firstRoute = false;
+                }
                 else logger.LogWarning($"No recorded route found for visualization: {name}");
             }
 
@@ -325,12 +387,12 @@ namespace AHPP_AI.AI
 
         public void ShowAddAIDialog()
         {
-            mainUI.ShowAddAIDialog();
+            // Input field is now always visible; no-op to keep call sites safe.
         }
 
         public void HideAddAIDialog()
         {
-            mainUI.HideAddAIDialog();
+            // No separate dialog to hide; kept for compatibility.
         }
 
         /// <summary>
@@ -496,9 +558,6 @@ namespace AHPP_AI.AI
                 // Track human player in debug UI
                 debugUI.SetPlayerPLID(npl.PLID);
                 playerPLID = npl.PLID;
-                // Ensure recording buttons are visible when the player joins
-                debugUI.ShowRecordingButtons(true);
-                debugUI.ShowAIButtons(false);
                 logger.Log($"Human player detected: PLID={npl.PLID}, Name={npl.PName}");
             }
         }

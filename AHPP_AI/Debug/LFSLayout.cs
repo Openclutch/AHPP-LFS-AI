@@ -158,7 +158,7 @@ namespace AHPP_AI.Debug
         /// <summary>
         /// Visualize a recorded route with color-coded cones so it can be edited in the LFS layout editor.
         /// </summary>
-        public void VisualizeRecordedRoute(byte plid, RecordedRoute route)
+        public void VisualizeRecordedRoute(byte plid, RecordedRoute route, bool clearExisting = true)
         {
             if (route == null || route.Nodes == null || route.Nodes.Count == 0)
             {
@@ -166,7 +166,12 @@ namespace AHPP_AI.Debug
                 return;
             }
 
-            ClearPlayerVisualizations(plid);
+            if (clearExisting)
+            {
+                ClearPlayerVisualizations(plid);
+            }
+
+            // Reset per-route duplicate tracking so multiple routes can overlay while each still avoids self-duplicates.
             waypointPositions.Clear();
 
             var waypoints = route.ToWaypoints();
@@ -175,10 +180,12 @@ namespace AHPP_AI.Debug
 
             var count = 0;
             var max = Math.Min(waypoints.Count, MAX_VISIBLE_WAYPOINTS);
+            // Default marker uses Chalk Ahead; color pit entry as red to make it distinct.
+            var markerType = route.Metadata.Type == RouteType.PitEntry ? CONE_RED : CHALK_AHEAD;
             for (var i = 0; i < max; i++)
             {
                 var heading = CalculateHeadingForIndex(waypoints, i, route.Metadata.IsLoop);
-                PlaceEditableWaypoint(plid, waypoints[i], heading);
+                PlaceEditableWaypoint(plid, waypoints[i], heading, markerType);
                 count++;
             }
 
@@ -223,14 +230,14 @@ namespace AHPP_AI.Debug
         /// <summary>
         /// Place a chalk arrow marker for a recorded route node to support manual editing.
         /// </summary>
-        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading)
+        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading, byte objectType)
         {
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
 
             var xMeters = waypoint.Position.X / 65536.0f;
             var yMeters = waypoint.Position.Y / 65536.0f;
 
-            var marker = PlaceObject(plid, CHALK_AHEAD, xMeters, yMeters, 0.5f, heading);
+            var marker = PlaceObject(plid, objectType, xMeters, yMeters, 0.5f, heading);
             if (marker != null) placedObjectsByPlid[plid].Add(marker);
         }
 

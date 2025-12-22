@@ -1,5 +1,18 @@
 # Changelog
 
+- Cleaned the AI debug panel by removing unused buttons, clarifying labels, and adding inline inputs for AI count and speed.
+- Fixed type-in buttons so their labels are visible on-screen while also titling the dialog.
+- Validated AI count/speed entries and send chat confirmations when spawning AIs or updating their target speed from the UI.
+- Keep pit and main routes visible together when toggling layout visualization and render the pit route in red for clarity.
+- Removed player-facing debug buttons from the in-game debug UI to focus on AI testing controls.
+- Added a bottom-center Record toggle with route selector buttons so you can pick main, pit, or detour recordings before starting.
+- Fixed record route selection wiring by routing it through the AI controller instead of the missing Program-level UI reference.
+- Record button now shows live point count while recording to confirm data is being captured.
+- Recording button turns green while active so it's obvious when capturing data.
+- Synced `config.ini` with the AHPP Touge Racing template, including upgrade, economy, monitoring, and cop mission settings.
+- Added config-driven host/port, debug flags, route names, AI spawn counts/delays, and OutGauge port to remove hardcoded values.
+- Config file now marked as content and copied to the output so builds include the current `config.ini`.
+- Prevent UI rendering before InSim connects by deferring record button drawing until the panel is shown.
 - Add a route library and JSON templates for main loop, pit entry, and detour recordings with metadata.
 - Record routes with typed presets, per-node speed limits, and saved metadata for editing later.
 - Visualize recorded routes in LFS with color-coded cones so waypoints can be selected and tweaked in the layout editor.
@@ -8,6 +21,10 @@
 - Add a Layout toggle button to load recorded routes and visualize their layout objects on demand.
 - Switch recorded route visualization to chalk arrows with forward headings instead of cones for clearer flow.
 - Avoid re-placing the active waypoint cone when the target hasn't changed to reduce layout spam.
+- Honor recorded speeds from JSON when no explicit speed limit is set, and record live speeds into speed limits instead of forcing a default.
+- Add a Reset button to clear layout visualizations and remove all AIs in one action.
+- Replace Add AI with an inline type-in so clicking it immediately prompts for the number of AIs to spawn.
+- When recovery attempts are exhausted, spectate the stuck AI and auto-spawn a replacement to keep the fleet moving.
 - Swap route recording visualizer to Chalk Ahead arrows and align their heading with the driver's car so they follow movement direction.
 - Raise Chalk Ahead markers to the car's Z position when recording so arrows no longer stick at a fixed 0.5m height.
 - Flip Chalk Ahead marker heading 180° so route recording arrows point forward along the car's travel direction.

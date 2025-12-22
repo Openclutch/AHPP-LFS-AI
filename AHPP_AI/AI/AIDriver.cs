@@ -63,6 +63,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
+        private Action<byte> recoveryFailedHandler;
         private readonly Logger logger;
         private readonly Dictionary<byte, int> stuckHeading = new Dictionary<byte, int>();
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
@@ -89,6 +90,11 @@ namespace AHPP_AI.AI
             this.waypointFollower = waypointFollower;
             this.gearboxController = gearboxController;
             this.insim = insim;
+        }
+
+        public void SetRecoveryFailedHandler(Action<byte> handler)
+        {
+            recoveryFailedHandler = handler;
         }
 
         /// <summary>
@@ -175,7 +181,13 @@ namespace AHPP_AI.AI
                     plid, carX, carY, (int)currentHeading);
 
                 // Check progress toward waypoint and also check if stuck
-                waypointFollower.CheckWaypointProgress(plid, distance);
+                var recoveryFailed = waypointFollower.CheckWaypointProgress(plid, distance);
+                if (recoveryFailed)
+                {
+                    controlInfo[plid] = "Recovery reset";
+                    recoveryFailedHandler?.Invoke(plid);
+                    return;
+                }
 
                 // Check if we're making progress at regular intervals
                 CheckIfStuck(plid, carX, carY, (int)currentHeading, speedKmh, distance);

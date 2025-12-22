@@ -110,43 +110,19 @@ namespace AHPP_AI.Debug
 
         public void ShowRecordingButtons(bool show)
         {
-            var buttons = new Dictionary<string, byte>
-            {
-                { "RecRoute1", playerButtonIds["RecRoute1"] },
-                { "RecRoute2", playerButtonIds["RecRoute2"] },
-                { "RecRoute3", playerButtonIds["RecRoute3"] }
-            };
-
-            var row = (byte)(TOP_ROW + ROW_HEIGHT * (playerButtonIds.Count - 3));
-
-            if (show)
-            {
-                CreateDebugButton(buttons["RecRoute1"], BuildRecordLabel("RecRoute1", 0, false), LEFT_COLUMN, row, BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(buttons["RecRoute2"], BuildRecordLabel("RecRoute2", 0, false), LEFT_COLUMN, (byte)(row + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(buttons["RecRoute3"], BuildRecordLabel("RecRoute3", 0, false), LEFT_COLUMN, (byte)(row + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
-                debugButtonsActive[buttons["RecRoute1"]] = 1;
-                debugButtonsActive[buttons["RecRoute2"]] = 1;
-                debugButtonsActive[buttons["RecRoute3"]] = 1;
-            }
-            else
-            {
-                DeleteButton(buttons["RecRoute1"]);
-                DeleteButton(buttons["RecRoute2"]);
-                DeleteButton(buttons["RecRoute3"]);
-                debugButtonsActive[buttons["RecRoute1"]] = 0;
-                debugButtonsActive[buttons["RecRoute2"]] = 0;
-                debugButtonsActive[buttons["RecRoute3"]] = 0;
-            }
+            // Player-facing recording buttons are deprecated; ensure any legacy buttons are removed.
+            DeleteButton(playerButtonIds["RecRoute1"]);
+            DeleteButton(playerButtonIds["RecRoute2"]);
+            DeleteButton(playerButtonIds["RecRoute3"]);
+            debugButtonsActive[playerButtonIds["RecRoute1"]] = 0;
+            debugButtonsActive[playerButtonIds["RecRoute2"]] = 0;
+            debugButtonsActive[playerButtonIds["RecRoute3"]] = 0;
         }
 
         public void UpdateRecordingButton(string routeName, int count, bool recording)
         {
-            if (string.IsNullOrWhiteSpace(routeName)) routeName = "route1";
-            if (!recordButtonMap.TryGetValue(routeName, out var key)) key = "RecRoute1";
-
-            if (!playerButtonIds.TryGetValue(key, out var id)) return;
-
-            UpdateDebugButton(id, BuildRecordLabel(key, count, recording));
+            // Player telemetry UI has been removed; no updates required.
+            return;
         }
 
         public void ShowAIButtons(bool show)
@@ -202,19 +178,8 @@ namespace AHPP_AI.Debug
             {
                 logger.Log("Initializing debug UI...");
 
-                // Create player debug buttons on the left side
-                var row = TOP_ROW;
-                foreach (var entry in playerButtonIds)
-                {
-                    if (entry.Key.StartsWith("RecRoute"))
-                        continue;
-                    CreateDebugButton(entry.Value, $"P_{entry.Key}: --", LEFT_COLUMN, row, BUTTON_WIDTH, ROW_HEIGHT);
-                    debugButtonsActive[entry.Value] = 1;
-                    row += ROW_HEIGHT;
-                }
-
                 // Create AI debug buttons on the right side
-                row = TOP_ROW;
+                var row = TOP_ROW;
                 foreach (var entry in aiButtonIds)
                 {
                     CreateDebugButton(entry.Value, $"AI_{entry.Key.Substring(0, Math.Min(4, entry.Key.Length))}: --",
@@ -223,7 +188,7 @@ namespace AHPP_AI.Debug
                     row += ROW_HEIGHT;
                 }
 
-                insim.Send(new IS_MST { Msg = "Debug UI initialized - showing info for Player and AI" });
+                insim.Send(new IS_MST { Msg = "Debug UI initialized - showing info for AI" });
                 debugUIInitialized = true;
                 logger.Log("Debug UI initialization complete");
             }
@@ -286,14 +251,6 @@ namespace AHPP_AI.Debug
 
             try
             {
-                // Try to auto-detect player if not set - use connection ID 
-                // Default to manually setting the player PLID via SetPlayerPLID method
-                if (playerPLID == 0)
-                {
-                    insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_NCN }); // Request connection info
-                    insim.Send(new IS_MST { Msg = "Please use SetPlayerPLID to specify which car is yours" });
-                }
-
                 // Find first valid AI car if not set
                 if (aiPLID == 0 && aiTargetWaypointIndices != null)
                     foreach (var kvp in aiTargetWaypointIndices)
@@ -303,9 +260,6 @@ namespace AHPP_AI.Debug
                             insim.Send(new IS_MST { Msg = $"Auto-detected AI PLID: {aiPLID}" });
                             break;
                         }
-
-                // Update player data if available
-                if (playerPLID > 0 && aiPaths != null) UpdatePlayerDebugInfo(allCars, aiPaths, aiTargetSpeeds);
 
                 // Update AI data if available
                 if (aiPLID > 0 && aiTargetWaypointIndices != null && aiPaths != null && aiTargetSpeeds != null)

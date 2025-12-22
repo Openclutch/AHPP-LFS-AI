@@ -178,7 +178,14 @@ namespace AHPP_AI.Waypoint
 
             foreach (var node in route.Nodes)
             {
-                if (!node.SpeedLimit.HasValue) node.SpeedLimit = route.Metadata.DefaultSpeedLimit ?? node.Speed;
+                if (!node.SpeedLimit.HasValue)
+                {
+                    // Prefer explicitly recorded speed if present, otherwise fall back to route default.
+                    if (node.Speed > 0)
+                        node.SpeedLimit = node.Speed;
+                    else
+                        node.SpeedLimit = route.Metadata.DefaultSpeedLimit ?? 0;
+                }
             }
 
             return route;

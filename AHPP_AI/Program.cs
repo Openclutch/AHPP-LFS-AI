@@ -24,26 +24,58 @@ namespace AHPP_AI
 
         // Core components
         private static readonly Logger logger = new Logger("log.txt");
+        private static readonly AppConfig appConfig;
         private static readonly RouteLibrary routeLibrary;
         private static readonly WaypointManager waypointManager;
         private static readonly LFSLayout visualizer;
         private static readonly AIController aiController;
 
         // Debug settings
-        private static readonly bool debugEnabled = true; // enable debug UI buttons
-        private static readonly bool debugWaypoints = true; // spawn ai to test waypoints
-        private static readonly bool debugCoordinateSystem = false; // spawn objs to show path
+        private static readonly bool debugEnabled;
+        private static readonly bool debugWaypoints;
+        private static readonly bool debugCoordinateSystem;
+        private static readonly bool autoSpawnAI;
 
         // Host settings
-        private static readonly string host = "10.211.55.4"; // Local host
-        private static readonly int port = 29999; // Default InSim port
+        private static readonly string host;
+        private static readonly int port;
+        private static readonly int outGaugePort;
         private static byte currentViewPLID = 0;
+        private static string currentRecordingRoute = "main_loop";
+        private static readonly string spawnRouteName;
+        private static readonly string mainRouteName;
+        private static readonly List<string> branchRouteNames = new List<string>();
+        private static readonly int initialAiCount;
+        private static readonly int spawnDelayMs;
 
         /// <summary>
         ///     Static constructor for initialization of components
         /// </summary>
         static Program()
         {
+            var basePath = AppDomain.CurrentDomain.BaseDirectory;
+            appConfig = AppConfig.Load(Path.Combine(basePath, "config.ini"), logger);
+
+            host = appConfig.GetString("InSim", "Host", "10.211.55.4");
+            port = appConfig.GetInt("InSim", "Port", 29999);
+            outGaugePort = appConfig.GetInt("InSim", "OutGaugePort", 30000);
+
+            debugEnabled = appConfig.GetBool("DebugAI", "Enabled", true);
+            autoSpawnAI = appConfig.GetBool("DebugAI", "AutoSpawnAI", true);
+            debugWaypoints = appConfig.GetBool("DebugAI", "AutoVisualizeWaypoints", true);
+            debugCoordinateSystem = appConfig.GetBool("DebugAI", "AutoVisualizeAxes", false);
+
+            mainRouteName = appConfig.GetString("Routes", "Main", "main_loop");
+            spawnRouteName = appConfig.GetString("Routes", "Spawn", "pit_entry");
+            var detour1 = appConfig.GetString("Routes", "Detour1", "detour1");
+            var detour2 = appConfig.GetString("Routes", "Detour2", "detour2");
+            var detour3 = appConfig.GetString("Routes", "Detour3", "detour3");
+            branchRouteNames.AddRange(new[] { detour1, detour2, detour3 }.Where(n => !string.IsNullOrWhiteSpace(n)));
+            currentRecordingRoute = mainRouteName;
+
+            initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
+            spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
+
             // Initialize components in the correct order
             routeLibrary = new RouteLibrary(logger);
             waypointManager = new WaypointManager(logger, routeLibrary);
@@ -51,6 +83,10 @@ namespace AHPP_AI
 
             // Create AIController with dependencies
             aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
+            aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, branchRouteNames);
+            aiController.SetNumberOfAIs(initialAiCount);
+            aiController.SetSpawnDelayMs(spawnDelayMs);
+            aiController.SetRecordingRouteSelection(currentRecordingRoute);
         }
 
         /// <summary>
@@ -63,18 +99,17 @@ namespace AHPP_AI
             try
             {
                 // Load recorded traffic routes if present
-                waypointManager.LoadTrafficRoute("pit_entry");
-                waypointManager.LoadTrafficRoute("main_loop");
-                waypointManager.LoadTrafficRoute("detour1");
-                waypointManager.LoadTrafficRoute("detour2");
-                waypointManager.LoadTrafficRoute("detour3");
+                foreach (var route in GetConfiguredRoutes())
+                {
+                    waypointManager.LoadTrafficRoute(route);
+                }
 
                 // Register event handlers
                 RegisterEventHandlers();
 
                 // Initialize connection to LFS
                 InitializeInSim();
-                aiController.ConnectOutGauge(host, 30000);
+                aiController.ConnectOutGauge(host, outGaugePort);
 
                 // not sure if we need this, use logging to see if already call the layout, maybe on init
                 /*
@@ -92,7 +127,7 @@ namespace AHPP_AI
                 aiController.InitializeDebugUI();
 
                 // Spawn AI cars automatically if debug is enabled
-                if (debugWaypoints)
+                if (autoSpawnAI)
                 {
                     Thread.Sleep(250); // Wait for connection to stabilize
                     aiController.SpawnAICars();
@@ -229,16 +264,31 @@ namespace AHPP_AI
             {
                 case 1:
                     if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("main_loop", RouteType.MainLoop);
+                    else aiController.StartRecording(currentRecordingRoute, GetRouteTypeFromName(currentRecordingRoute));
+                    break;
+                case 11:
+                    SetRecordingRoute(mainRouteName);
+                    break;
+                case 12:
+                    SetRecordingRoute(spawnRouteName);
+                    break;
+                case 13:
+                    SetRecordingRoute(GetBranchRoute(0, "detour1"));
+                    break;
+                case 14:
+                    SetRecordingRoute(GetBranchRoute(1, "detour2"));
+                    break;
+                case 15:
+                    SetRecordingRoute(GetBranchRoute(2, "detour3"));
                     break;
                 case 2:
                     aiController.ReloadRoutes();
                     break;
+                case 6:
+                    aiController.ResetLayoutAndAI();
+                    break;
                 case 5:
                     aiController.ToggleRouteVisualization(currentViewPLID);
-                    break;
-                case 101:
-                    aiController.ShowAddAIDialog();
                     break;
                 case 103:
                     aiController.StopAllAIs();
@@ -248,15 +298,18 @@ namespace AHPP_AI
                     break;
                 case 239:
                     if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("main_loop", RouteType.MainLoop);
+                    else aiController.StartRecording(mainRouteName, GetRouteTypeFromName(mainRouteName));
                     break;
                 case 238:
                     if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("pit_entry", RouteType.PitEntry);
+                    else aiController.StartRecording(spawnRouteName, GetRouteTypeFromName(spawnRouteName));
                     break;
                 case 237:
                     if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording("detour1", RouteType.Detour);
+                    else
+                        aiController.StartRecording(
+                            GetBranchRoute(0, "detour1"),
+                            GetRouteTypeFromName(GetBranchRoute(0, "detour1")));
                     break;
                 case 212:
                     aiController.SpawnAICars();
@@ -279,16 +332,39 @@ namespace AHPP_AI
             }
         }
 
+        /// <summary>
+        /// Handle text entry responses from InSim buttons.
+        /// </summary>
         private static void OnButtonType(IS_BTT btt)
         {
             if (btt.ClickID == MainUI.AddAiDialogId)
             {
                 if (int.TryParse(btt.Text, out var count))
                 {
-                    aiController.SetNumberOfAIs(count);
+                    aiController.SetNumberOfAIs(Math.Max(0, count));
                     aiController.SpawnAICars();
+                    insim.Send(new IS_MST { Msg = $"Spawning {Math.Max(0, count)} AI(s)" });
+                }
+                else
+                {
+                    insim.Send(new IS_MST { Msg = "Enter a valid number of AIs." });
                 }
                 aiController.HideAddAIDialog();
+                return;
+            }
+
+            if (btt.ClickID == MainUI.SpeedInputId)
+            {
+                if (double.TryParse(btt.Text, out var speed))
+                {
+                    var clampedSpeed = Math.Max(0, speed);
+                    aiController.SetTargetSpeedForAll(clampedSpeed);
+                    insim.Send(new IS_MST { Msg = $"Set AI speed to {clampedSpeed:F0} km/h" });
+                }
+                else
+                {
+                    insim.Send(new IS_MST { Msg = "Enter a valid AI speed." });
+                }
             }
         }
 
@@ -411,6 +487,44 @@ namespace AHPP_AI
         {
             if (tiny.SubT == TinyType.TINY_AXM && visualizer.LayoutObjectsRequested)
                 logger.Log("Received TINY_AXM response");
+        }
+
+        /// <summary>
+        /// Update the active recording route and refresh UI selection.
+        /// </summary>
+        private static void SetRecordingRoute(string routeName)
+        {
+            currentRecordingRoute = string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName;
+            aiController.SetRecordingRouteSelection(currentRecordingRoute);
+            insim.Send(new IS_MST { Msg = $"Recording route set to {currentRecordingRoute}" });
+        }
+
+        /// <summary>
+        /// Map a route name to its RouteType for recording metadata.
+        /// </summary>
+        private static RouteType GetRouteTypeFromName(string routeName)
+        {
+            var name = (routeName ?? string.Empty).ToLowerInvariant();
+            if (name.Contains("pit")) return RouteType.PitEntry;
+            if (name.Contains("detour")) return RouteType.Detour;
+            if (name.Contains("main")) return RouteType.MainLoop;
+            return RouteType.Unknown;
+        }
+
+        private static IEnumerable<string> GetConfiguredRoutes()
+        {
+            var names = new List<string>();
+            if (!string.IsNullOrWhiteSpace(spawnRouteName)) names.Add(spawnRouteName);
+            if (!string.IsNullOrWhiteSpace(mainRouteName)) names.Add(mainRouteName);
+            names.AddRange(branchRouteNames);
+            return names.Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static string GetBranchRoute(int index, string fallback)
+        {
+            if (index >= 0 && index < branchRouteNames.Count)
+                return branchRouteNames[index];
+            return fallback;
         }
 
         private static void OnCameraChange(IS_CCH cch)
