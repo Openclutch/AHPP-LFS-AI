@@ -93,7 +93,8 @@ namespace AHPP_AI.Waypoint
 
             // Initialize waypoint indices
             targetWaypointIndices[plid] = bestIndex;
-            lookAheadWaypointIndices[plid] = (bestIndex + 2) % aiPaths[plid].Count;
+            var lookahead = Math.Max(1, config.LookaheadWaypoints);
+            lookAheadWaypointIndices[plid] = (bestIndex + lookahead) % aiPaths[plid].Count;
 
             // IMPORTANT: Default to not using approach curve
             isFirstApproach[plid] = false;

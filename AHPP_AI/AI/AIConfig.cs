@@ -54,6 +54,7 @@ namespace AHPP_AI.AI
         public int MaxRecoveryAttempts { get; set; } = 5;
         public double MinSpeedThreshold { get; set; } = 0.5;
         public int StationaryCheckCount { get; set; } = 3;
+        public int LookaheadWaypoints { get; set; } = 2;
 
         // Speed thresholds for gear changes
         public double[] GearSpeedThresholds { get; set; } =

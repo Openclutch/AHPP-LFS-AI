@@ -276,6 +276,22 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure how many waypoints ahead the AI should look when selecting targets.
+        /// </summary>
+        public void SetLookaheadWaypoints(int lookahead)
+        {
+            config.LookaheadWaypoints = Math.Max(1, lookahead);
+        }
+
+        /// <summary>
+        /// Set the minimum distance in meters between recorded points.
+        /// </summary>
+        public void SetRecordingInterval(double meters)
+        {
+            routeRecorder.SetInterval(meters);
+        }
+
+        /// <summary>
         /// Apply route names from configuration and reload path data.
         /// </summary>
         public void ApplyRouteConfig(string spawnRoute, string mainRoute, IEnumerable<string> branches)
@@ -432,8 +448,20 @@ namespace AHPP_AI.AI
         {
             foreach (var plid in aiPLIDs)
             {
-                driver.StopCar(plid);
                 waypointFollower.SetManualTargetSpeed(plid, 0);
+                driver.ParkCar(plid);
+            }
+        }
+
+        /// <summary>
+        /// Turn on ignition, release brakes, and resume path following for all AIs.
+        /// </summary>
+        public void StartAllAIs()
+        {
+            foreach (var plid in aiPLIDs)
+            {
+                waypointFollower.ClearManualTargetSpeed(plid);
+                driver.StartCar(plid);
             }
         }
 

@@ -26,7 +26,7 @@ namespace AHPP_AI.Debug
         private const byte RIGHT_COLUMN = 50;
         private const byte TOP_ROW = 5;
         private const byte ROW_HEIGHT = 4;
-        private const byte BUTTON_WIDTH = 40;
+        private const byte BUTTON_WIDTH = 20;
         private const double WAYPOINT_THRESHOLD = 1.5; // Same threshold as the AI uses
         private const int WAYPOINT_TIMEOUT_SECONDS = 600; // Same timeout as the AI uses
 
@@ -46,7 +46,8 @@ namespace AHPP_AI.Debug
             { "HeadingError", 216 },
             { "TargetSpeed", 215 },
             { "ControlInfo", 214 },
-            { "RouteInfo", 213 }
+            { "RouteInfo", 213 },
+            { "StartAll", 206 }
         };
 
         // Track button states and update timing
@@ -132,6 +133,7 @@ namespace AHPP_AI.Debug
             byte removeId = 211;
             byte removeAllId = 210;
             byte stopAllId = 209;
+            byte startAllId = 206;
             byte specAllId = 208;
             byte speedId = 207;
 
@@ -141,12 +143,14 @@ namespace AHPP_AI.Debug
                 CreateDebugButton(removeId, "REMOVE AI", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
                 CreateDebugButton(removeAllId, "REMOVE ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
                 CreateDebugButton(stopAllId, "STOP ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 3), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(specAllId, "SPEC ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 4), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(speedId, "SET SPEED", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 5), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(startAllId, "START ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 4), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(specAllId, "SPEC ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 5), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(speedId, "SET SPEED", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 6), BUTTON_WIDTH, ROW_HEIGHT);
                 debugButtonsActive[spawnId] = 1;
                 debugButtonsActive[removeId] = 1;
                 debugButtonsActive[removeAllId] = 1;
                 debugButtonsActive[stopAllId] = 1;
+                debugButtonsActive[startAllId] = 1;
                 debugButtonsActive[specAllId] = 1;
                 debugButtonsActive[speedId] = 1;
             }
@@ -156,12 +160,14 @@ namespace AHPP_AI.Debug
                 DeleteButton(removeId);
                 DeleteButton(removeAllId);
                 DeleteButton(stopAllId);
+                DeleteButton(startAllId);
                 DeleteButton(specAllId);
                 DeleteButton(speedId);
                 debugButtonsActive[spawnId] = 0;
                 debugButtonsActive[removeId] = 0;
                 debugButtonsActive[removeAllId] = 0;
                 debugButtonsActive[stopAllId] = 0;
+                debugButtonsActive[startAllId] = 0;
                 debugButtonsActive[specAllId] = 0;
                 debugButtonsActive[speedId] = 0;
             }

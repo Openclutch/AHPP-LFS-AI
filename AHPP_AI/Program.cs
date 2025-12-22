@@ -47,6 +47,8 @@ namespace AHPP_AI
         private static readonly List<string> branchRouteNames = new List<string>();
         private static readonly int initialAiCount;
         private static readonly int spawnDelayMs;
+        private static readonly int lookaheadWaypoints;
+        private static readonly double recordingIntervalMeters;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -75,6 +77,8 @@ namespace AHPP_AI
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
             spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
+            lookaheadWaypoints = appConfig.GetInt("AI", "LookaheadWaypoints", 2);
+            recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 1.0);
 
             // Initialize components in the correct order
             routeLibrary = new RouteLibrary(logger);
@@ -87,6 +91,8 @@ namespace AHPP_AI
             aiController.SetNumberOfAIs(initialAiCount);
             aiController.SetSpawnDelayMs(spawnDelayMs);
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
+            aiController.SetLookaheadWaypoints(lookaheadWaypoints);
+            aiController.SetRecordingInterval(recordingIntervalMeters);
         }
 
         /// <summary>
@@ -293,6 +299,9 @@ namespace AHPP_AI
                 case 103:
                     aiController.StopAllAIs();
                     break;
+                case 105:
+                    aiController.StartAllAIs();
+                    break;
                 case 104:
                     aiController.SpectateAllAIs();
                     break;
@@ -364,6 +373,20 @@ namespace AHPP_AI
                 else
                 {
                     insim.Send(new IS_MST { Msg = "Enter a valid AI speed." });
+                }
+            }
+
+            if (btt.ClickID == MainUI.RecordingIntervalId)
+            {
+                if (double.TryParse(btt.Text, out var meters))
+                {
+                    var interval = Math.Max(0.1, meters);
+                    aiController.SetRecordingInterval(interval);
+                    insim.Send(new IS_MST { Msg = $"Recording every {interval:F1} m" });
+                }
+                else
+                {
+                    insim.Send(new IS_MST { Msg = "Enter a valid recording interval in meters." });
                 }
             }
         }

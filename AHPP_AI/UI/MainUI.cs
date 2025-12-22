@@ -20,14 +20,15 @@ namespace AHPP_AI.UI
         private const byte RIGHT_COL = 50;
         private const byte AI_LIST_COL = 95; // Separate column for spawned AI buttons to avoid overlap
         private const byte ROW_HEIGHT = 5;
-        private const byte BTN_W = 40;
-        private const byte SELECT_BTN_W = 30;
+        private const byte BTN_W = 20;
+        private const byte SELECT_BTN_W = 20;
         private const byte SELECT_BTN_SPACING = 2;
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
 
         public const byte AddAiDialogId = 150;
         public const byte SpeedInputId = 151;
+        public const byte RecordingIntervalId = 152;
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>();
         private readonly (byte id, string name, string label)[] routeOptions =
@@ -65,6 +66,8 @@ namespace AHPP_AI.UI
             row = 70;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
+            CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
+            CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(104, "Spec All AI", RIGHT_COL, row);
 

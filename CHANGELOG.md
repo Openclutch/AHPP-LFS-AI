@@ -13,6 +13,9 @@
 - Added config-driven host/port, debug flags, route names, AI spawn counts/delays, and OutGauge port to remove hardcoded values.
 - Config file now marked as content and copied to the output so builds include the current `config.ini`.
 - Prevent UI rendering before InSim connects by deferring record button drawing until the panel is shown.
+- Reduced main UI buttons (including the Record control) to width 20 to match the compact debug buttons.
+- Added configurable waypoint lookahead so AI target selection can be tuned via `LookaheadWaypoints` in config.
+- Added configurable recording interval (meters between points) with both config support and an in-game type-in control.
 - Add a route library and JSON templates for main loop, pit entry, and detour recordings with metadata.
 - Record routes with typed presets, per-node speed limits, and saved metadata for editing later.
 - Visualize recorded routes in LFS with color-coded cones so waypoints can be selected and tweaked in the layout editor.

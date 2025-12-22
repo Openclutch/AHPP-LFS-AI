@@ -791,5 +791,37 @@ namespace AHPP_AI.AI
 
             insim.Send(new IS_AIC(inputs) { PLID = plid });
         }
+
+        /// <summary>
+        /// Apply full brakes, engage handbrake, and switch off ignition to park the car.
+        /// </summary>
+        public void ParkCar(byte plid)
+        {
+            var inputs = new List<AIInputVal>
+            {
+                new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = 0 },
+                new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 65535 },
+                new AIInputVal { Input = AicInputType.CS_HANDBRAKE, Value = 65535 },
+                new AIInputVal { Input = AicInputType.CS_IGNITION, Value = (ushort)AIInputVal_ToggleValues.SwitchOff }
+            };
+
+            insim.Send(new IS_AIC(inputs) { PLID = plid });
+        }
+
+        /// <summary>
+        /// Release brakes and turn ignition on to resume driving.
+        /// </summary>
+        public void StartCar(byte plid)
+        {
+            var inputs = new List<AIInputVal>
+            {
+                new AIInputVal { Input = AicInputType.CS_HANDBRAKE, Value = 0 },
+                new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 0 },
+                new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = 0 },
+                new AIInputVal { Input = AicInputType.CS_IGNITION, Value = (ushort)AIInputVal_ToggleValues.SwitchOn }
+            };
+
+            insim.Send(new IS_AIC(inputs) { PLID = plid });
+        }
     }
 }
