@@ -1,43 +1,41 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the penalty values.
+    /// Represents the penalty values.
     /// </summary>
-    public enum PenaltyValue
-    {
+    public enum PenaltyValue {
         /// <summary>
-        ///     No penalty.
+        /// No penalty.
         /// </summary>
         PENALTY_NONE,
 
         /// <summary>
-        ///     Drive-through.
+        /// Drive-through.
         /// </summary>
         PENALTY_DT,
 
         /// <summary>
-        ///     Drive-through valid.
+        /// Drive-through valid.
         /// </summary>
         PENALTY_DT_VALID,
 
         /// <summary>
-        ///     Stop and go.
+        /// Stop and go.
         /// </summary>
         PENALTY_SG,
 
         /// <summary>
-        ///     Stop and go valid.
+        /// Stop and go valid.
         /// </summary>
         PENALTY_SG_VALID,
 
         /// <summary>
-        ///     30 seconds.
+        /// 30 seconds.
         /// </summary>
         PENALTY_30,
 
         /// <summary>
-        ///     45 seconds.
+        /// 45 seconds.
         /// </summary>
-        PENALTY_45
+        PENALTY_45,
     }
 }

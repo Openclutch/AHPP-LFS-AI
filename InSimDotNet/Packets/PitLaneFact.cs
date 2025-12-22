@@ -1,33 +1,31 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the pit lane facts.
+    /// Represents the pit lane facts.
     /// </summary>
-    public enum PitLaneFact
-    {
+    public enum PitLaneFact {
         /// <summary>
-        ///     Left pit lane
+        /// Left pit lane
         /// </summary>
-        PITLANE_EXIT,
+        PITLANE_EXIT,		
 
         /// <summary>
-        ///     Entered pit lane
+        /// Entered pit lane
         /// </summary>
-        PITLANE_ENTER,
+        PITLANE_ENTER,		
 
         /// <summary>
-        ///     Entered for no purpose
+        /// Entered for no purpose
         /// </summary>
-        PITLANE_NO_PURPOSE,
+        PITLANE_NO_PURPOSE,	
 
         /// <summary>
-        ///     Entered for drive-through
+        /// Entered for drive-through
         /// </summary>
-        PITLANE_DT,
+        PITLANE_DT,			
 
         /// <summary>
-        ///     Entered for stop-go
+        /// Entered for stop-go
         /// </summary>
-        PITLANE_SG
+        PITLANE_SG,			
     }
 }

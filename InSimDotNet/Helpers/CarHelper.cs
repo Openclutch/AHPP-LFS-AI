@@ -7,11 +7,10 @@ using System.Linq;
 namespace InSimDotNet.Helpers
 {
     /// <summary>
-    ///     Static class to help with car names.
+    /// Static class to help with car names.
     /// </summary>
-    public static class CarHelper
-    {
-        private static readonly Dictionary<string, string> CarMap = new Dictionary<string, string>
+    public static class CarHelper {
+        private static readonly Dictionary<string, string> CarMap = new Dictionary<string, string>()
         {
             { "XFG", "XF GTI" },
             { "XRG", "XR GT" },
@@ -33,60 +32,67 @@ namespace InSimDotNet.Helpers
             { "FXR", "FXO GTR" },
             { "XRR", "XR GTR" },
             { "FZR", "FZ50 GTR" },
-            { "VWS", "VW Scirocco" }
+            { "VWS", "VW Scirocco" },
         };
 
         /// <summary>
-        ///     Gets all full car names.
+        /// Gets all full car names.
         /// </summary>
-        public static ReadOnlyCollection<string> FullCarNames =>
-            new ReadOnlyCollection<string>((from c in CarMap.Values
-                orderby c
-                select c).ToList());
+        public static ReadOnlyCollection<string> FullCarNames {
+            get {
+                return new ReadOnlyCollection<string>((from c in CarMap.Values
+                                                       orderby c
+                                                       select c).ToList());
+            }
+        }
 
         /// <summary>
-        ///     Gets all short car names;
+        /// Gets all short car names;
         /// </summary>
-        public static ReadOnlyCollection<string> ShortCarNames =>
-            new ReadOnlyCollection<string>((from c in CarMap.Keys
-                orderby c
-                select c).ToList());
+        public static ReadOnlyCollection<string> ShortCarNames {
+            get {
+                return new ReadOnlyCollection<string>((from c in CarMap.Keys
+                                                       orderby c
+                                                       select c).ToList());
+            }
+        }
 
         /// <summary>
-        ///     Determines the full name of a car or null if the car does not exist.
+        /// Determines the full name of a car or null if the car does not exist.
         /// </summary>
         /// <param name="shortCarName">The cars short car name.</param>
         /// <returns>The full name.</returns>
-        public static string GetFullCarName(string shortCarName)
-        {
-            if (shortCarName == null) throw new ArgumentNullException("shortCarName");
+        public static string GetFullCarName(string shortCarName) {
+            if (shortCarName == null) {
+                throw new ArgumentNullException("shortCarName");
+            }
 
-            shortCarName = shortCarName.ToUpper(CultureInfo.InvariantCulture);
+            shortCarName = CultureInfo.CurrentCulture.TextInfo.ToUpper(shortCarName);
 
             string car;
-            if (CarMap.TryGetValue(shortCarName, out car)) return car;
+            if (CarMap.TryGetValue(shortCarName, out car)) {
+                return car;
+            }
 
             return null;
         }
 
         /// <summary>
-        ///     Tries to determine the full name of the specified car.
+        /// Tries to determine the full name of the specified car.
         /// </summary>
         /// <param name="shortCarName">The short name for the car.</param>
         /// <param name="fullCarName">The full name for the car.</param>
         /// <returns>True if the car exists.</returns>
-        public static bool TryGetFullCarName(string shortCarName, out string fullCarName)
-        {
-            return !string.IsNullOrEmpty(fullCarName = GetFullCarName(shortCarName));
+        public static bool TryGetFullCarName(string shortCarName, out string fullCarName) {
+            return !String.IsNullOrEmpty(fullCarName = GetFullCarName(shortCarName));
         }
 
         /// <summary>
-        ///     Determines if the specified car exists.
+        /// Determines if the specified car exists.
         /// </summary>
         /// <param name="shortCarName">The short name of the car.</param>
         /// <returns>True if the car exists.</returns>
-        public static bool CarExists(string shortCarName)
-        {
+        public static bool CarExists(string shortCarName) {
             return CarMap.ContainsKey(shortCarName);
         }
     }

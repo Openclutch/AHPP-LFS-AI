@@ -1,31 +1,29 @@
 ﻿using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the <see cref="IS_BTC" /> CFlags.
+    /// Represents the <see cref="IS_BTC"/> CFlags.
     /// </summary>
     [Flags]
-    public enum ClickFlags
-    {
+    public enum ClickFlags {
         /// <summary>
-        ///     Left mouse button.
+        /// Left mouse button.
         /// </summary>
         ISB_LMB = 1,
 
         /// <summary>
-        ///     Right mouse button.
+        /// Right mouse button.
         /// </summary>
         ISB_RMB = 2,
 
         /// <summary>
-        ///     Ctrl + click.
+        /// Ctrl + click.
         /// </summary>
         ISB_CTRL = 4,
 
         /// <summary>
-        ///     Shift + click.
+        /// Shift + click.
         /// </summary>
-        ISB_SHIFT = 8
+        ISB_SHIFT = 8,
     }
 }

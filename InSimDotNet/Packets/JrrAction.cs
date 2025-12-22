@@ -1,17 +1,15 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents JRR packet actions.
+    /// Represents JRR packet actions.
     /// </summary>
-    public enum JrrAction
-    {
+    public enum JrrAction {
         /// <summary>
-        ///     Reject new player.
+        /// Reject new player.
         /// </summary>
         JRR_REJECT = 0,
 
         /// <summary>
-        ///     Allow new player.
+        /// Allow new player.
         /// </summary>
         JRR_SPAWN = 1,
 
@@ -19,14 +17,14 @@
         //JRR_3,
 
         /// <summary>
-        ///     Reset?
+        /// Reset?
         /// </summary>
         JRR_RESET = 4,
 
         /// <summary>
-        ///     No repair?
+        /// No repair?
         /// </summary>
-        JRR_RESET_NO_REPAIR = 5
+        JRR_RESET_NO_REPAIR = 5,
 
         //JRR_6,
         //JRR_7,

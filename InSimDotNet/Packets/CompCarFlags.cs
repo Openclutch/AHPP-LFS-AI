@@ -1,36 +1,39 @@
 ﻿using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the <see cref="CompCar" /> Info.
+    /// Represents the <see cref="CompCar"/> Info.
     /// </summary>
     [Flags]
-    public enum CompCarFlags
-    {
+    public enum CompCarFlags {
         /// <summary>
-        ///     This car is in the way of a driver who is a lap ahead
+        /// This car is in the way of a driver who is a lap ahead
         /// </summary>
         CCI_BLUE = 1,
 
         /// <summary>
-        ///     This car is slow or stopped and in a dangerous place
+        /// This car is slow or stopped and in a dangerous place
         /// </summary>
         CCI_YELLOW = 2,
 
         /// <summary>
-        ///     This car is lagging (missing or delayed position packets)
+        /// This car is outside the path
+        /// </summary>
+        CCI_OOB = 4,
+
+        /// <summary>
+        /// This car is lagging (missing or delayed position packets)
         /// </summary>
         CCI_LAG = 32,
 
         /// <summary>
-        ///     This is the first <see cref="CompCar" /> in this set of <see cref="IS_MCI" /> packets
+        /// This is the first <see cref="CompCar"/> in this set of <see cref="IS_MCI"/> packets
         /// </summary>
         CCI_FIRST = 64,
 
         /// <summary>
-        ///     This is the last <see cref="CompCar" /> in this set of <see cref="IS_MCI" /> packets
+        /// This is the last <see cref="CompCar"/> in this set of <see cref="IS_MCI"/> packets
         /// </summary>
-        CCI_LAST = 128
+        CCI_LAST = 128,
     }
 }

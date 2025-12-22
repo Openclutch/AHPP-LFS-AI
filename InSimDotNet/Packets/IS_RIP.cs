@@ -1,33 +1,79 @@
 using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Replay information packet.
+    /// Replay information packet.
     /// </summary>
     /// <remarks>
-    ///     Used to control replay playback (when request completed one of these is sent in conformation).
+    /// Used to control replay playback (when request completed one of these is sent in conformation).
     /// </remarks>
-    public class IS_RIP : IPacket, ISendable
-    {
+    public class IS_RIP : IPacket, ISendable {
         /// <summary>
-        ///     Creates a new replay information packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_RIP()
-        {
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the packet request ID.
+        /// </summary>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Gets the error associated with the replay.
+        /// </summary>
+        public ReplayError Error { get; private set; }
+
+        /// <summary>
+        /// Gets or sets if the replay is single player or multiplayer.
+        /// </summary>
+        public ReplayMode MPR { get; set; }
+
+        /// <summary>
+        /// Gets or sets if the replay is paused (request: pause on arrival / reply: paused state).
+        /// </summary>
+        public bool Paused { get; set; }
+
+        /// <summary>
+        /// Gets or sets the replay options.
+        /// </summary>
+        public ReplayOptions Options { get; set; }
+
+        /// <summary>
+        /// Gets or sets the current time in the replay (request: destination / reply: position).
+        /// </summary>
+        public TimeSpan CTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the total time of the replay
+        /// </summary>
+        public TimeSpan TTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the replay name.
+        /// </summary>
+        public string RName { get; set; }
+
+        /// <summary>
+        /// Creates a new replay information packet.
+        /// </summary>
+        public IS_RIP() {
             Size = 80;
             Type = PacketType.ISP_RIP;
-            RName = string.Empty;
+            RName = String.Empty;
         }
 
         /// <summary>
-        ///     Creates a new replay information packet.
+        /// Creates a new replay information packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_RIP(byte[] buffer)
-            : this()
-        {
-            var reader = new PacketReader(buffer);
+            : this() {
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -38,69 +84,18 @@ namespace InSimDotNet.Packets
             reader.Skip(1);
 
             // Times here are in hundredths, for some reason.
-            CTime = TimeSpan.FromMilliseconds(reader.ReadUInt32() * 10);
-            TTime = TimeSpan.FromMilliseconds(reader.ReadUInt32() * 10);
+            CTime = TimeSpan.FromMilliseconds(reader.ReadUInt32());
+            TTime = TimeSpan.FromMilliseconds(reader.ReadUInt32());
 
             RName = reader.ReadString(64);
         }
 
         /// <summary>
-        ///     Gets the error associated with the replay.
-        /// </summary>
-        public ReplayError Error { get; }
-
-        /// <summary>
-        ///     Gets or sets if the replay is single player or multiplayer.
-        /// </summary>
-        public ReplayMode MPR { get; set; }
-
-        /// <summary>
-        ///     Gets or sets if the replay is paused (request: pause on arrival / reply: paused state).
-        /// </summary>
-        public bool Paused { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the replay options.
-        /// </summary>
-        public ReplayOptions Options { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the current time in the replay (request: destination / reply: position).
-        /// </summary>
-        public TimeSpan CTime { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the total time of the replay
-        /// </summary>
-        public TimeSpan TTime { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the replay name.
-        /// </summary>
-        public string RName { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the packet request ID.
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Gets the packet data.
+        /// Gets the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
-        public byte[] GetBuffer()
-        {
-            var writer = new PacketWriter(Size);
+        public byte[] GetBuffer() {
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);
@@ -118,4 +113,5 @@ namespace InSimDotNet.Packets
             return writer.GetBuffer();
         }
     }
+
 }

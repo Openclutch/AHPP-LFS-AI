@@ -1,34 +1,150 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     New player packet.
+    /// New player packet.
     /// </summary>
     /// <remarks>
-    ///     Sent when a player joins the race (or leaving pits if PLID already exists).
+    /// Sent when a player joins the race (or leaving pits if PLID already exists).
     /// </remarks>
     public class IS_NPL : IPacket
     {
         /// <summary>
-        ///     Creates a new new player packet.
+        /// Gets the size of the packet.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the request ID.
+        /// </summary>
+        public byte ReqI { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the player.
+        /// </summary>
+        public byte PLID { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the connection.
+        /// </summary>
+        public byte UCID { get; private set; }
+
+        /// <summary>
+        /// Gets the player type.
+        /// </summary>
+        public PlayerTypes PType { get; private set; }
+
+        /// <summary>
+        /// Gets the player flags.
+        /// </summary>
+        public PlayerFlags Flags { get; private set; }
+
+        /// <summary>
+        /// Gets the name of the player.
+        /// </summary>
+        public string PName { get; private set; }
+
+        /// <summary>
+        /// Gets the number plate of the player.
+        /// </summary>
+        public string Plate { get; private set; }
+
+        /// <summary>
+        /// Gets the car name of the player.
+        /// </summary>
+        public string CName { get; private set; }
+
+        /// <summary>
+        /// Gets the skin name of the players car.
+        /// </summary>
+        public string SName { get; private set; }
+
+        /// <summary>
+        /// Gets the tyre compounds on the players car.
+        /// </summary>
+        public Tyres Tyres { get; private set; }
+
+        /// <summary>
+        /// Gets the added mass of the car.
+        /// </summary>
+        public byte H_Mass { get; private set; }
+
+        /// <summary>
+        /// Gets the intake restriction of the car.
+        /// </summary>
+        public byte H_TRes { get; private set; }
+
+        /// <summary>
+        /// Gets the driver model.
+        /// </summary>
+        public byte Model { get; private set; }
+
+        /// <summary>
+        /// Gets the passenger flags.
+        /// </summary>
+        public PassengerFlags Pass { get; private set; }
+
+        /// <summary>
+        /// Low 4 bits: tyre width reduction (rear)
+        /// </summary>
+        public byte RWAdj { get; }
+
+        /// <summary>
+        /// Low 4 bits: tyre width reduction (front)
+        /// </summary>
+        public byte FWAdj { get; }
+
+        /// <summary>
+        /// Gets the setup flags.
+        /// </summary>
+        public SetupFlags SetF { get; private set; }
+
+        /// <summary>
+        /// Gets the number of player in the race. ZERO if this is a join request.
+        /// </summary>
+        public byte NumP { get; private set; }
+
+        /// <summary>
+        /// Configuration:
+        /// UF1 / LX4 / LX6 : 0 = DEFAULT / 1 = OPEN ROOF
+        /// XRR / FZR / FXR : 0 = DEFAULT / 1 = ALTERNATE
+        /// </summary>
+        public byte Config { get; }
+
+        /// <summary>
+        /// /showfuel yes: fuel added percent / no: 255
+        /// </summary>
+        public byte Fuel { get; }
+
+        /// <summary>
+        /// Creates a new new player packet.
         /// </summary>
         public IS_NPL()
         {
             Size = 76;
             Type = PacketType.ISP_NPL;
-            PName = string.Empty;
-            Plate = string.Empty;
-            CName = string.Empty;
-            SName = string.Empty;
+            PName = String.Empty;
+            Plate = String.Empty;
+            CName = String.Empty;
+            SName = String.Empty;
         }
 
         /// <summary>
-        ///     Creates a new new player packet.
+        /// Creates a new new player packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_NPL(byte[] buffer)
             : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -38,7 +154,7 @@ namespace InSimDotNet.Packets
             Flags = (PlayerFlags)reader.ReadUInt16();
             PName = reader.ReadString(24);
             Plate = reader.ReadString(8);
-            CName = reader.ReadCNameString();
+            CName = reader.ReadCNameString(4);
             SName = reader.ReadString(16);
             Tyres = new Tyres(
                 (TyreCompound)reader.ReadByte(),
@@ -57,117 +173,5 @@ namespace InSimDotNet.Packets
             Config = reader.ReadByte();
             Fuel = reader.ReadByte();
         }
-
-        /// <summary>
-        ///     Gets the unique ID of the player.
-        /// </summary>
-        public byte PLID { get; private set; }
-
-        /// <summary>
-        ///     Gets the unique ID of the connection.
-        /// </summary>
-        public byte UCID { get; private set; }
-
-        /// <summary>
-        ///     Gets the player type.
-        /// </summary>
-        public PlayerTypes PType { get; private set; }
-
-        /// <summary>
-        ///     Gets the player flags.
-        /// </summary>
-        public PlayerFlags Flags { get; private set; }
-
-        /// <summary>
-        ///     Gets the name of the player.
-        /// </summary>
-        public string PName { get; private set; }
-
-        /// <summary>
-        ///     Gets the number plate of the player.
-        /// </summary>
-        public string Plate { get; private set; }
-
-        /// <summary>
-        ///     Gets the car name of the player.
-        /// </summary>
-        public string CName { get; private set; }
-
-        /// <summary>
-        ///     Gets the skin name of the players car.
-        /// </summary>
-        public string SName { get; private set; }
-
-        /// <summary>
-        ///     Gets the tyre compounds on the players car.
-        /// </summary>
-        public Tyres Tyres { get; private set; }
-
-        /// <summary>
-        ///     Gets the added mass of the car.
-        /// </summary>
-        public byte H_Mass { get; private set; }
-
-        /// <summary>
-        ///     Gets the intake restriction of the car.
-        /// </summary>
-        public byte H_TRes { get; private set; }
-
-        /// <summary>
-        ///     Gets the driver model.
-        /// </summary>
-        public byte Model { get; private set; }
-
-        /// <summary>
-        ///     Gets the passenger flags.
-        /// </summary>
-        public PassengerFlags Pass { get; private set; }
-
-        /// <summary>
-        ///     Low 4 bits: tyre width reduction (rear)
-        /// </summary>
-        public byte RWAdj { get; }
-
-        /// <summary>
-        ///     Low 4 bits: tyre width reduction (front)
-        /// </summary>
-        public byte FWAdj { get; }
-
-        /// <summary>
-        ///     Gets the setup flags.
-        /// </summary>
-        public SetupFlags SetF { get; private set; }
-
-        /// <summary>
-        ///     Gets the number of player in the race. ZERO if this is a join request.
-        /// </summary>
-        public byte NumP { get; private set; }
-
-        /// <summary>
-        ///     Configuration:
-        ///     UF1 / LX4 / LX6 : 0 = DEFAULT / 1 = OPEN ROOF
-        ///     XRR / FZR / FXR : 0 = DEFAULT / 1 = ALTERNATE
-        /// </summary>
-        public byte Config { get; }
-
-        /// <summary>
-        ///     /showfuel yes: fuel added percent / no: 255
-        /// </summary>
-        public byte Fuel { get; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the request ID.
-        /// </summary>
-        public byte ReqI { get; }
     }
 }

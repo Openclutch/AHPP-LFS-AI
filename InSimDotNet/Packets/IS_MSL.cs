@@ -1,55 +1,53 @@
-namespace InSimDotNet.Packets
-{
+using System;
+
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Message local packet.
+    /// Message local packet.
     /// </summary>
     /// <remarks>
-    ///     Used to send a message that appears on local computer only.
+    /// Used to send a message that appears on local computer only.
     /// </remarks>
-    public class IS_MSL : IPacket, ISendable
-    {
+    public class IS_MSL : IPacket, ISendable {
         /// <summary>
-        ///     Creates a new message local packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_MSL()
-        {
-            Size = 132;
-            Type = PacketType.ISP_MSL;
-            Msg = string.Empty;
-        }
+        public int Size { get; private set; }
 
         /// <summary>
-        ///     Gets or sets the sound effect to play with this message.
+        /// Gets the type of the packet.
         /// </summary>
-        public MessageSound Sound { get; set; }
+        public PacketType Type { get; private set; }
 
         /// <summary>
-        ///     Gets or sets the message to send.
-        /// </summary>
-        public string Msg { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the request ID.
+        /// Gets or sets the request ID.
         /// </summary>
         public byte ReqI { get; set; }
 
         /// <summary>
-        ///     Returns the data for the packet.
+        /// Gets or sets the sound effect to play with this message.
+        /// </summary>
+        public MessageSound Sound { get; set; }
+
+        /// <summary>
+        /// Gets or sets the message to send.
+        /// </summary>
+        public string Msg { get; set; }
+
+        /// <summary>
+        /// Creates a new message local packet.
+        /// </summary>
+        public IS_MSL() {
+            Size = 132;
+            Type = PacketType.ISP_MSL;
+            Msg = String.Empty;
+        }
+
+        /// <summary>
+        /// Returns the data for the packet.
         /// </summary>
         /// <returns>The packet data.</returns>
-        public byte[] GetBuffer()
-        {
-            var writer = new PacketWriter(Size);
+        public byte[] GetBuffer() {
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);

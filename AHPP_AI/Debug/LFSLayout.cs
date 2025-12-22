@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using InSimDotNet;
+using AHPP_AI.Util;
 using InSimDotNet.Helpers;
 using InSimDotNet.Packets;
+using InSimClient = InSimDotNet.InSimClient;
 
 namespace AHPP_AI.Debug
 {
@@ -27,7 +28,7 @@ namespace AHPP_AI.Debug
         // Track active waypoint marker per PLID to remove old ones
         private readonly Dictionary<byte, ObjectInfo> activeWaypointMarkerIds = new Dictionary<byte, ObjectInfo>();
 
-        private readonly InSim insim;
+        private readonly InSimClient insim;
         public readonly List<ObjectInfo> layoutObjects = new List<ObjectInfo>();
         private readonly Logger logger;
         private readonly Dictionary<byte, List<ObjectInfo>> placedObjectsByPlid = new Dictionary<byte, List<ObjectInfo>>();
@@ -39,7 +40,7 @@ namespace AHPP_AI.Debug
         /// </summary>
         /// <param name="logger">Logger for debug information</param>
         /// <param name="insim">InSim connection</param>
-        public LFSLayout(Logger logger, InSim insim)
+        public LFSLayout(Logger logger, InSimClient insim)
         {
             this.logger = logger;
             this.insim = insim;
@@ -51,7 +52,7 @@ namespace AHPP_AI.Debug
         /// <summary>
         ///     Handles AXM packets (layout objects)
         /// </summary>
-        public void OnAXM(InSim insim, IS_AXM axm)
+        public void OnAXM(IS_AXM axm)
         {
             logger.Log($"AXM received: PMOAction={axm.PMOAction}, NumO={axm.NumO}");
 
@@ -342,8 +343,8 @@ namespace AHPP_AI.Debug
                         o.Heading == obj.Heading);
                 }
 
-                // Delete objects in batches to avoid packet size issues
-                const int batchSize = IS_AXM.MAX_AXM_OBJECTS;
+                // Delete objects in batches to avoid packet size issues (AXM supports up to 60 per packet)
+                const int batchSize = 60;
                 for (var i = 0; i < objectsToDelete.Count; i += batchSize)
                 {
                     // Create a new AXM packet for deletion

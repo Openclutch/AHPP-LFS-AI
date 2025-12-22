@@ -1,388 +1,386 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the packet type.
+    /// Represents the packet type.
     /// </summary>
-    public enum PacketType
-    {
+    public enum PacketType {
         /// <summary>
-        ///     Not used.
+        /// Not used.
         /// </summary>
         ISP_NONE,
 
         /// <summary>
-        ///     InSim Initialise
+        /// InSim Initialise
         /// </summary>
         ISP_ISI,
 
         /// <summary>
-        ///     Version Info
+        /// Version Info
         /// </summary>
         ISP_VER,
 
         /// <summary>
-        ///     Multi-purpose
+        /// Multi-purpose
         /// </summary>
         ISP_TINY,
 
         /// <summary>
-        ///     Multi purpose
+        /// Multi purpose
         /// </summary>
         ISP_SMALL,
 
         /// <summary>
-        ///     State info
+        /// State info
         /// </summary>
         ISP_STA,
 
         /// <summary>
-        ///     Single character
+        /// Single character
         /// </summary>
         ISP_SCH,
 
         /// <summary>
-        ///     State flags pack
+        /// State flags pack
         /// </summary>
         ISP_SFP,
 
         /// <summary>
-        ///     Set car camera
+        /// Set car camera
         /// </summary>
         ISP_SCC,
 
         /// <summary>
-        ///     Cam pos pack
+        /// Cam pos pack
         /// </summary>
         ISP_CPP,
 
         /// <summary>
-        ///     Start multiplayer
+        /// Start multiplayer
         /// </summary>
         ISP_ISM,
 
         /// <summary>
-        ///     Message out
+        /// Message out
         /// </summary>
         ISP_MSO,
 
         /// <summary>
-        ///     Hidden /i message
+        /// Hidden /i message
         /// </summary>
         ISP_III,
 
         /// <summary>
-        ///     Type message or /command
+        /// Type message or /command
         /// </summary>
         ISP_MST,
 
         /// <summary>
-        ///     Message to a connection
+        /// Message to a connection
         /// </summary>
         ISP_MTC,
 
         /// <summary>
-        ///     Set screen mode
+        /// Set screen mode
         /// </summary>
         ISP_MOD,
 
         /// <summary>
-        ///     Vote notification
+        /// Vote notification
         /// </summary>
         ISP_VTN,
 
         /// <summary>
-        ///     Race start
+        /// Race start
         /// </summary>
         ISP_RST,
 
         /// <summary>
-        ///     New connection
+        /// New connection
         /// </summary>
         ISP_NCN,
 
         /// <summary>
-        ///     Connection left
+        /// Connection left
         /// </summary>
         ISP_CNL,
 
         /// <summary>
-        ///     Connection renamed
+        /// Connection renamed
         /// </summary>
         ISP_CPR,
 
         /// <summary>
-        ///     New player (joined race)
+        /// New player (joined race)
         /// </summary>
         ISP_NPL,
 
         /// <summary>
-        ///     Player pit (keeps slot in race)
+        /// Player pit (keeps slot in race)
         /// </summary>
         ISP_PLP,
 
         /// <summary>
-        ///     Player leave (spectate - loses slot)
+        /// Player leave (spectate - loses slot)
         /// </summary>
         ISP_PLL,
 
         /// <summary>
-        ///     Lap time
+        /// Lap time
         /// </summary>
         ISP_LAP,
 
         /// <summary>
-        ///     Split x time
+        /// Split x time
         /// </summary>
         ISP_SPX,
 
         /// <summary>
-        ///     Pit stop start
+        /// Pit stop start
         /// </summary>
         ISP_PIT,
 
         /// <summary>
-        ///     Pit stop finish
+        /// Pit stop finish
         /// </summary>
         ISP_PSF,
 
         /// <summary>
-        ///     Pit lane enter / leave
+        /// Pit lane enter / leave
         /// </summary>
         ISP_PLA,
 
         /// <summary>
-        ///     Camera changed
+        /// Camera changed
         /// </summary>
         ISP_CCH,
 
         /// <summary>
-        ///     Penalty given or cleared
+        /// Penalty given or cleared
         /// </summary>
         ISP_PEN,
 
         /// <summary>
-        ///     Take over car
+        /// Take over car
         /// </summary>
         ISP_TOC,
 
         /// <summary>
-        ///     Flag (yellow or blue)
+        /// Flag (yellow or blue)
         /// </summary>
         ISP_FLG,
 
         /// <summary>
-        ///     Player flags (help flags)
+        /// Player flags (help flags)
         /// </summary>
         ISP_PFL,
 
         /// <summary>
-        ///     Finished race
+        /// Finished race
         /// </summary>
         ISP_FIN,
 
         /// <summary>
-        ///     Result confirmed
+        /// Result confirmed
         /// </summary>
         ISP_RES,
 
         /// <summary>
-        ///     Reorder (info or instruction)
+        /// Reorder (info or instruction)
         /// </summary>
         ISP_REO,
 
         /// <summary>
-        ///     Node and lap packet
+        /// Node and lap packet
         /// </summary>
         ISP_NLP,
 
         /// <summary>
-        ///     Multi car info
+        /// Multi car info
         /// </summary>
         ISP_MCI,
 
         /// <summary>
-        ///     Message type extended
+        /// Message type extended
         /// </summary>
         ISP_MSX,
 
         /// <summary>
-        ///     Message to local computer
+        /// Message to local computer
         /// </summary>
         ISP_MSL,
 
         /// <summary>
-        ///     Car reset
+        /// Car reset
         /// </summary>
         ISP_CRS,
 
         /// <summary>
-        ///     Delete buttons / receive button requests
+        /// Delete buttons / receive button requests
         /// </summary>
         ISP_BFN,
 
         /// <summary>
-        ///     Autocross layout information
+        /// Autocross layout information
         /// </summary>
         ISP_AXI,
 
         /// <summary>
-        ///     Hit an autocross object
+        /// Hit an autocross object
         /// </summary>
         ISP_AXO,
 
         /// <summary>
-        ///     Send button
+        /// Send button
         /// </summary>
         ISP_BTN,
 
         /// <summary>
-        ///     Button Click
+        /// Button Click
         /// </summary>
         ISP_BTC,
 
         /// <summary>
-        ///     Button type
+        /// Button type
         /// </summary>
         ISP_BTT,
 
         /// <summary>
-        ///     Replay information packet
+        /// Replay information packet
         /// </summary>
         ISP_RIP,
 
         /// <summary>
-        ///     Screenshot
+        /// Screenshot
         /// </summary>
         ISP_SSH,
 
         /// <summary>
-        ///     Contact (collision report)
+        /// Contact (collision report)
         /// </summary>
         ISP_CON,
 
         /// <summary>
-        ///     contact car + object (collision report)
+        /// contact car + object (collision report)
         /// </summary>
         ISP_OBH,
 
         /// <summary>
-        ///     report incidents that would violate HLVC
+        /// report incidents that would violate HLVC
         /// </summary>
         ISP_HLV,
 
         /// <summary>
-        ///     player cars
+        /// player cars
         /// </summary>
         ISP_PLC,
 
         /// <summary>
-        ///     autocross multiple objects
+        /// autocross multiple objects
         /// </summary>
         ISP_AXM,
 
         /// <summary>
-        ///     admin command report
+        /// admin command report
         /// </summary>
         ISP_ACR,
 
         /// <summary>
-        ///     car handicaps
+        /// car handicaps
         /// </summary>
         ISP_HCP,
 
         /// <summary>
-        ///     new connection - extra info for host.
+        /// new connection - extra info for host.
         /// </summary>
         ISP_NCI,
 
         /// <summary>
-        ///     join request
+        /// join request
         /// </summary>
         ISP_JRR,
 
         /// <summary>
-        ///     report InSim checkpoint / InSim circle
+        /// report InSim checkpoint / InSim circle
         /// </summary>
         ISP_UCO,
 
         /// <summary>
-        ///     Object control (currently used for lights)
+        /// Object control (currently used for lights)
         /// </summary>
         ISP_OCO,
 
         /// <summary>
-        ///     Multi purpose - target to connection
+        /// Multi purpose - target to connection
         /// </summary>
         ISP_TTC,
 
         /// <summary>
-        ///     Connection has selected a car
+        /// Connection has selected a car
         /// </summary>
         ISP_SLC,
 
         /// <summary>
-        ///     Car state changed
+        /// Car state changed
         /// </summary>
         ISP_CSC,
 
         /// <summary>
-        ///     Connection's interface mode.
+        /// Connection's interface mode.
         /// </summary>
         ISP_CIM,
 
         /// <summary>
-        ///     get mods
+        /// Set mods allowed.
         /// </summary>
         ISP_MAL,
 
         /// <summary>
-        ///     set player handicaps
+        /// Player handicaps.
         /// </summary>
         ISP_PLH,
 
         /// <summary>
-        ///     set IP bans
+        /// IP Ban
         /// </summary>
         ISP_IPB,
 
         /// <summary>
-        ///     AI Control
+        /// AI Control 
         /// </summary>
         ISP_AIC,
 
         /// <summary>
-        ///     info about AI car
+        /// info about AI car
         /// </summary>
         ISP_AII,
 
         /// <summary>
-        ///     Admin request
+        /// Admin request
         /// </summary>
         IRP_ARQ = 250,
 
         /// <summary>
-        ///     Admin response
+        /// Admin response
         /// </summary>
         IRP_ARP = 251,
 
         /// <summary>
-        ///     Host list request
+        /// Host list request
         /// </summary>
         IRP_HLR = 252,
 
         /// <summary>
-        ///     Host
+        /// Host
         /// </summary>
         IRP_HOS = 253,
 
         /// <summary>
-        ///     Select host
+        /// Select host
         /// </summary>
         IRP_SEL = 254,
 
         /// <summary>
-        ///     Error
+        /// Error
         /// </summary>
-        IRP_ERR = 255
+        IRP_ERR = 255,
     }
 }

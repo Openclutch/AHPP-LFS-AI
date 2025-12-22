@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AHPP_AI.Util;
-using InSimDotNet;
 using InSimDotNet.Packets;
+using InSimClient = InSimDotNet.InSimClient;
 
 namespace AHPP_AI.Debug
 {
@@ -52,7 +52,7 @@ namespace AHPP_AI.Debug
         // Track button states and update timing
         private readonly Dictionary<byte, byte> debugButtonsActive = new Dictionary<byte, byte>();
 
-        private readonly InSim insim;
+        private readonly InSimClient insim;
         private readonly Logger logger;
 
         // Button IDs by category and type
@@ -92,7 +92,7 @@ namespace AHPP_AI.Debug
         /// </summary>
         /// <param name="insim">InSim connection</param>
         /// <param name="logger">Logger for debug information</param>
-        public DebugUI(InSim insim, Logger logger)
+        public DebugUI(InSimClient insim, Logger logger)
         {
             this.insim = insim;
             this.logger = logger;

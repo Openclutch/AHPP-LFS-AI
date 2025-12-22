@@ -1,69 +1,84 @@
 ﻿using System;
 
-namespace InSimDotNet.Out
-{
+namespace InSimDotNet.Out {
     /// <summary>
-    ///     Provides data for the OutSim PacketReceived event.
+    /// Provides data for the OutSim PacketReceived event.
     /// </summary>
-    public class OutSimEventArgs : EventArgs
-    {
+    public class OutSimEventArgs : EventArgs {
         /// <summary>
-        ///     Creates a new OutSimEventArgs object.
+        /// Gets the OutSim packet.
         /// </summary>
-        /// <param name="packet">The OutSim packet.</param>
-        public OutSimEventArgs(OutSimPack packet)
-        {
-            Packet = packet;
+        public OutSimPack Packet { get; private set; }
+
+        /// <summary>
+        /// Gets the time in milliseconds (to check order).
+        /// </summary>
+        public TimeSpan Time {
+            get { return Packet.Time; }
         }
 
         /// <summary>
-        ///     Gets the OutSim packet.
+        /// Gets the angular velocity.
         /// </summary>
-        public OutSimPack Packet { get; }
+        public Vector AngVel {
+            get { return Packet.AngVel; }
+        }
 
         /// <summary>
-        ///     Gets the time in milliseconds (to check order).
+        /// Gets the current heading (anticlockwise from above (Z)).
         /// </summary>
-        public TimeSpan Time => Packet.Time;
+        public float Heading {
+            get { return Packet.Heading; }
+        }
 
         /// <summary>
-        ///     Gets the angular velocity.
+        /// Gets the current pitch (anticlockwise from right (X)).
         /// </summary>
-        public Vector AngVel => Packet.AngVel;
+        public float Pitch {
+            get { return Packet.Pitch; }
+        }
 
         /// <summary>
-        ///     Gets the current heading (anticlockwise from above (Z)).
+        /// Gets the current roll (anticlockwise from front (Y)).
         /// </summary>
-        public float Heading => Packet.Heading;
+        public float Roll {
+            get { return Packet.Roll; }
+        }
 
         /// <summary>
-        ///     Gets the current pitch (anticlockwise from right (X)).
+        /// Gets the current acceleration.
         /// </summary>
-        public float Pitch => Packet.Pitch;
+        public Vector Accel {
+            get { return Packet.Accel; }
+        }
 
         /// <summary>
-        ///     Gets the current roll (anticlockwise from front (Y)).
+        /// Gets the current velocity.
         /// </summary>
-        public float Roll => Packet.Roll;
+        public Vector Vel {
+            get { return Packet.Vel; }
+        }
 
         /// <summary>
-        ///     Gets the current acceleration.
+        /// Gets the current position (1m = 65536).
         /// </summary>
-        public Vector Accel => Packet.Accel;
+        public Vec Pos {
+            get { return Packet.Pos; }
+        }
 
         /// <summary>
-        ///     Gets the current velocity.
+        /// Gets the optional OutSim ID (if specified in cfg.txt).
         /// </summary>
-        public Vector Vel => Packet.Vel;
+        public int ID {
+            get { return Packet.ID; }
+        }
 
         /// <summary>
-        ///     Gets the current position (1m = 65536).
+        /// Creates a new OutSimEventArgs object.
         /// </summary>
-        public Vec Pos => Packet.Pos;
-
-        /// <summary>
-        ///     Gets the optional OutSim ID (if specified in cfg.txt).
-        /// </summary>
-        public int ID => Packet.ID;
+        /// <param name="packet">The OutSim packet.</param>
+        public OutSimEventArgs(OutSimPack packet) {
+            Packet = packet;
+        }
     }
 }

@@ -6,88 +6,41 @@ using System.Text;
 namespace InSimDotNet
 {
     /// <summary>
-    ///     Handles converting strings from LFS encoding into unicode and vice versa.
+    /// Handles converting strings from LFS encoding into unicode and vice versa.
     /// </summary>
     public class LfsUnicodeEncoding : LfsEncoding
     {
         private const char ControlChar = '^';
         private const char FallbackChar = '?';
-        private static readonly bool IsRunningOnMono = Type.GetType("Mono.Runtime") != null;
+        private static readonly bool IsRunningOnMono = (Type.GetType("Mono.Runtime") != null);
+        private static readonly Lazy<Dictionary<char, Encoding>> EncodingMapLazy =
+            new Lazy<Dictionary<char, Encoding>>(CreateEncodingMap, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
 
-        // ExceptionFallback is only used by Mono code path, otherwise we want ReplacementFallback everywhere.
-        // These codepages don't translate perfectly to LFS but the best we can do in .NET.
-        private static readonly Dictionary<char, Encoding> EncodingMap = new Dictionary<char, Encoding>
-        {
-            {
-                'L',
-                Encoding.GetEncoding(1252, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'G',
-                Encoding.GetEncoding(1253, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'C',
-                Encoding.GetEncoding(1251, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'J',
-                Encoding.GetEncoding(932, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'E',
-                Encoding.GetEncoding(1250, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'T',
-                Encoding.GetEncoding(1254, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'B',
-                Encoding.GetEncoding(1257, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'H',
-                Encoding.GetEncoding(950, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'S',
-                Encoding.GetEncoding(936, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            },
-            {
-                'K',
-                Encoding.GetEncoding(949, EncoderExceptionFallback.ExceptionFallback,
-                    DecoderExceptionFallback.ReplacementFallback)
-            }
-        };
+        /// <summary>
+        /// Optional callback invoked when a character cannot be encoded with the active codepage.
+        /// </summary>
+        public static Action<string> DiagnosticsLogger { get; set; }
 
-        private static readonly Encoding DefaultEncoding = EncodingMap['L'];
+        private static Dictionary<char, Encoding> EncodingMap => EncodingMapLazy.Value;
+        private static readonly Lazy<Encoding> DefaultEncodingLazy =
+            new Lazy<Encoding>(() => EncodingMap['L'], System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        private static Encoding DefaultEncoding => DefaultEncodingLazy.Value;
 
-        private static readonly Dictionary<char, char> EscapeMap = new Dictionary<char, char>
-        {
-            { 'v', '|' },
-            { 'a', '*' },
-            { 'c', ':' },
-            { 'd', '\\' },
-            { 's', '/' },
-            { 'q', '?' },
-            { 't', '"' },
-            { 'l', '<' },
-            { 'r', '>' },
-            { '^', '^' }
+        private static readonly Dictionary<char, string> EscapeMap = new Dictionary<char, string> {
+            { 'v', "|" },
+            { 'a', "*" },
+            { 'c', ":" },
+            { 'd', "\\" },
+            { 's', "/" },
+            { 'q', "?" },
+            { 't', "\"" },
+            { 'l', "<" },
+            { 'r', ">" },
+            { '^', "^^" }
         };
 
         /// <summary>
-        ///     Converts a LFS encoded string to unicode.
+        /// Converts a LFS encoded string to unicode.
         /// </summary>
         /// <param name="buffer">The buffer containing the packet data.</param>
         /// <param name="index">The index that the string starts in the packet data.</param>
@@ -95,28 +48,37 @@ namespace InSimDotNet
         /// <returns>The resulting unicode string.</returns>
         public override string GetString(byte[] buffer, int index, int length)
         {
-            var output = new StringBuilder(length);
-            var encoding = DefaultEncoding;
+            StringBuilder output = new StringBuilder(length);
+            Encoding encoding = DefaultEncoding;
             Encoding nextEncoding;
             int i = 0, start = index;
-            char escape;
+            string escape;
 
             for (i = index; i < index + length; i++)
             {
-                var control = (char)buffer[i];
+                char control = (char)buffer[i];
 
                 // Check for null terminator.
-                if (control == char.MinValue) break;
+                if (control == Char.MinValue)
+                {
+                    break;
+                }
 
                 // If not control character then ignore.
-                if (control != ControlChar) continue;
+                if (control != ControlChar)
+                {
+                    continue;
+                }
 
                 // Found control character so encode everything up to this point.
-                if (i - start > 0) output.Append(encoding.GetString(buffer, start, i - start));
-                start = i + 2; // skip control chars.
+                if (i - start > 0)
+                {
+                    output.Append(encoding.GetString(buffer, start, (i - start)));
+                }
+                start = (i + 2); // skip control chars.
 
                 // Process control character.
-                var next = (char)buffer[++i];
+                char next = (char)buffer[++i];
                 if (EncodingMap.TryGetValue(next, out nextEncoding))
                 {
                     encoding = nextEncoding; // Switch encoding.
@@ -134,13 +96,16 @@ namespace InSimDotNet
             }
 
             // End of string reached so encode up all to this point.
-            if (i - start > 0) output.Append(encoding.GetString(buffer, start, i - start));
+            if (i - start > 0)
+            {
+                output.Append(encoding.GetString(buffer, start, (i - start)));
+            }
 
             return output.ToString();
         }
 
         /// <summary>
-        ///     Converts a unicode string into a LFS encoded string.
+        /// Converts a unicode string into a LFS encoded string.
         /// </summary>
         /// <param name="value">The unicode string to convert.</param>
         /// <param name="buffer">The packet buffer into which the bytes will be written.</param>
@@ -149,32 +114,35 @@ namespace InSimDotNet
         /// <returns>The number of bytes written during the operation.</returns>
         public override int GetBytes(string value, byte[] buffer, int index, int length)
         {
-            var encoding = DefaultEncoding;
-            var tempBytes = new byte[2];
+            Encoding encoding = DefaultEncoding;
+            byte[] tempBytes = new byte[4];
             int tempCount;
-            var start = index;
-            var totalLength = index + (length - 1);
+            int start = index;
+            int totalLength = index + (length - 1);
 
-            for (var i = 0; i < value.Length && index < totalLength; i++)
+            for (int i = 0; i < value.Length && index < totalLength; i++)
             {
                 // Remove any existing language tags from the string.
-                var next = i + 1;
-                if (value[i] == '^' && next < value.Length)
-                    switch (value[next])
+                int next = i + 1;
+                if (value[i] == ControlChar && next < value.Length)
+                {
+                    var controlCode = value[next];
+                    if (EncodingMap.TryGetValue(controlCode, out var explicitEncoding))
                     {
-                        case 'L':
-                        case 'G':
-                        case 'C':
-                        case 'J':
-                        case 'E':
-                        case 'T':
-                        case 'B':
-                        case 'H':
-                        case 'S':
-                        case 'K':
-                            i++; // skip codepage chars
-                            continue;
+                        encoding = explicitEncoding;
+
+                        // Ensure there is space to emit the control code before continuing.
+                        if (index + 1 >= totalLength)
+                        {
+                            break;
+                        }
+
+                        buffer[index++] = (byte)ControlChar;
+                        buffer[index++] = (byte)controlCode;
+                        i++; // skip codepage char
+                        continue;
                     }
+                }
 
                 if (value[i] <= 127)
                 {
@@ -190,10 +158,18 @@ namespace InSimDotNet
                 else
                 {
                     // Search for new codepage.
-                    var found = false;
-                    foreach (var map in EncodingMap)
+                    bool found = false;
+                    Encoding attemptedEncoding = encoding;
+                    char? attemptedEncodingKey = GetEncodingKey(encoding);
+                    Encoding replacementEncoding = null;
+                    char? replacementEncodingKey = null;
+
+                    foreach (KeyValuePair<char, Encoding> map in EncodingMap)
                     {
-                        if (map.Value == encoding) continue; // Skip current as we've already searched it.
+                        if (map.Value == encoding)
+                        {
+                            continue; // Skip current as we've already searched it.
+                        }
 
                         if (TryGetBytes(map.Value, value[i], tempBytes, out tempCount))
                         {
@@ -208,13 +184,26 @@ namespace InSimDotNet
                             Buffer.BlockCopy(tempBytes, 0, buffer, index, tempCount);
                             index += tempCount;
                             found = true;
+                            replacementEncoding = map.Value;
+                            replacementEncodingKey = map.Key;
 
                             break;
                         }
                     }
 
+                    LogUnsupportedCharacter(
+                        value[i],
+                        attemptedEncoding,
+                        attemptedEncodingKey,
+                        found,
+                        replacementEncoding,
+                        replacementEncodingKey);
+
                     // If not found in any codepage then add fallback character.
-                    if (!found) buffer[index++] = (byte)FallbackChar;
+                    if (!found)
+                    {
+                        buffer[index++] = (byte)FallbackChar;
+                    }
                 }
             }
 
@@ -222,7 +211,7 @@ namespace InSimDotNet
         }
 
         /// <summary>
-        ///     Tries to convert a unicode character into a LFS encoded one.
+        /// Tries to convert a unicode character into a LFS encoded one.
         /// </summary>
         /// <param name="encoding">The encoding to attempt to convert the character into.</param>
         /// <param name="value">The character to attempt to encode.</param>
@@ -237,38 +226,166 @@ namespace InSimDotNet
             // catching the exception generated when it fails. This is very slow as the 
             // callstack may potentionally need to be unwound for every character in the 
             // string.
-            if (IsRunningOnMono) return TryGetBytesMono(encoding, value, bytes, out count);
+            if (IsRunningOnMono)
+            {
+                return TryGetBytesMono(encoding, value, bytes, out count);
+            }
 
             return TryGetBytesDotNet(encoding, value, bytes, out count);
         }
 
         private static bool TryGetBytesDotNet(Encoding encoding, char value, byte[] bytes, out int count)
         {
-            var usedDefault = false;
-            count = NativeMethods.WideCharToMultiByte(
-                (uint)encoding.CodePage,
-                NativeMethods.WC_NO_BEST_FIT_CHARS,
-                value.ToString(),
-                1,
-                bytes,
-                2,
-                IntPtr.Zero,
-                out usedDefault);
-            return !usedDefault;
-        }
-
-        private static bool TryGetBytesMono(Encoding encoding, char value, byte[] bytes, out int count)
-        {
-            try
-            {
-                count = encoding.GetBytes(value.ToString(), 0, 1, bytes, 0);
-                return true;
-            }
-            catch (EncoderFallbackException)
+            count = encoding.GetBytes(value.ToString(), 0, 1, bytes, 0);
+            if (UsedReplacementFallback(bytes, count))
             {
                 count = 0;
                 return false;
             }
+
+            return true;
+        }
+
+        private static bool TryGetBytesMono(Encoding encoding, char value, byte[] bytes, out int count)
+        {
+            count = encoding.GetBytes(value.ToString(), 0, 1, bytes, 0);
+            if (UsedReplacementFallback(bytes, count))
+            {
+                count = 0;
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Logs diagnostic details about characters that cannot be encoded with the active codepage.
+        /// </summary>
+        /// <param name="value">The character that failed to encode.</param>
+        /// <param name="attemptedEncoding">The encoding that failed.</param>
+        /// <param name="attemptedEncodingKey">The Insim control code used to enter the attempted encoding.</param>
+        /// <param name="switchedEncoding">Flag indicating whether an alternative encoding was found.</param>
+        /// <param name="replacementEncoding">The replacement encoding that succeeded, if any.</param>
+        /// <param name="replacementEncodingKey">The Insim control code for the replacement encoding, if any.</param>
+        private static void LogUnsupportedCharacter(
+            char value,
+            Encoding attemptedEncoding,
+            char? attemptedEncodingKey,
+            bool switchedEncoding,
+            Encoding replacementEncoding,
+            char? replacementEncodingKey)
+        {
+            if (switchedEncoding)
+            {
+                // Successful codepage switches are routine (e.g. ☆ requires ^J) so suppress noisy warnings.
+                return;
+            }
+
+            var attemptedCodePage = attemptedEncoding?.CodePage;
+            var message =
+                $"Character \"{DescribeChar(value)}\" (U+{(int)value:X4}) not encodable in code page {attemptedCodePage}{FormatEncodingTag(attemptedEncodingKey)}; falling back to \"{FallbackChar}\".";
+
+            WriteDiagnostics(message);
+        }
+
+        private static void WriteDiagnostics(string message)
+        {
+            var logger = DiagnosticsLogger;
+            if (logger != null)
+            {
+                try
+                {
+                    logger(message);
+                    return;
+                }
+                catch
+                {
+                    // Swallow logging exceptions to avoid cascading failures.
+                }
+            }
+
+            Trace.TraceWarning(message);
+        }
+
+        private static string DescribeChar(char value)
+        {
+            if (char.IsControl(value) || char.IsWhiteSpace(value))
+            {
+                return $"\\u{(int)value:X4}";
+            }
+
+            return value.ToString();
+        }
+
+        private static string FormatEncodingTag(char? encodingKey)
+        {
+            return encodingKey.HasValue ? $" (^{encodingKey.Value})" : string.Empty;
+        }
+
+        private static char? GetEncodingKey(Encoding encoding)
+        {
+            foreach (var map in EncodingMap)
+            {
+                if (map.Value == encoding)
+                {
+                    return map.Key;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Builds the encoding map while ensuring legacy code pages are registered first.
+        /// </summary>
+        /// <returns>
+        /// Mapping of Insim control codes to the corresponding <see cref="Encoding"/> instances.
+        /// </returns>
+        private static Dictionary<char, Encoding> CreateEncodingMap()
+        {
+            LfsEncoding.Initialize();
+
+            // ExceptionFallback is only used by Mono code path, otherwise we want ReplacementFallback everywhere.
+            // These codepages don't translate perfectly to LFS but are the best mirror available in .NET.
+            return new Dictionary<char, Encoding>
+            {
+                { 'L', CreateEncodingWithReplacementFallback(1252) },
+                { 'G', CreateEncodingWithReplacementFallback(1253) },
+                { 'C', CreateEncodingWithReplacementFallback(1251) },
+                { 'J', CreateEncodingWithReplacementFallback(932) },
+                { 'E', CreateEncodingWithReplacementFallback(1250) },
+                { 'T', CreateEncodingWithReplacementFallback(1254) },
+                { 'B', CreateEncodingWithReplacementFallback(1257) },
+                { 'H', CreateEncodingWithReplacementFallback(950) },
+                { 'S', CreateEncodingWithReplacementFallback(936) },
+                { 'K', CreateEncodingWithReplacementFallback(949) },
+            };
+        }
+
+        private static Encoding CreateEncodingWithReplacementFallback(int codePage)
+        {
+            var encoding = (Encoding)Encoding.GetEncoding(codePage, EncoderFallback.ReplacementFallback, DecoderFallback.ReplacementFallback).Clone();
+            encoding.EncoderFallback = new EncoderReplacementFallback("??");
+            encoding.DecoderFallback = DecoderFallback.ReplacementFallback;
+            return encoding;
+        }
+
+        private static bool UsedReplacementFallback(byte[] bytes, int count)
+        {
+            if (count < 2)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                if (bytes[i] != (byte)'?')
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

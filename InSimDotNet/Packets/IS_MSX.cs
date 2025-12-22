@@ -1,65 +1,64 @@
-namespace InSimDotNet.Packets
-{
+using System;
+
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Message extended packet.
+    /// Message extended packet.
     /// </summary>
     /// <remarks>
-    ///     Like <see cref="IS_MST" /> but longer (cannot be used for commands).
+    /// Like <see cref="IS_MST"/> but longer (cannot be used for commands).
     /// </remarks>
-    public class IS_MSX : IPacket, ISendable
-    {
-        private readonly byte[] message;
+    public class IS_MSX : IPacket, ISendable {
+        private byte[] message;
 
         /// <summary>
-        ///     Creates a new message extended packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_MSX()
-        {
-            Size = 100;
-            Type = PacketType.ISP_MSX;
-            Msg = string.Empty;
-        }
-
-        internal IS_MSX(byte[] message) : this()
-        {
-            this.message = message;
-        }
+        public int Size { get; private set; }
 
         /// <summary>
-        ///     Gets or sets the message to send (up to 96 characters).
+        /// Gets the type of the packet.
         /// </summary>
-        public string Msg { get; set; }
+        public PacketType Type { get; private set; }
 
         /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the request ID.
+        /// Gets or sets the request ID.
         /// </summary>
         public byte ReqI { get; set; }
 
         /// <summary>
-        ///     Returns the packet data.
+        /// Gets or sets the message to send (up to 96 characters).
+        /// </summary>
+        public string Msg { get; set; }
+
+        /// <summary>
+        /// Creates a new message extended packet.
+        /// </summary>
+        public IS_MSX() {
+            Size = 100;
+            Type = PacketType.ISP_MSX;
+            Msg = String.Empty;
+        }
+
+        internal IS_MSX(byte[] message) : this() {
+            this.message = message;
+        }
+
+        /// <summary>
+        /// Returns the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
-        public byte[] GetBuffer()
-        {
-            var writer = new PacketWriter(Size);
+        public byte[] GetBuffer() {
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);
             writer.Skip(1);
-            if (message == null)
+            if (message == null) {
                 writer.Write(Msg, 96);
-            else
+            }
+            else {
                 writer.Write(message);
+            }
             return writer.GetBuffer();
         }
     }

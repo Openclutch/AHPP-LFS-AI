@@ -1,18 +1,16 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the <see cref="IS_ISM" /> Host.
+    /// Represents the <see cref="IS_ISM"/> Host.
     /// </summary>
-    public enum HostType
-    {
+    public enum HostType {
         /// <summary>
-        ///     Client is a guest on the host.
+        /// Client is a guest on the host.
         /// </summary>
         Guest,
 
         /// <summary>
-        ///     Client is the host.
+        /// Client is the host.
         /// </summary>
-        Host
+        Host,
     }
 }

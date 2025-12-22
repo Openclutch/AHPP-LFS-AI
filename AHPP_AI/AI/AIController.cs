@@ -9,6 +9,8 @@ using InSimDotNet.Out;
 using InSimDotNet;
 using InSimDotNet.Packets;
 using AHPP_AI.UI;
+using AHPP_AI.Util;
+using InSimClient = InSimDotNet.InSimClient;
 using Vec = AHPP_AI.Util.Vec;
 
 namespace AHPP_AI.AI
@@ -29,7 +31,7 @@ namespace AHPP_AI.AI
         // Engine state tracking
         private readonly Dictionary<byte, bool> engineStateMap = new Dictionary<byte, bool>();
         private readonly GearboxController gearboxController;
-        private readonly InSim insim;
+        private readonly InSimClient insim;
         private readonly LFSLayout lfsLayout;
         private readonly Logger logger;
         private readonly WaypointFollower waypointFollower;
@@ -55,7 +57,7 @@ namespace AHPP_AI.AI
         ///     Initialize the AI controller with dependencies
         /// </summary>
         public AIController(
-            InSim insim,
+            InSimClient insim,
             Logger logger,
             WaypointManager waypointManager,
             LFSLayout lfsLayout,
@@ -95,7 +97,17 @@ namespace AHPP_AI.AI
             }
             catch (Exception ex)
             {
-                logger.LogException(ex, "Failed to connect OutGauge");
+                logger.LogException(ex, $"Failed to connect OutGauge on {host}:{port}, retrying on any interface");
+                try
+                {
+                    // Bind on all interfaces to avoid VM/host-only IP binding issues
+                    outGauge.Connect("0.0.0.0", port);
+                    logger.Log($"OutGauge connected on 0.0.0.0:{port}");
+                }
+                catch (Exception retryEx)
+                {
+                    logger.LogException(retryEx, "OutGauge retry on 0.0.0.0 failed");
+                }
             }
         }
 
@@ -290,7 +302,7 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Handle new player events
         /// </summary>
-        public void OnNewPlayer(InSim insim, IS_NPL npl)
+        public void OnNewPlayer(IS_NPL npl)
         {
             if ((npl.PType & PlayerTypes.PLT_AI) == PlayerTypes.PLT_AI &&
                 !npl.PName.Contains("Track")) // and not tracks
@@ -355,7 +367,7 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Handle MCI packet (car telemetry)
         /// </summary>
-        public void OnMCI(InSim insim, IS_MCI mci)
+        public void OnMCI(IS_MCI mci)
         {
             allCars = mci.Info.ToArray();
 
@@ -421,7 +433,7 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Handle AII packet (AI info)
         /// </summary>
-        public void OnAII(InSim insim, IS_AII aii)
+        public void OnAII(IS_AII aii)
         {
             var plid = aii.PLID;
             if (!aiPLIDs.Contains(plid)) return;

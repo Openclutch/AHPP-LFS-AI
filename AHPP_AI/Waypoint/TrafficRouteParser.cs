@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.IO;
 using System.Linq;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace AHPP_AI.Waypoint
 {
@@ -21,7 +22,7 @@ namespace AHPP_AI.Waypoint
         /// <param name="tolerance">Color tolerance for matching (e.g., 50)</param>
         /// <param name="sampleInterval">Base interval for sampling waypoints</param>
         /// <returns>List of waypoints in clockwise order with adaptive spacing</returns>
-        public static List<Point> ExtractWaypoints(string imagePath, Color targetColor, int tolerance,
+        public static List<Point> ExtractWaypoints(string imagePath, Rgba32 targetColor, int tolerance,
             int sampleInterval)
         {
             // Validate image file
@@ -31,10 +32,10 @@ namespace AHPP_AI.Waypoint
                 return new List<Point>();
             }
 
-            Bitmap image;
+            Image<Rgba32> image;
             try
             {
-                image = new Bitmap(imagePath);
+                image = Image.Load<Rgba32>(imagePath);
                 logger.Log($"Loaded image: {image.Width}x{image.Height} pixels");
             }
             catch (Exception ex)
@@ -54,7 +55,7 @@ namespace AHPP_AI.Waypoint
                 logger.Log("Scanning image for target color pixels...");
                 for (var y = 0; y < image.Height; y += 2)
                 for (var x = 0; x < image.Width; x += 2)
-                    if (IsTargetColor(image.GetPixel(x, y), targetColor, tolerance))
+                    if (IsTargetColor(image[x, y], targetColor, tolerance))
                     {
                         targetPixels.Add(new Point(x, y));
 
@@ -68,7 +69,7 @@ namespace AHPP_AI.Waypoint
                             var ny = y + dy;
 
                             if (nx >= 0 && nx < image.Width && ny >= 0 && ny < image.Height &&
-                                IsTargetColor(image.GetPixel(nx, ny), targetColor, tolerance))
+                                IsTargetColor(image[nx, ny], targetColor, tolerance))
                                 targetPixels.Add(new Point(nx, ny));
                         }
                     }
@@ -383,7 +384,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Improved algorithm to find the best starting pixel, preferring outer edges
         /// </summary>
-        private static Point FindStartingPixel(Bitmap image, HashSet<Point> targetPixels)
+        private static Point FindStartingPixel(Image<Rgba32> image, HashSet<Point> targetPixels)
         {
             if (targetPixels.Count == 0)
                 return new Point(-1, -1);
@@ -434,7 +435,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Enhanced path tracing algorithm with better gap handling and more consistent contour following
         /// </summary>
-        private static List<Point> TracePath(Bitmap image, Point start, HashSet<Point> targetPixels)
+        private static List<Point> TracePath(Image<Rgba32> image, Point start, HashSet<Point> targetPixels)
         {
             var path = new List<Point> { start };
             var visited = new HashSet<Point> { start };
@@ -839,7 +840,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Checks if a pixel's color is within tolerance of the target color using RGB Euclidean distance
         /// </summary>
-        private static bool IsTargetColor(Color pixel, Color target, int tolerance)
+        private static bool IsTargetColor(Rgba32 pixel, Rgba32 target, int tolerance)
         {
             // Special case for red route - more lenient with red channel
             if (target.R > 200 && target.G < 50 && target.B < 50)

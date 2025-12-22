@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
-using InSimDotNet;
-using InSimDotNet.Packets;
 using AHPP_AI.Debug;
+using AHPP_AI.Util;
+using InSimDotNet.Packets;
+using InSimClient = InSimDotNet.InSimClient;
 
 namespace AHPP_AI.UI
 {
@@ -12,7 +13,7 @@ namespace AHPP_AI.UI
     /// </summary>
     public class MainUI
     {
-        private readonly InSim insim;
+        private readonly InSimClient insim;
         private readonly Logger logger;
 
         private const byte LEFT_COL = 5;
@@ -24,7 +25,7 @@ namespace AHPP_AI.UI
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>();
         
-        public MainUI(InSim insim, Logger logger)
+        public MainUI(InSimClient insim, Logger logger)
         {
             this.insim = insim;
             this.logger = logger;

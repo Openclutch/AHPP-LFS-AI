@@ -1,30 +1,22 @@
 ﻿using System;
 using InSimDotNet.Packets;
 
-namespace InSimDotNet
-{
+namespace InSimDotNet {
     /// <summary>
-    ///     Provides data for the <see cref="InSim" /> PacketReceived event.
+    /// Provides data for the <see cref="InSimClient"/> PacketReceived event.
     /// </summary>
-    public class PacketEventArgs : EventArgs
-    {
+    public class PacketEventArgs<T> : EventArgs where T : IPacket {
         /// <summary>
-        ///     Creates a new instance of the <see cref="PacketEventArgs" /> class.
+        /// Gets the packet.
+        /// </summary>
+        public T Packet { get; private set; }
+
+        /// <summary>
+        /// Creates a new instance of the <see cref="PacketEventArgs"/> class.
         /// </summary>
         /// <param name="packet">The packet.</param>
-        public PacketEventArgs(IPacket packet)
-        {
+        public PacketEventArgs(T packet) {
             Packet = packet;
         }
-
-        /// <summary>
-        ///     Gets the packet.
-        /// </summary>
-        public IPacket Packet { get; private set; }
-
-        /// <summary>
-        ///     Gets or sets if the <see cref="IPacket" /> has been handled. If set to true no packet bindings will be raised.
-        /// </summary>
-        public bool IsHandled { get; set; }
     }
 }

@@ -1,81 +1,109 @@
 ﻿using System;
 using System.Diagnostics;
-using System.Timers;
+using System.Threading;
 
-namespace InSimDotNet.Out
-{
+namespace InSimDotNet.Out {
     /// <summary>
-    ///     Abstract class for managing OutSim and OutGauge UDP connections with LFS.
+    /// Abstract class for managing OutSim and OutGauge UDP connections with LFS.
     /// </summary>
-    public abstract class OutClient : IDisposable
-    {
-        private readonly Timer timeoutTimer;
+    public abstract class OutClient : IDisposable {
         private readonly UdpSocket udpSocket;
+        private Timer timeoutTimer;
         private bool isDisposed;
 
         /// <summary>
-        ///     Creates a new instance of the <see cref="OutClient" /> class.
+        /// Occurs when the connection times out.
         /// </summary>
-        protected OutClient()
-            : this(TimeSpan.Zero)
+        public event EventHandler TimedOut;
+
+        /// <summary>
+        /// Occurs when an error occurs on the internal receive thread.
+        /// </summary>
+        public event EventHandler<OutErrorEventArgs> OutError;
+
+        /// <summary>
+        /// Gets if the socket is connected.
+        /// </summary>
+        public bool IsConnected
         {
+            get { return timeoutTimer != null; }
         }
 
         /// <summary>
-        ///     Creates a new instance of the <see cref="OutClient" /> class with the specified timeout.
-        /// </summary>
-        /// <param name="timeout">The timeout period in milliseconds.</param>
-        protected OutClient(int timeout)
-            : this(TimeSpan.FromMilliseconds(timeout))
-        {
-        }
-
-        /// <summary>
-        ///     Creates a new instance of the <see cref="OutClient" /> class with the specified timeout.
-        /// </summary>
-        /// <param name="timeout">The timeout period for the socket.</param>
-        protected OutClient(TimeSpan timeout)
-        {
-            udpSocket = new UdpSocket();
-            udpSocket.PacketDataReceived += udpSocket_PacketDataReceived;
-            udpSocket.SocketError += udpSocket_SocketError;
-
-            Timeout = timeout;
-            if (timeout > TimeSpan.Zero)
-            {
-                timeoutTimer = new Timer();
-                timeoutTimer.Interval = timeout.TotalMilliseconds;
-                timeoutTimer.AutoReset = false;
-                timeoutTimer.Elapsed += timeoutTimer_Elapsed;
-            }
-        }
-
-        /// <summary>
-        ///     Gets if the socket is connected.
-        /// </summary>
-        public bool IsConnected => timeoutTimer == null ? true : timeoutTimer.Enabled;
-
-        /// <summary>
-        ///     Gets the amount of time to wait before timing out.
+        /// Gets the amount of time to wait before timing out.
         /// </summary>
         public TimeSpan Timeout { get; private set; }
 
         /// <summary>
-        ///     Gets or sets whether packet handlers should be marshalled back onto the original context.
+        /// Gets or sets whether packet handlers should be marshalled back onto the original context.
         /// </summary>
-        public bool ContinueOnCapturedContext
-        {
-            get => udpSocket.ContinueOnCapturedContext;
-            set => udpSocket.ContinueOnCapturedContext = value;
+        public bool ContinueOnCapturedContext {
+            get { return udpSocket.ContinueOnCapturedContext; }
+            set { udpSocket.ContinueOnCapturedContext = value; }
         }
 
         /// <summary>
-        ///     Disposes the connection.
+        /// Creates a new instance of the <see cref="OutClient"/> class.
         /// </summary>
-        public void Dispose()
-        {
-            if (!isDisposed)
+        protected OutClient()
+            : this(TimeSpan.Zero) { }
+
+        /// <summary>
+        /// Creates a new instance of the <see cref="OutClient"/> class with the specified timeout.
+        /// </summary>
+        /// <param name="timeout">The timeout period in milliseconds.</param>
+        protected OutClient(int timeout)
+            : this(TimeSpan.FromMilliseconds(timeout)) { }
+
+        /// <summary>
+        /// Creates a new instance of the <see cref="OutClient"/> class with the specified timeout.
+        /// </summary>
+        /// <param name="timeout">The timeout period for the socket.</param>
+        protected OutClient(TimeSpan timeout) {
+            udpSocket = new UdpSocket();
+            udpSocket.PacketDataReceived += new EventHandler<PacketDataEventArgs>(udpSocket_PacketDataReceived);
+            udpSocket.SocketError += new EventHandler<InSimErrorEventArgs>(udpSocket_SocketError);
+
+            Timeout = timeout;
+        }
+
+        /// <summary>
+        /// Starts listening for packets from LFS.
+        /// </summary>
+        /// <param name="host">The host to listen to.</param>
+        /// <param name="port">The port to listen on.</param>
+        public void Connect(string host, int port) {
+            ThrowIfDisposed();
+
+            udpSocket.Bind(host, port);
+
+            if (Timeout > TimeSpan.Zero)
             {
+                if (timeoutTimer != null)
+                {
+                    timeoutTimer.Dispose();
+                }
+
+                timeoutTimer = new Timer(TimerElasped, null, TimeSpan.Zero, Timeout);
+            }
+        }
+
+        /// <summary>
+        /// Disconnects from LFS.
+        /// </summary>
+        public void Disconnect() {
+            ThrowIfDisposed();
+
+            udpSocket.Disconnect();
+
+            Dispose();
+        }
+
+        /// <summary>
+        /// Disposes the connection.
+        /// </summary>
+        public void Dispose() {
+            if (!isDisposed) {
                 Dispose(true);
 
                 GC.SuppressFinalize(this);
@@ -83,48 +111,10 @@ namespace InSimDotNet.Out
         }
 
         /// <summary>
-        ///     Occurs when the connection times out.
+        /// Disposes the connection.
         /// </summary>
-        public event EventHandler TimedOut;
-
-        /// <summary>
-        ///     Occurs when an error occurs on the internal receive thread.
-        /// </summary>
-        public event EventHandler<OutErrorEventArgs> OutError;
-
-        /// <summary>
-        ///     Starts listening for packets from LFS.
-        /// </summary>
-        /// <param name="host">The host to listen to.</param>
-        /// <param name="port">The port to listen on.</param>
-        public void Connect(string host, int port)
-        {
-            ThrowIfDisposed();
-
-            udpSocket.Bind(host, port);
-
-            if (timeoutTimer != null) timeoutTimer.Start();
-        }
-
-        /// <summary>
-        ///     Disconnects from LFS.
-        /// </summary>
-        public void Disconnect()
-        {
-            ThrowIfDisposed();
-
-            udpSocket.Disconnect();
-
-            if (timeoutTimer != null) timeoutTimer.Stop();
-        }
-
-        /// <summary>
-        ///     Disposes the connection.
-        /// </summary>
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!isDisposed && disposing)
-            {
+        protected virtual void Dispose(bool disposing) {
+            if (!isDisposed && disposing) {
                 isDisposed = true;
 
                 udpSocket.Dispose();
@@ -134,66 +124,65 @@ namespace InSimDotNet.Out
                 if (timeoutTimer != null)
                 {
                     timeoutTimer.Dispose();
-                    timeoutTimer.Elapsed -= timeoutTimer_Elapsed;
+                    timeoutTimer = null;
                 }
             }
         }
 
-        private void udpSocket_PacketDataReceived(object sender, PacketDataEventArgs e)
-        {
+        private void udpSocket_PacketDataReceived(object sender, PacketDataEventArgs e) {
             HandlePacket(e.GetBuffer());
 
             if (timeoutTimer != null)
             {
                 // Reset timer.
-                timeoutTimer.Stop();
-                timeoutTimer.Start();
+                timeoutTimer.Change(TimeSpan.Zero, Timeout);
             }
         }
 
-        private void udpSocket_SocketError(object sender, InSimErrorEventArgs e)
-        {
+        private void udpSocket_SocketError(object sender, InSimErrorEventArgs e) {
             Disconnect();
             OnOutError(new OutErrorEventArgs(e.Exception));
         }
 
-        private void timeoutTimer_Elapsed(object sender, ElapsedEventArgs e)
-        {
+        private void TimerElasped(object state) {
             Disconnect();
 
-            OnTimedOut(e);
+            OnTimedOut(EventArgs.Empty);
         }
 
         /// <summary>
-        ///     Called when packet data is received. Override to implement handling for specific packets.
+        /// Called when packet data is received. Override to implement handling for specific packets.
         /// </summary>
         /// <param name="buffer">The packet data.</param>
         protected abstract void HandlePacket(byte[] buffer);
 
         [DebuggerStepThrough]
-        private void ThrowIfDisposed()
-        {
-            if (isDisposed) throw new ObjectDisposedException(GetType().Name);
+        private void ThrowIfDisposed() {
+            if (isDisposed) {
+                throw new ObjectDisposedException(GetType().Name);
+            }
         }
 
         /// <summary>
-        ///     Raises the TimedOut event.
+        /// Raises the TimedOut event.
         /// </summary>
-        /// <param name="e">The <see cref="EventArgs" /> object containing the event data.</param>
-        protected virtual void OnTimedOut(EventArgs e)
-        {
-            var temp = TimedOut;
-            if (temp != null) temp(this, e);
+        /// <param name="e">The <see cref="EventArgs"/> object containing the event data.</param>
+        protected virtual void OnTimedOut(EventArgs e) {
+            EventHandler temp = TimedOut;
+            if (temp != null) {
+                temp(this, e);
+            }
         }
 
         /// <summary>
-        ///     Raises the OutError event.
+        /// Raises the OutError event.
         /// </summary>
-        /// <param name="e">The <see cref="OutErrorEventArgs" /> object containing the event data.</param>
-        protected virtual void OnOutError(OutErrorEventArgs e)
-        {
-            var temp = OutError;
-            if (temp != null) temp(this, e);
+        /// <param name="e">The <see cref="OutErrorEventArgs"/> object containing the event data.</param>
+        protected virtual void OnOutError(OutErrorEventArgs e) {
+            EventHandler<OutErrorEventArgs> temp = OutError;
+            if (temp != null) {
+                temp(this, e);
+            }
         }
     }
 }

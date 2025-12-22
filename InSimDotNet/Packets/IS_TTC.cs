@@ -1,12 +1,51 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     General purpose packet eight byte packet.
+    /// General purpose packet eight byte packet.
     /// </summary>
     public class IS_TTC : IPacket, ISendable
     {
         /// <summary>
-        ///     Creates a new general purpose packet.
+        /// Gets the packet size.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the packet type.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the request ID.
+        /// </summary>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the packet sub-type.
+        /// </summary>
+        public TtcType SubT { get; set; }
+
+        /// <summary>
+        /// Gets or sets the connection's unique id (0 = local).
+        /// </summary>
+        public byte UCID { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value that may be used in various ways depending on SubT.
+        /// </summary>
+        public byte B1 { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value that may be used in various ways depending on SubT.
+        /// </summary>
+        public byte B2 { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value that may be used in various ways depending on SubT.
+        /// </summary>
+        public byte B3 { get; set; }
+
+        /// <summary>
+        /// Creates a new general purpose packet.
         /// </summary>
         public IS_TTC()
         {
@@ -15,13 +54,13 @@
         }
 
         /// <summary>
-        ///     Creates a new general purpose packet.
+        /// Creates a new general purpose packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_TTC(byte[] buffer)
             : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -33,52 +72,12 @@
         }
 
         /// <summary>
-        ///     Gets or sets the packet sub-type.
-        /// </summary>
-        public TtcType SubT { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the connection's unique id (0 = local).
-        /// </summary>
-        public byte UCID { get; set; }
-
-        /// <summary>
-        ///     Gets or sets a value that may be used in various ways depending on SubT.
-        /// </summary>
-        public byte B1 { get; set; }
-
-        /// <summary>
-        ///     Gets or sets a value that may be used in various ways depending on SubT.
-        /// </summary>
-        public byte B2 { get; set; }
-
-        /// <summary>
-        ///     Gets or sets a value that may be used in various ways depending on SubT.
-        /// </summary>
-        public byte B3 { get; set; }
-
-        /// <summary>
-        ///     Gets the packet size.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the packet type.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the request ID.
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Returns the packet data.
+        /// Returns the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
         public byte[] GetBuffer()
         {
-            var writer = new PacketWriter(Size);
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);

@@ -1,33 +1,61 @@
-namespace InSimDotNet.Packets
-{
+using System;
+
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     InSim info packet.
+    /// InSim info packet.
     /// </summary>
     /// <remarks>
-    ///     Sent when a player sends a /i message to a host.
+    /// Sent when a player sends a /i message to a host.
     /// </remarks>
-    public class IS_III : IPacket
-    {
+    public class IS_III : IPacket {
         private const int DefaultSize = 8;
 
         /// <summary>
-        ///     Creates a new InSim info packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_III()
-        {
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the request ID.
+        /// </summary>
+        public byte ReqI { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the connection who sent the message.
+        /// </summary>
+        public byte UCID { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the player who sent the message (if 0 use UCID).
+        /// </summary>
+        public byte PLID { get; private set; }
+
+        /// <summary>
+        /// Gets the message.
+        /// </summary>
+        public string Msg { get; private set; }
+
+        /// <summary>
+        /// Creates a new InSim info packet.
+        /// </summary>
+        public IS_III() {
             Size = DefaultSize;
             Type = PacketType.ISP_III;
-            Msg = string.Empty;
+            Msg = String.Empty;
         }
 
         /// <summary>
-        ///     Creates a new InSim info packet.
+        /// Creates a new InSim info packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_III(byte[] buffer)
-            : this()
-        {
-            var reader = new PacketReader(buffer);
+            : this() {
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -37,38 +65,8 @@ namespace InSimDotNet.Packets
             reader.Skip(2);
 
             // read variable sized packet.
-            var msgLength = Size - DefaultSize;
+            int msgLength = Size - DefaultSize;
             Msg = reader.ReadString(msgLength);
         }
-
-        /// <summary>
-        ///     Gets the unique ID of the connection who sent the message.
-        /// </summary>
-        public byte UCID { get; private set; }
-
-        /// <summary>
-        ///     Gets the unique ID of the player who sent the message (if 0 use UCID).
-        /// </summary>
-        public byte PLID { get; private set; }
-
-        /// <summary>
-        ///     Gets the message.
-        /// </summary>
-        public string Msg { get; private set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the request ID.
-        /// </summary>
-        public byte ReqI { get; }
     }
 }

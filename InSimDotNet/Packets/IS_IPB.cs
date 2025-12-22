@@ -1,51 +1,94 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     IP Ban list information
+    /// IP ban list information packet.
     /// </summary>
-    /// <remarks>
-    ///     IP Bans
-    ///     You can set up to 120 IP addresses that are not allowed to join a host
-    /// </remarks>
     public class IS_IPB : IPacket, ISendable
     {
         /// <summary>
-        ///     Maximum number of bans allowed in the packet
+        /// Maximum number of IP bans allowed in a single packet.
         /// </summary>
         public const int IPB_MAX_BANS = 120;
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="IS_IPB" /> class.
+        /// Gets the size of the packet.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the requestID.
+        /// </summary>
+        /// <remarks>
+        /// 0 unless this is a reply to a TINY_IPB request.
+        /// </remarks>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// The number of bans in this packet. This value is filled in automatically when sending bans.
+        /// </summary>
+        public byte NumB { get; private set; }
+
+        /// <summary>
+        /// Reserved byte.
+        /// </summary>
+        public byte Sp0 { get; private set; }
+
+        /// <summary>
+        /// Reserved byte.
+        /// </summary>
+        public byte Sp1 { get; private set; }
+
+        /// <summary>
+        /// Reserved byte.
+        /// </summary>
+        public byte Sp2 { get; private set; }
+
+        /// <summary>
+        /// Reserved byte.
+        /// </summary>
+        public byte Sp3 { get; private set; }
+
+        /// <summary>
+        /// Gets a collection of <see cref="IPAddress"/> entries that are banned.
+        /// </summary>
+        public IList<IPAddress> BanIPs { get; set; }
+
+        /// <summary>
+        /// Creates a new <see cref="IS_IPB"/> object.
         /// </summary>
         public IS_IPB()
         {
             Size = 8;
             Type = PacketType.ISP_IPB;
-            BanIps = new List<IPAddress>(IPB_MAX_BANS);
+            BanIPs = new List<IPAddress>(IPB_MAX_BANS);
         }
 
         /// <summary>
-        ///     Creates a new IS_IPB packet.
+        /// Creates a new <see cref="IS_IPB"/> object.
         /// </summary>
-        /// <param name="banIps">A collection of IP addresses.</param>
-        public IS_IPB(IEnumerable<IPAddress> banIps)
+        /// <param name="banIPs">A collection of <see cref="IPAddress"/></param>
+        public IS_IPB(IEnumerable<IPAddress> banIPs)
             : this()
         {
-            BanIps = new List<IPAddress>(banIps);
+            BanIPs = new List<IPAddress>(banIPs);
         }
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="IS_IPB" /> class from a byte array.
+        /// Creates a new <see cref="IS_IPB"/> object.
         /// </summary>
-        /// <param name="buffer">The byte array to initialize from.</param>
+        /// <param name="buffer">The packet data</param>
         public IS_IPB(byte[] buffer)
-            : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -55,82 +98,37 @@ namespace InSimDotNet.Packets
             Sp2 = reader.ReadByte();
             Sp3 = reader.ReadByte();
 
-            var info = new List<IPAddress>(NumB);
-            for (var i = 0; i < NumB; i++) info.Add(new IPAddress(reader.ReadUInt32()));
-            BanIps = info;
+            BanIPs = new List<IPAddress>(NumB);
+
+            for (int i = 0; i < NumB; i++)
+            {
+                BanIPs.Add(new IPAddress(reader.ReadUInt32()));
+            }
         }
 
         /// <summary>
-        ///     Gets the number of bans in the packet.
+        /// Gets the packet data.
         /// </summary>
-        public byte NumB { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp0 { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp1 { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp2 { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp3 { get; private set; }
-
-        /// <summary>
-        ///     Gets a collection with the banned IP addresses
-        /// </summary>
-        public IList<IPAddress> BanIps { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; private set; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the request ID - 0 unless this is a reply to a TINY_IPB request
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Gets the packet data.
-        /// </summary>
-        /// <returns>An array contaning the packet data.</returns>
+        /// <returns>An array containing the packet data.</returns>
         public byte[] GetBuffer()
         {
-            if (BanIps.Count > IPB_MAX_BANS) throw new InvalidOperationException(StringResources.IsIPBInfoErrorMessage);
+            if (BanIPs.Count > IPB_MAX_BANS)
+                throw new InvalidOperationException("IS_IPB too many bans");
 
-            NumB = (byte)BanIps.Count;
-            Size = 8 + NumB * 4;
-            var writer = new PacketWriter(Size);
+            NumB = (byte)BanIPs.Count;
+            Size = 8 + (NumB * 4);
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);
             writer.Write(NumB);
-            writer.Skip(1);
-            writer.Skip(1);
-            writer.Skip(1);
-            writer.Skip(1);
+            writer.Skip(4);
 
-            foreach (var address in BanIps)
+            foreach (IPAddress ip in BanIPs)
             {
-                var bytes = address.GetAddressBytes();
+                byte[] bytes = ip.GetAddressBytes();
                 writer.Write(BitConverter.ToUInt32(bytes, 0));
             }
-
             return writer.GetBuffer();
         }
     }

@@ -1,27 +1,25 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the vote actions.
+    /// Represents the vote actions.
     /// </summary>
-    public enum VoteAction
-    {
+    public enum VoteAction {
         /// <summary>
-        ///     No vote.
+        /// No vote.
         /// </summary>
         VOTE_NONE,
 
         /// <summary>
-        ///     End race.
+        /// End race.
         /// </summary>
         VOTE_END,
 
         /// <summary>
-        ///     Restart session.
+        /// Restart session.
         /// </summary>
         VOTE_RESTART,
 
         /// <summary>
-        ///     Qualify.
+        /// Qualify.
         /// </summary>
         VOTE_QUALIFY
     }

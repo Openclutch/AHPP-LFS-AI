@@ -1,27 +1,25 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents <see cref="IS_ACR" /> Result.
+    /// Represents <see cref="IS_ACR"/> Result.
     /// </summary>
-    public enum AdminResult
-    {
+    public enum AdminResult {
         /// <summary>
-        ///     No admin command processed.
+        /// No admin command processed.
         /// </summary>
         None = 0,
 
         /// <summary>
-        ///     Admin command has been processed.
+        /// Admin command has been processed.
         /// </summary>
         Processed = 1,
 
         /// <summary>
-        ///     Admin command was rejected.
+        /// Admin command was rejected.
         /// </summary>
         Rejected = 2,
 
         /// <summary>
-        ///     The admin command was not recognised.
+        /// The admin command was not recognised.
         /// </summary>
         Unknown = 3
     }

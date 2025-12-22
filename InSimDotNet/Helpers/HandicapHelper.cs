@@ -1,15 +1,12 @@
-﻿using System.Collections.Generic;
-using InSimDotNet.Packets;
+﻿using InSimDotNet.Packets;
+using System.Collections.Generic;
 
-namespace InSimDotNet.Helpers
-{
+namespace InSimDotNet.Helpers {
     /// <summary>
-    ///     Helper class for setting car handicaps.
+    /// Helper class for setting car handicaps.
     /// </summary>
-    public static class HandicapHelper
-    {
-        private static readonly Dictionary<CarFlags, byte> CarMap = new Dictionary<CarFlags, byte>
-        {
+    public static class HandicapHelper {
+        private static readonly Dictionary<CarFlags, byte> CarMap = new Dictionary<CarFlags, byte>() {
             { CarFlags.XFG, 0 },
             { CarFlags.XRG, 1 },
             { CarFlags.XRT, 2 },
@@ -29,28 +26,27 @@ namespace InSimDotNet.Helpers
             { CarFlags.XRR, 16 },
             { CarFlags.FZR, 17 },
             { CarFlags.BF1, 18 },
-            { CarFlags.FBM, 19 }
+            { CarFlags.FBM, 19 },
         };
 
         /// <summary>
-        ///     Sets the handicap for the specified cars.
+        /// Sets the handicap for the specified cars.
         /// </summary>
-        /// <param name="packet">The <see cref="IS_HCP" /> packet containing the handicaps.</param>
+        /// <param name="packet">The <see cref="IS_HCP"/> packet containing the handicaps.</param>
         /// <param name="cars">The cars to set the handicap for.</param>
         /// <param name="H_Mass">The added mass to set in kilograms (0 - 200).</param>
         /// <param name="H_TRes">The intake restriction to set (0 - 50).</param>
-        public static void SetHandicap(IS_HCP packet, CarFlags cars, byte H_Mass = 0, byte H_TRes = 0)
-        {
-            foreach (var map in CarMap)
-                if (cars.HasFlag(CarFlags.All) || cars.HasFlag(map.Key))
-                {
+        public static void SetHandicap(IS_HCP packet, CarFlags cars, byte H_Mass = 0, byte H_TRes = 0) {
+            foreach (KeyValuePair<CarFlags, byte> map in CarMap) {
+                if (cars.HasFlag(CarFlags.All) || cars.HasFlag(map.Key)) {
                     packet.Info[map.Value].H_Mass = H_Mass;
                     packet.Info[map.Value].H_TRes = H_TRes;
                 }
+            }
         }
 
         /// <summary>
-        ///     Creates an IS_HCP packet and sets the various car handicaps.
+        /// Creates an IS_HCP packet and sets the various car handicaps.
         /// </summary>
         /// <param name="cars">The cars to set the handicap for.</param>
         /// <param name="H_Mass">The added mass to set in kilograms (0 - 200).</param>

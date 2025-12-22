@@ -1,33 +1,89 @@
 using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Camera position packet.
+    /// Camera position packet.
     /// </summary>
     /// <remarks>
-    ///     Used to control camera position, in car or in Shift+U mode. To request one to be
-    ///     sent send a <see cref="IS_TINY" /> with a SubT of TINY_SCP.
+    /// Used to control camera position, in car or in Shift+U mode. To request one to be 
+    /// sent send a <see cref="IS_TINY"/> with a SubT of TINY_SCP.
     /// </remarks>
-    public class IS_CPP : IPacket, ISendable
-    {
+    public class IS_CPP : IPacket, ISendable {
         /// <summary>
-        ///     Creates a new camera position packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_CPP()
-        {
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the packet request ID.
+        /// </summary>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the camera position vector.
+        /// </summary>
+        public Vec Pos { get; set; }
+
+        /// <summary>
+        /// Gets or sets the heading - 0 points along Y axis.
+        /// </summary>
+        public int H { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pitch - 0 means looking at horizon.
+        /// </summary>
+        public int P { get; set; }
+
+        /// <summary>
+        /// Gets or sets the roll - 0 means no roll.
+        /// </summary>
+        public int R { get; set; }
+
+        /// <summary>
+        /// Gets or sets the unique ID of the viewed player (0 = none).
+        /// </summary>
+        public byte ViewPLID { get; set; }
+
+        /// <summary>
+        /// Gets or sets the current camera, as reported in <see cref="IS_SFP"/>.
+        /// </summary>
+        public ViewIndentifier InGameCam { get; set; }
+
+        /// <summary>
+        /// Gets or sets the field of view.
+        /// </summary>
+        public float FOV { get; set; }
+
+        /// <summary>
+        /// Gets or sets the time to move to this camera position (0 = instant).
+        /// </summary>
+        public TimeSpan Time { get; set; }
+
+        /// <summary>
+        /// Gets or sets the state flags.
+        /// </summary>
+        public StateFlags Flags { get; set; }
+
+        /// <summary>
+        /// Creates a new camera position packet.
+        /// </summary>
+        public IS_CPP() {
             Size = 32;
             Type = PacketType.ISP_CPP;
         }
 
         /// <summary>
-        ///     Creates a new camera position packet.
+        /// Creates a new camera position packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_CPP(byte[] buffer)
-            : this()
-        {
-            var reader = new PacketReader(buffer);
+            : this() {
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -44,72 +100,11 @@ namespace InSimDotNet.Packets
         }
 
         /// <summary>
-        ///     Gets or sets the camera position vector.
-        /// </summary>
-        public Vec Pos { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the heading - 0 points along Y axis.
-        /// </summary>
-        public int H { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the pitch - 0 means looking at horizon.
-        /// </summary>
-        public int P { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the roll - 0 means no roll.
-        /// </summary>
-        public int R { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the unique ID of the viewed player (0 = none).
-        /// </summary>
-        public byte ViewPLID { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the current camera, as reported in <see cref="IS_SFP" />.
-        /// </summary>
-        public ViewIndentifier InGameCam { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the field of view.
-        /// </summary>
-        public float FOV { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the time to move to this camera position (0 = instant).
-        /// </summary>
-        public TimeSpan Time { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the state flags.
-        /// </summary>
-        public StateFlags Flags { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the packet request ID.
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Returns the packet data.
+        /// Returns the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
-        public byte[] GetBuffer()
-        {
-            var writer = new PacketWriter(Size);
+        public byte[] GetBuffer() {
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);
@@ -128,4 +123,5 @@ namespace InSimDotNet.Packets
             return writer.GetBuffer();
         }
     }
+
 }

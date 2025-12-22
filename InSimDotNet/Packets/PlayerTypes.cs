@@ -1,26 +1,24 @@
 ﻿using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the <see cref="IS_NPL" /> PType.
+    /// Represents the <see cref="IS_NPL"/> PType.
     /// </summary>
     [Flags]
-    public enum PlayerTypes
-    {
+    public enum PlayerTypes {
         /// <summary>
-        ///     Player is female.
+        /// Player is female.
         /// </summary>
         PLT_FEMALE = 1,
 
         /// <summary>
-        ///     Player is AI.
+        /// Player is AI.
         /// </summary>
         PLT_AI = 2,
 
         /// <summary>
-        ///     Player is remote.
+        /// Player is remote.
         /// </summary>
-        PLT_REMOTE = 4
+        PLT_REMOTE = 4,
     }
 }

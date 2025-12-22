@@ -1,68 +1,66 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the replay errors.
+    /// Represents the replay errors.
     /// </summary>
-    public enum ReplayError
-    {
+    public enum ReplayError {
         /// <summary>
-        ///     OK - completed instruction.
+        /// OK - completed instruction.
         /// </summary>
         RIP_OK,
 
         /// <summary>
-        ///     OK - already at the destination.
+        /// OK - already at the destination.
         /// </summary>
         RIP_ALREADY,
 
         /// <summary>
-        ///     Can't run a replay - dedicated host.
+        /// Can't run a replay - dedicated host.
         /// </summary>
         RIP_DEDICATED,
 
         /// <summary>
-        ///     Can't start a replay - not in a suitable mode.
+        /// Can't start a replay - not in a suitable mode.
         /// </summary>
         RIP_WRONG_MODE,
 
         /// <summary>
-        ///     RName is zero but no replay is currently loaded.
+        /// RName is zero but no replay is currently loaded.
         /// </summary>
         RIP_NOT_REPLAY,
 
         /// <summary>
-        ///     IS_RIP corrupted (e.g. RName does not end with zero).
+        /// IS_RIP corrupted (e.g. RName does not end with zero).
         /// </summary>
         RIP_CORRUPTED,
 
         /// <summary>
-        ///     The replay file was not found.
+        /// The replay file was not found.
         /// </summary>
         RIP_NOT_FOUND,
 
         /// <summary>
-        ///     Obsolete / future / corrupted.
+        /// Obsolete / future / corrupted.
         /// </summary>
         RIP_UNLOADABLE,
 
         /// <summary>
-        ///     Destination is beyond replay length.
+        /// Destination is beyond replay length.
         /// </summary>
         RIP_DEST_OOB,
 
         /// <summary>
-        ///     Unknown error found starting replay.
+        /// Unknown error found starting replay.
         /// </summary>
         RIP_UNKNOWN,
 
         /// <summary>
-        ///     Replay search was terminated by user.
+        /// Replay search was terminated by user.
         /// </summary>
         RIP_USER,
 
         /// <summary>
-        ///     Can't reach destination - SPR is out of sync.
+        /// Can't reach destination - SPR is out of sync.
         /// </summary>
-        RIP_OOS
+        RIP_OOS,
     }
 }

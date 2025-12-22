@@ -1,21 +1,19 @@
 ﻿using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the <see cref="IS_SCH" /> flags.
+    /// Represents the <see cref="IS_SCH"/> flags.
     /// </summary>
     [Flags]
-    public enum CharacterModifiers
-    {
+    public enum CharacterModifiers {
         /// <summary>
-        ///     Shift key.
+        /// Shift key.
         /// </summary>
         SHIFT = 1,
 
         /// <summary>
-        ///     Control key.
+        /// Control key.
         /// </summary>
-        CTRL = 2
+        CTRL = 2,
     }
 }

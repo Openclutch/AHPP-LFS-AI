@@ -1,71 +1,70 @@
-using System.Collections.Generic;
+using System;
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Multi car information packet.
+    /// Multi car information packet.
     /// </summary>
     /// <remarks>
-    ///     Contains information about cars currently on-track. To enable these
-    ///     packets see the Flags and Interval properties when initializing InSim.
+    /// Contains information about cars currently on-track. To enable these 
+    /// packets see the Flags and Interval properties when initializing InSim.
     /// </remarks>
-    public class IS_MCI : IPacket
-    {
+    public class IS_MCI : IPacket {
         /// <summary>
-        ///     Creates a new multi car information packet.
+        /// Gets the size of the packet.
         /// </summary>
-        public IS_MCI()
-        {
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the request ID.
+        /// </summary>
+        public byte ReqI { get; private set; }
+
+        /// <summary>
+        /// Gets the number of cars in the packet.
+        /// </summary>
+        public byte NumC { get; private set; }
+
+        /// <summary>
+        /// Gets a collection of up to eight <see cref="CompCar"/> packets.
+        /// </summary>
+        /// <remarks>
+        /// If there are more than eight cars in the race then more than one 
+        /// <see cref="IS_MCI"/> packet is sent.
+        /// </remarks>
+        public ReadOnlyCollection<CompCar> Info { get; private set; }
+
+        /// <summary>
+        /// Creates a new multi car information packet.
+        /// </summary>
+        public IS_MCI() {
             Size = 28;
             Type = PacketType.ISP_MCI;
         }
 
         /// <summary>
-        ///     Creates a new multi car information packet.
+        /// Creates a new multi car information packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_MCI(byte[] buffer)
-            : this()
-        {
-            var reader = new PacketReader(buffer);
+            : this() {
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
             NumC = reader.ReadByte();
 
-            var info = new List<CompCar>(NumC);
-            for (var i = 0; i < NumC; i++) info.Add(new CompCar(reader));
+            List<CompCar> info = new List<CompCar>(NumC);
+            for (int i = 0; i < NumC; i++) {
+                info.Add(new CompCar(reader));
+            }
             Info = new ReadOnlyCollection<CompCar>(info);
         }
-
-        /// <summary>
-        ///     Gets the number of cars in the packet.
-        /// </summary>
-        public byte NumC { get; }
-
-        /// <summary>
-        ///     Gets a collection of up to sixteen <see cref="CompCar" /> packets.
-        /// </summary>
-        /// <remarks>
-        ///     If there are more than sixteen cars in the race then more than one
-        ///     <see cref="IS_MCI" /> packet is sent.
-        /// </remarks>
-        public ReadOnlyCollection<CompCar> Info { get; private set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the request ID.
-        /// </summary>
-        public byte ReqI { get; }
     }
 }

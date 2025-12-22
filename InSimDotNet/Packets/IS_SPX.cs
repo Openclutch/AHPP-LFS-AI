@@ -3,15 +3,65 @@ using System;
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     Split time packet.
+    /// Split time packet.
     /// </summary>
     /// <remarks>
-    ///     Sent when a player completes a split.
+    /// Sent when a player completes a split.
     /// </remarks>
     public class IS_SPX : IPacket
     {
         /// <summary>
-        ///     Creates a new split time packet.
+        /// Gets the size of the packet.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the packet request ID.
+        /// </summary>
+        public byte ReqI { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the player.
+        /// </summary>
+        public byte PLID { get; private set; }
+
+        /// <summary>
+        /// Gets the split time.
+        /// </summary>
+        public TimeSpan STime { get; private set; }
+
+        /// <summary>
+        /// Gets the total elapsed time.
+        /// </summary>
+        public TimeSpan ETime { get; private set; }
+
+        /// <summary>
+        /// Gets the split number.
+        /// </summary>
+        public byte Split { get; private set; }
+
+        /// <summary>
+        /// Gets the currently penalty value of the player.
+        /// </summary>
+        public PenaltyValue Penalty { get; private set; }
+
+        /// <summary>
+        /// Gets the number of pit stops the player has completed.
+        /// </summary>
+        public byte NumStops { get; private set; }
+
+        /// <summary>
+        /// /showfuel yes: double fuel percent / no: 255
+        /// </summary>
+        public byte Fuel200 { get; }
+
+        /// <summary>
+        /// Creates a new split time packet.
         /// </summary>
         public IS_SPX()
         {
@@ -20,13 +70,13 @@ namespace InSimDotNet.Packets
         }
 
         /// <summary>
-        ///     Creates a new split time packet.
+        /// Creates a new split time packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_SPX(byte[] buffer)
             : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -38,55 +88,5 @@ namespace InSimDotNet.Packets
             NumStops = reader.ReadByte();
             Fuel200 = reader.ReadByte();
         }
-
-        /// <summary>
-        ///     Gets the unique ID of the player.
-        /// </summary>
-        public byte PLID { get; private set; }
-
-        /// <summary>
-        ///     Gets the split time.
-        /// </summary>
-        public TimeSpan STime { get; private set; }
-
-        /// <summary>
-        ///     Gets the total elapsed time.
-        /// </summary>
-        public TimeSpan ETime { get; private set; }
-
-        /// <summary>
-        ///     Gets the split number.
-        /// </summary>
-        public byte Split { get; private set; }
-
-        /// <summary>
-        ///     Gets the currently penalty value of the player.
-        /// </summary>
-        public PenaltyValue Penalty { get; private set; }
-
-        /// <summary>
-        ///     Gets the number of pit stops the player has completed.
-        /// </summary>
-        public byte NumStops { get; private set; }
-
-        /// <summary>
-        ///     /showfuel yes: double fuel percent / no: 255
-        /// </summary>
-        public byte Fuel200 { get; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the packet request ID.
-        /// </summary>
-        public byte ReqI { get; }
     }
 }

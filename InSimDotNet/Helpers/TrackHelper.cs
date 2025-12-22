@@ -1,16 +1,28 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Linq;
 
 namespace InSimDotNet.Helpers
 {
     /// <summary>
-    ///     Static class to help with track names.
+    /// Static class to help with track names.
     /// </summary>
-    public static class TrackHelper
-    {
-        private static readonly Dictionary<string, Track> TrackMap = new Dictionary<string, Track>
+    public static class TrackHelper {
+        private class Track {
+            public string FullTrackName { get; private set; }
+            public bool HasReverse { get; private set; }
+
+            public Track(string fullTrackName) : this(fullTrackName, false) { }
+
+            public Track(string fullTrackName, bool hasReverse) {
+                FullTrackName = fullTrackName;
+                HasReverse = hasReverse;
+            }
+        }
+
+        private static readonly Dictionary<string, Track> TrackMap = new Dictionary<string, Track>()
         {
             { "BL1", new Track("Blackwood Grand Prix", true) },
             { "BL2", new Track("Blackwood Historic", true) },
@@ -22,6 +34,7 @@ namespace InSimDotNet.Helpers
             { "SO4", new Track("South City Long", true) },
             { "SO5", new Track("South City Town", true) },
             { "SO6", new Track("South City Chicane", true) },
+            { "SO7", new Track("South City", false) },
             { "FE1", new Track("Fern Bay Club", true) },
             { "FE2", new Track("Fern Bay Green", true) },
             { "FE3", new Track("Fern Bay Gold", true) },
@@ -35,11 +48,18 @@ namespace InSimDotNet.Helpers
             { "KY1", new Track("Kyoto Ring Oval", true) },
             { "KY2", new Track("Kyoto Ring National", true) },
             { "KY3", new Track("Kyoto Ring Grand Prix", true) },
+            { "KY4", new Track("Kyoto Endurance", true) },
+            { "KY5", new Track("Kyoto North", true) },
+            { "KY6", new Track("Kyoto Oval Chicanes", true) },
+            { "KY7", new Track("Kyoto Sportscar", true) },
+            { "KY8", new Track("Kyoto Kart Indy", true) },
             { "WE1", new Track("Westhill National", true) },
             { "WE2", new Track("Westhill International", true) },
             { "WE3", new Track("Westhill Car Park") },
             { "WE4", new Track("Westhill Karting", true) },
             { "WE5", new Track("Westhill Karting National", true) },
+            { "WE6", new Track("Westhill Historic", true) },
+            { "WE7", new Track("Westhill National Chicane", true) },
             { "AS1", new Track("Aston Cadet", true) },
             { "AS2", new Track("Aston Club", true) },
             { "AS3", new Track("Aston National", true) },
@@ -47,6 +67,8 @@ namespace InSimDotNet.Helpers
             { "AS5", new Track("Aston Grand Prix", true) },
             { "AS6", new Track("Aston Grand Touring", true) },
             { "AS7", new Track("Aston North", true) },
+            { "AS8", new Track("Aston Classic Boot", true) },
+            { "AS9", new Track("Aston Club Long", true) },
             { "RO1", new Track("Rockingham ISSC") },
             { "RO2", new Track("Rockingham National") },
             { "RO3", new Track("Rockingham Oval") },
@@ -59,54 +81,65 @@ namespace InSimDotNet.Helpers
             { "RO10", new Track("Rockingham International Long") },
             { "RO11", new Track("Rockingham Sportscar") },
             { "LA1", new Track("Layout Square Long Grid") },
-            { "LA2", new Track("Layout Square Wide Grid") }
+            { "LA2", new Track("Layout Square Wide Grid") },
         };
 
         /// <summary>
-        ///     Gets all full track names.
+        /// Gets all full track names.
         /// </summary>
-        public static ReadOnlyCollection<string> FullTrackNames =>
-            new ReadOnlyCollection<string>((from t in TrackMap.Values
-                select t.FullTrackName).ToList());
+        public static ReadOnlyCollection<string> FullTrackNames {
+            get {
+                return new ReadOnlyCollection<string>((from t in TrackMap.Values
+                                                       select t.FullTrackName).ToList());
+            }
+        }
 
         /// <summary>
-        ///     Gets all short track names.
+        /// Gets all short track names.
         /// </summary>
-        public static ReadOnlyCollection<string> ShortTrackNames =>
-            new ReadOnlyCollection<string>((from t in TrackMap.Keys
-                select t).ToList());
+        public static ReadOnlyCollection<string> ShortTrackNames {
+            get {
+                return new ReadOnlyCollection<string>((from t in TrackMap.Keys
+                                                       select t).ToList());
+            }
+        }
 
         /// <summary>
-        ///     Returns the full name of a track or null if the track does not exist.
+        /// Returns the full name of a track or null if the track does not exist.
         /// </summary>
         /// <param name="shortTrackName">The tracks short code name.</param>
         /// <returns>The tracks full name.</returns>
-        public static string GetFullTrackName(string shortTrackName)
-        {
-            if (shortTrackName == null) throw new ArgumentNullException("shortTrackName");
+        public static string GetFullTrackName(string shortTrackName) {
+            if (shortTrackName == null) {
+                throw new ArgumentNullException("shortTrackName");
+            }
 
-            shortTrackName = shortTrackName.ToUpper();
+            shortTrackName = CultureInfo.CurrentCulture.TextInfo.ToUpper(shortTrackName);
 
-            var config = shortTrackName.LastOrDefault();
-            if (config == 'R' || config == 'X' || config == 'Y')
+            char config = shortTrackName.LastOrDefault();
+            if (config == 'R' || config == 'X' || config == 'Y') {
                 shortTrackName = shortTrackName.Substring(0, shortTrackName.Length - 1);
+            }
 
             Track track;
-            if (TrackMap.TryGetValue(shortTrackName, out track))
-            {
-                if (config == 'R')
-                {
-                    if (track.HasReverse) return string.Format("{0} Reversed", track.FullTrackName);
+            if (TrackMap.TryGetValue(shortTrackName, out track)) {
+                if (config == 'R') {
+                    if (track.HasReverse) {
+                        return String.Format("{0} Reversed", track.FullTrackName);
+                    }
                     return null;
                 }
 
-                if (config == 'Y')
-                {
-                    if (track.HasReverse) return string.Format("{0} Open", track.FullTrackName);
+                if (config == 'Y') {
+                    if (track.HasReverse) {
+                        return String.Format("{0} Open", track.FullTrackName);
+                    }
                     return null;
                 }
 
-                if (config == 'X') return string.Format("{0} Open", track.FullTrackName);
+                if (config == 'X') {
+                    return String.Format("{0} Open", track.FullTrackName);
+                }
 
                 return track.FullTrackName;
             }
@@ -115,40 +148,22 @@ namespace InSimDotNet.Helpers
         }
 
         /// <summary>
-        ///     Tries to determine the full name of the specified track.
+        /// Tries to determine the full name of the specified track.
         /// </summary>
         /// <param name="shortTrackName">The short name for the track.</param>
         /// <param name="fullTrackName">The full name of the track.</param>
         /// <returns>True if the track exists.</returns>
-        public static bool TryGetFullTrackName(string shortTrackName, out string fullTrackName)
-        {
-            return !string.IsNullOrEmpty(fullTrackName = GetFullTrackName(shortTrackName));
+        public static bool TryGetFullTrackName(string shortTrackName, out string fullTrackName) {
+            return !String.IsNullOrEmpty(fullTrackName = GetFullTrackName(shortTrackName));
         }
 
         /// <summary>
-        ///     Determines if the specified track exists.
+        /// Determines if the specified track exists.
         /// </summary>
         /// <param name="shortTrackName">The short name of the track.</param>
         /// <returns>True if the track exists.</returns>
-        public static bool TrackExists(string shortTrackName)
-        {
-            return !string.IsNullOrEmpty(GetFullTrackName(shortTrackName));
-        }
-
-        private class Track
-        {
-            public Track(string fullTrackName) : this(fullTrackName, false)
-            {
-            }
-
-            public Track(string fullTrackName, bool hasReverse)
-            {
-                FullTrackName = fullTrackName;
-                HasReverse = hasReverse;
-            }
-
-            public string FullTrackName { get; }
-            public bool HasReverse { get; }
+        public static bool TrackExists(string shortTrackName) {
+            return !String.IsNullOrEmpty(GetFullTrackName(shortTrackName));
         }
     }
 }

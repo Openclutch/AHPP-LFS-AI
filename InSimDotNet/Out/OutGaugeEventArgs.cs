@@ -1,124 +1,161 @@
 ﻿using System;
 
-namespace InSimDotNet.Out
-{
+namespace InSimDotNet.Out {
     /// <summary>
-    ///     Provides data for the OutGauge PacketReceived event.
+    /// Provides data for the OutGauge PacketReceived event.
     /// </summary>
-    public class OutGaugeEventArgs : EventArgs
-    {
+    public class OutGaugeEventArgs : EventArgs {
         /// <summary>
-        ///     Creates a new OutGaugeEventArgs object.
+        /// Gets the OutGauge packet.
         /// </summary>
-        /// <param name="packet">The OutGauge packet.</param>
-        public OutGaugeEventArgs(OutGaugePack packet)
-        {
-            Packet = packet;
+        public OutGaugePack Packet { get; private set; }
+
+        /// <summary>
+        /// Gets the time (to check order).
+        /// </summary>
+        public TimeSpan Time {
+            get { return Packet.Time; }
         }
 
         /// <summary>
-        ///     Gets the OutGauge packet.
+        /// Gets the car name.
         /// </summary>
-        public OutGaugePack Packet { get; }
+        public string Car {
+            get { return Packet.Car; }
+        }
 
         /// <summary>
-        ///     Gets the time (to check order).
+        /// Gets the OutGauge info flags.
         /// </summary>
-        public TimeSpan Time => Packet.Time;
+        public OutGaugeFlags Flags {
+            get { return Packet.Flags; }
+        }
 
         /// <summary>
-        ///     Gets the car name.
+        /// Gets the current gear (reverse: 0, neutral: 1, first: 2 etc..).
         /// </summary>
-        public string Car => Packet.Car;
+        public byte Gear {
+            get { return Packet.Gear; }
+        }
 
         /// <summary>
-        ///     Gets the OutGauge info flags.
+        /// Gets the PLID of the player.
         /// </summary>
-        public OutGaugeFlags Flags => Packet.Flags;
+        public byte PLID {
+            get { return Packet.PLID; }
+        }
 
         /// <summary>
-        ///     Gets the current gear (reverse: 0, neutral: 1, first: 2 etc..).
+        /// Gets the speed in meters per second.
         /// </summary>
-        public byte Gear => Packet.Gear;
+        public float Speed {
+            get { return Packet.Speed; }
+        }
 
         /// <summary>
-        ///     Gets the PLID of the player.
+        /// Gets the RPM.
         /// </summary>
-        public byte PLID => Packet.PLID;
+        public float RPM {
+            get { return Packet.RPM; }
+        }
 
         /// <summary>
-        ///     Gets the speed in meters per second.
+        /// Gets the turbo BAR.
         /// </summary>
-        public float Speed => Packet.Speed;
+        public float Turbo {
+            get { return Packet.Turbo; }
+        }
 
         /// <summary>
-        ///     Gets the RPM.
+        /// Gets the engine temperature in degrees centigrade. 
         /// </summary>
-        public float RPM => Packet.RPM;
+        public float EngTemp {
+            get { return Packet.EngTemp; }
+        }
 
         /// <summary>
-        ///     Gets the turbo BAR.
+        /// Gets the fuel (0.0 to 1.0).
         /// </summary>
-        public float Turbo => Packet.Turbo;
+        public float Fuel {
+            get { return Packet.Fuel; }
+        }
 
         /// <summary>
-        ///     Gets the engine temperature in degrees centigrade.
+        /// Gets the oil pressure in BAR.
         /// </summary>
-        public float EngTemp => Packet.EngTemp;
+        public float OilPressure {
+            get { return Packet.OilPressure; }
+        }
 
         /// <summary>
-        ///     Gets the fuel (0.0 to 1.0).
+        /// Gets the oil temperature in degrees centigrade.
         /// </summary>
-        public float Fuel => Packet.Fuel;
+        public float OilTemp {
+            get { return Packet.OilTemp; }
+        }
 
         /// <summary>
-        ///     Gets the oil pressure in BAR.
+        /// Gets which dashboard lights available for this car.
         /// </summary>
-        public float OilPressure => Packet.OilPressure;
+        public DashLightFlags DashLights {
+            get { return Packet.DashLights; }
+        }
 
         /// <summary>
-        ///     Gets the oil temperature in degrees centigrade.
+        /// Gets the dashboard lights currently switched on.
         /// </summary>
-        public float OilTemp => Packet.OilTemp;
+        public DashLightFlags ShowLights {
+            get { return Packet.ShowLights; }
+        }
 
         /// <summary>
-        ///     Gets which dashboard lights available for this car.
+        /// Gets the throttle position (0.0 to 1.0).
         /// </summary>
-        public DashLightFlags DashLights => Packet.DashLights;
+        public float Throttle {
+            get { return Packet.Throttle; }
+        }
 
         /// <summary>
-        ///     Gets the dashboard lights currently switched on.
+        /// Gets the brake position (0.0 to 1.0).
         /// </summary>
-        public DashLightFlags ShowLights => Packet.ShowLights;
+        public float Brake {
+            get { return Packet.Brake; }
+        }
 
         /// <summary>
-        ///     Gets the throttle position (0.0 to 1.0).
+        ///  Gets the clutch position (0.0 to 1.0).
         /// </summary>
-        public float Throttle => Packet.Throttle;
+        public float Clutch {
+            get { return Packet.Clutch; }
+        }
 
         /// <summary>
-        ///     Gets the brake position (0.0 to 1.0).
+        /// Gets the first LCD display (usually fuel).
         /// </summary>
-        public float Brake => Packet.Brake;
+        public string Display1 {
+            get { return Packet.Display1; }
+        }
 
         /// <summary>
-        ///     Gets the clutch position (0.0 to 1.0).
+        /// Gets the second LCD display (usually settings).
         /// </summary>
-        public float Clutch => Packet.Clutch;
+        public string Display2 {
+            get { return Packet.Display2; }
+        }
 
         /// <summary>
-        ///     Gets the first LCD display (usually fuel).
+        /// Gets the optional OutGauge ID (if specified in cfg.txt).
         /// </summary>
-        public string Display1 => Packet.Display1;
+        public int ID {
+            get { return Packet.ID; }
+        }
 
         /// <summary>
-        ///     Gets the second LCD display (usually settings).
+        /// Creates a new OutGaugeEventArgs object.
         /// </summary>
-        public string Display2 => Packet.Display2;
-
-        /// <summary>
-        ///     Gets the optional OutGauge ID (if specified in cfg.txt).
-        /// </summary>
-        public int ID => Packet.ID;
+        /// <param name="packet">The OutGauge packet.</param>
+        public OutGaugeEventArgs(OutGaugePack packet) {
+            Packet = packet;
+        }
     }
 }

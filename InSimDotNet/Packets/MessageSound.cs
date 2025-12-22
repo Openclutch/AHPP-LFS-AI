@@ -1,33 +1,31 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the message sound.
+    /// Represents the message sound.
     /// </summary>
-    public enum MessageSound
-    {
+    public enum MessageSound {
         /// <summary>
-        ///     Silent.
+        /// Silent.
         /// </summary>
         SND_SILENT,
 
         /// <summary>
-        ///     Message.
+        /// Message.
         /// </summary>
         SND_MESSAGE,
 
         /// <summary>
-        ///     System-message.
+        /// System-message.
         /// </summary>
         SND_SYSMESSAGE,
 
         /// <summary>
-        ///     Invalid key.
+        /// Invalid key.
         /// </summary>
         SND_INVALIDKEY,
 
         /// <summary>
-        ///     Error.
+        /// Error.
         /// </summary>
-        SND_ERROR
+        SND_ERROR,
     }
 }

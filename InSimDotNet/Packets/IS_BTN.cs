@@ -1,117 +1,120 @@
 using System;
+using System.Globalization;
 
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     InSim Button packet.
+    /// InSim Button packet.
     /// </summary>
     /// <remarks>
-    ///     Used to send a button to InSim.
+    /// Used to send a button to InSim.
     /// </remarks>
     public class IS_BTN : IPacket, ISendable
     {
         /// <summary>
-        ///     Creates a new button packet.
+        /// Gets the size of the packet.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the packet request ID (returned in <see cref="IS_BTC"/> and <see cref="IS_BTT"/> packets).
+        /// </summary>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the connection to display the button to (0 = local / 255 = all).
+        /// </summary>
+        public byte UCID { get; set; }
+
+        /// <summary>
+        /// Gets or sets the unique button click ID.
+        /// </summary>
+        public byte ClickID { get; set; }
+
+        /// <summary>
+        /// Used internally by InSim.
+        /// </summary>
+        public byte Inst { get; set; }
+
+        /// <summary>
+        /// Gets or sets the button style flags.
+        /// </summary>
+        public ButtonStyles BStyle { get; set; }
+
+        /// <summary>
+        /// Gets or sets the max characters the user is allowed to type in. Setting this to non-zero turns
+        /// the button into a text-entry prompt.
+        /// </summary>
+        public byte TypeIn { get; set; }
+
+        /// <summary>
+        /// Gets or sets the distance from the left of the screen the button will be displayed (0 to 200).
+        /// </summary>
+        public byte L { get; set; }
+
+        /// <summary>
+        /// Gets or sets the distance from the top of the screen the button will be displayed (0 to 200).
+        /// </summary>
+        public byte T { get; set; }
+
+        /// <summary>
+        /// Gets or sets the width of the button (0 to 200).
+        /// </summary>
+        public byte W { get; set; }
+
+        /// <summary>
+        /// Gets or sets the height of the button (0 to 200).
+        /// </summary>
+        public byte H { get; set; }
+
+        /// <summary>
+        /// Gets or sets the text of the button.
+        /// </summary>
+        public string Text { get; set; }
+
+        /// <summary>
+        /// Gets or sets the caption for a type-in button. Only used if TypeIn is set to non-zero.
+        /// </summary>
+        public string Caption { get; set; }
+
+        /// <summary>
+        /// Creates a new button packet.
         /// </summary>
         public IS_BTN()
         {
             Size = 12;
             Type = PacketType.ISP_BTN;
-            Text = string.Empty;
-            Caption = string.Empty;
+            Text = String.Empty;
+            Caption = String.Empty;
         }
 
         /// <summary>
-        ///     Gets or sets the connection to display the button to (0 = local / 255 = all).
-        /// </summary>
-        public byte UCID { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the unique button click ID.
-        /// </summary>
-        public byte ClickID { get; set; }
-
-        /// <summary>
-        ///     Used internally by InSim.
-        /// </summary>
-        public byte Inst { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the button style flags.
-        /// </summary>
-        public ButtonStyles BStyle { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the max characters the user is allowed to type in. Setting this to non-zero turns
-        ///     the button into a text-entry prompt.
-        /// </summary>
-        public byte TypeIn { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the distance from the left of the screen the button will be displayed (0 to 200).
-        /// </summary>
-        public byte L { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the distance from the top of the screen the button will be displayed (0 to 200).
-        /// </summary>
-        public byte T { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the width of the button (0 to 200).
-        /// </summary>
-        public byte W { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the height of the button (0 to 200).
-        /// </summary>
-        public byte H { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the text of the button.
-        /// </summary>
-        public string Text { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the caption for a type-in button. Only used if TypeIn is set to non-zero.
-        /// </summary>
-        public string Caption { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; private set; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the packet request ID (returned in <see cref="IS_BTC" /> and <see cref="IS_BTT" /> packets).
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Returns the packet data.
+        /// Returns the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
         public byte[] GetBuffer()
         {
-            var text = Text;
+            string text = Text;
 
             // Add button caption if set.
-            if (!string.IsNullOrEmpty(Caption) && TypeIn > 0)
-                text = string.Format("{0}{1}{0}{2}", char.MinValue, Caption, text);
+            if (!String.IsNullOrEmpty(Caption) && TypeIn > 0)
+            {
+                text = String.Format("{0}{1}{0}{2}", Char.MinValue, Caption, text);
+            }
 
             // Need to decode string first so we know how big to make the packet.
-            var buffer = new byte[240];
-            var length = LfsEncoding.Current.GetBytes(text, buffer, 0, 240);
+            byte[] buffer = new byte[240];
+            int length = LfsEncoding.Current.GetBytes(text, buffer, 0, 240);
 
             // Get packet size.
-            Size = (byte)(12 + Math.Min(length + (4 - length % 4), 240));
+            Size = (12 + Math.Min(length + (4 - (length % 4)), 240));
 
-            var writer = new PacketWriter(Size);
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);

@@ -7,8 +7,10 @@ using AHPP_AI.AI;
 using AHPP_AI.Debug;
 using AHPP_AI.Waypoint;
 using AHPP_AI.UI;
+using AHPP_AI.Util;
 using InSimDotNet;
 using InSimDotNet.Packets;
+using InSimClient = InSimDotNet.InSimClient;
 
 namespace AHPP_AI
 {
@@ -18,7 +20,7 @@ namespace AHPP_AI
     public class Program
     {
         // InSim connection
-        private static readonly InSim insim = new InSim();
+        private static readonly InSimClient insim = new InSimClient();
 
         // Core components
         private static readonly Logger logger = new Logger("log.txt");
@@ -32,7 +34,7 @@ namespace AHPP_AI
         private static readonly bool debugCoordinateSystem = false; // spawn objs to show path
 
         // Host settings
-        private static readonly string host = "10.211.55.3"; // Local host
+        private static readonly string host = "10.211.55.4"; // Local host
         private static readonly int port = 29999; // Default InSim port
         private static byte currentViewPLID = 0;
 
@@ -200,27 +202,26 @@ namespace AHPP_AI
         {
             logger.Log("Registering event handlers");
 
-            // Player related
-            insim.Bind<IS_NPL>(OnNewPlayer);
+            insim.IS_NPL += (_, e) => OnNewPlayer(e.Packet);
 
             // Car telemetry
-            insim.Bind<IS_AII>(aiController.OnAII);
-            insim.Bind<IS_MCI>(aiController.OnMCI);
+            insim.IS_AII += (_, e) => aiController.OnAII(e.Packet);
+            insim.IS_MCI += (_, e) => aiController.OnMCI(e.Packet);
 
             // Button clicks
-            insim.Bind<IS_BTC>(OnButtonClick);
-            insim.Bind<IS_BTT>(OnButtonType);
+            insim.IS_BTC += (_, e) => OnButtonClick(e.Packet);
+            insim.IS_BTT += (_, e) => OnButtonType(e.Packet);
 
             // Objects and layout
-            insim.Bind<IS_AXM>(visualizer.OnAXM);
-            insim.Bind<IS_CCH>(OnCameraChange);
+            insim.IS_AXM += (_, e) => visualizer.OnAXM(e.Packet);
+            insim.IS_CCH += (_, e) => OnCameraChange(e.Packet);
             // System related
-            insim.Bind<IS_TINY>(OnTiny);
-            insim.Bind<IS_VER>(OnVersion);
+            insim.IS_TINY += (_, e) => OnTiny(e.Packet);
+            insim.IS_VER += (_, e) => OnVersion(e.Packet);
         }
 
 
-        private static void OnButtonClick(InSim insim, IS_BTC btc)
+        private static void OnButtonClick(IS_BTC btc)
         {
             switch (btc.ClickID)
             {
@@ -270,7 +271,7 @@ namespace AHPP_AI
             }
         }
 
-        private static void OnButtonType(InSim insim, IS_BTT btt)
+        private static void OnButtonType(IS_BTT btt)
         {
             if (btt.ClickID == MainUI.AddAiDialogId)
             {
@@ -334,13 +335,13 @@ namespace AHPP_AI
         /// <summary>
         ///     Handle new player events
         /// </summary>
-        private static void OnNewPlayer(InSim insim, IS_NPL packet)
+        private static void OnNewPlayer(IS_NPL packet)
         {
             // Handle both individual player joins and responses to our TINY_NPL request
             logger.Log($"Player detected: {packet.PName} (PLID: {packet.PLID}, UCID: {packet.UCID})");
 
             // Forward to AI controller
-            aiController.OnNewPlayer(insim, packet);
+            aiController.OnNewPlayer(packet);
         }
 
         /// <summary>
@@ -380,7 +381,7 @@ namespace AHPP_AI
                 insim.Send(new IS_MST { Msg = "AI Control Program shutting down. Press any key to restart." });
 
                 // Close InSim connection gracefully
-                insim.Disconnect();
+                insim.DisconnectSafe();
 
                 logger.Log("InSim disconnected successfully");
                 logger.Log("Program shutdown complete - exiting");
@@ -398,13 +399,13 @@ namespace AHPP_AI
         /// <summary>
         ///     Handle TINY packets
         /// </summary>
-        private static void OnTiny(InSim insim, IS_TINY tiny)
+        private static void OnTiny(IS_TINY tiny)
         {
             if (tiny.SubT == TinyType.TINY_AXM && visualizer.LayoutObjectsRequested)
                 logger.Log("Received TINY_AXM response");
         }
 
-        private static void OnCameraChange(InSim insim, IS_CCH cch)
+        private static void OnCameraChange(IS_CCH cch)
         {
             currentViewPLID = cch.PLID;
             aiController.UpdateUIForView(currentViewPLID);
@@ -413,7 +414,7 @@ namespace AHPP_AI
         /// <summary>
         ///     Handle version information
         /// </summary>
-        private static void OnVersion(InSim insim, IS_VER ver)
+        private static void OnVersion(IS_VER ver)
         {
             logger.Log($"Connected to LFS {ver.Version} {ver.Product}, InSim version: {ver.InSimVer}");
         }

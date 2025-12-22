@@ -1,133 +1,140 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     Mod list information
+    /// Allowed Mods - Set/Clear allowed mods (by skinID) in the server
     /// </summary>
     /// <remarks>
-    ///     Allowed Mods
-    ///     You can set a list of up to 120 mods that are allowed to be used on a host
-    ///     Send zero to clear the list and allow all mods to be used
+    ///  You can set a list of up to 120 mods that are allowed to be used on a host
+    ///  Send zero to clear the list and allow all mods to be used
     /// </remarks>
     public class IS_MAL : IPacket, ISendable
     {
-        /// <summary>
-        ///     Maximum number of mods allowed in the packet
-        /// </summary>
         public const int MAX_MAL_MODS = 120;
+        /// <summary>
+        /// Gets the packet size.
+        /// </summary>
+        public int Size { get; private set; }
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="IS_MAL" /> class.
+        /// Gets the packet type.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the request ID.
+        /// </summary>
+        /// <remarks>
+        ///  0 unless this is a reply to a TINY_MAL request
+        /// </remarks>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Number of mods in this packet [0-120]. This value is filled in automatically when sending objects.
+        /// </summary>
+        public byte NumM { get; private set; }
+
+        /// <summary>
+        /// Unique id of the connection that updated the list
+        /// </summary>
+        public byte UCID { get; set; }
+
+        /// <summary>
+        /// Zero (for now)
+        /// </summary>
+        public byte Flags { get; set; }
+
+        /// <summary>
+        /// Gets a collection of <see cref="NodeLap"/> packets.
+        /// </summary>
+        public IList<SkinID> SkinIDs { get; private set; }
+
+        /// <summary>
+        /// Creates a new <see cref="IS_MAL"/> object.
         /// </summary>
         public IS_MAL()
         {
             Size = 8;
             Type = PacketType.ISP_MAL;
-            SkinIDs = new List<string>(MAX_MAL_MODS);
+            SkinIDs = new List<SkinID>(MAX_MAL_MODS);
         }
 
         /// <summary>
-        ///     Creates a new IS_MAL packet.
+        /// Creates a new <see cref="IS_MAL"/> object.
         /// </summary>
-        /// <param name="plid">A collection of CarSkins.</param>
-        public IS_MAL(IEnumerable<string> plid)
+        /// <param name="info">A collection of <see cref="ObjectInfo"/> sub-packets.</param>
+        public IS_MAL(IEnumerable<SkinID> skinIDs)
             : this()
         {
-            SkinIDs = new List<string>(plid);
+            SkinIDs = new List<SkinID>(skinIDs);
         }
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="IS_MAL" /> class from a byte array.
+        /// Creates a new <see cref="IS_MAL"/> object.
         /// </summary>
-        /// <param name="buffer">The byte array to initialize from.</param>
+        /// <param name="info">A collection of <see cref="ObjectInfo"/> sub-packets.</param>
+        public IS_MAL(IEnumerable<string> skinIDs)
+            : this()
+        {
+            SkinIDs = skinIDs.Select(x => new SkinID(x)).ToList();
+        }
+
+        /// <summary>
+        /// Creates a new <see cref="IS_MAL"/> object.
+        /// </summary>
+        /// <param name="buffer">The packet data.</param>
         public IS_MAL(byte[] buffer)
-            : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
             NumM = reader.ReadByte();
             UCID = reader.ReadByte();
             Flags = reader.ReadByte();
-            Sp2 = reader.ReadByte();
-            Sp3 = reader.ReadByte();
+            reader.Skip(1);
+            reader.Skip(1);
 
-            var info = new List<string>(NumM);
-            for (var i = 0; i < NumM; i++) info.Add(reader.ReadCNameString());
-            SkinIDs = info;
+            SkinIDs = new List<SkinID>(NumM);
+            for (int i = 0; i < NumM; i++)
+            {
+                SkinIDs.Add(new SkinID(reader));
+            }
         }
 
         /// <summary>
-        ///     Gets the number of mods in the packet.
+        /// Gets the packet data.
         /// </summary>
-        public byte NumM { get; private set; }
-
-        /// <summary>
-        ///     Gets the unique ID of the connnection that updated the list
-        /// </summary>
-        public byte UCID { get; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Flags { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp2 { get; private set; }
-
-        /// <summary>
-        ///     No description provided by lfs.
-        /// </summary>
-        public byte Sp3 { get; private set; }
-
-        /// <summary>
-        ///     Gets a collection with the carSkins information as string.
-        /// </summary>
-        public IList<string> SkinIDs { get; set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; private set; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the request ID - 0 unless this is a reply to a TINY_MAL request
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Gets the packet data.
-        /// </summary>
-        /// <returns>An array contaning the packet data.</returns>
+        /// <returns>An array containing the packet data.</returns>
         public byte[] GetBuffer()
         {
             if (SkinIDs.Count > MAX_MAL_MODS)
-                throw new InvalidOperationException(StringResources.IsMalInfoErrorMessage);
+            {
+                throw new InvalidOperationException("IS_MAL too many objects set");
+            }
 
-            NumM = (byte)SkinIDs.Count;
-            Size = 8 + NumM * 4;
-            Flags = 0; // zero (for now)
-            var writer = new PacketWriter(Size);
+            Size = (8 + (SkinIDs.Count * 4));
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);
-            writer.Write(NumM);
+            writer.Write((byte)SkinIDs.Count);
             writer.Write(UCID);
             writer.Write(Flags);
             writer.Skip(1);
             writer.Skip(1);
 
-            foreach (var info in SkinIDs) writer.Write(Convert.ToUInt32(info, 16));
+            foreach (var skinID in SkinIDs)
+            {
+                writer.Write(skinID.CompressedForm);
+            }
+
             return writer.GetBuffer();
         }
     }

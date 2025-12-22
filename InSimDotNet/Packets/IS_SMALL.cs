@@ -1,27 +1,50 @@
-namespace InSimDotNet.Packets
-{
+using System;
+
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     General purpose packet eight byte packet.
+    /// General purpose packet eight byte packet.
     /// </summary>
-    public class IS_SMALL : IPacket, ISendable
-    {
+    public class IS_SMALL : IPacket, ISendable {
         /// <summary>
-        ///     Creates a new general purpose packet.
+        /// Gets the packet size.
         /// </summary>
-        public IS_SMALL()
-        {
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the packet type.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets or sets the request ID.
+        /// </summary>
+        public byte ReqI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the packet sub-type.
+        /// </summary>
+        public SmallType SubT { get; set; }
+
+        /// <summary>
+        /// Gets or sets the packet value.
+        /// </summary>
+        public long UVal { get; set; }
+
+        /// <summary>
+        /// Creates a new general purpose packet.
+        /// </summary>
+        public IS_SMALL() {
             Size = 8;
             Type = PacketType.ISP_SMALL;
         }
 
         /// <summary>
-        ///     Creates a new general purpose packet.
+        /// Creates a new general purpose packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_SMALL(byte[] buffer)
-            : this()
-        {
-            var reader = new PacketReader(buffer);
+            : this() {
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -30,37 +53,11 @@ namespace InSimDotNet.Packets
         }
 
         /// <summary>
-        ///     Gets or sets the packet sub-type.
-        /// </summary>
-        public SmallType SubT { get; set; }
-
-        /// <summary>
-        ///     Gets or sets the packet value.
-        /// </summary>
-        public long UVal { get; set; }
-
-        /// <summary>
-        ///     Gets the packet size.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the packet type.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets or sets the request ID.
-        /// </summary>
-        public byte ReqI { get; set; }
-
-        /// <summary>
-        ///     Returns the packet data.
+        /// Returns the packet data.
         /// </summary>
         /// <returns>The packet data.</returns>
-        public byte[] GetBuffer()
-        {
-            var writer = new PacketWriter(Size);
+        public byte[] GetBuffer() {
+            PacketWriter writer = new PacketWriter(Size);
             writer.WriteSize(Size);
             writer.Write((byte)Type);
             writer.Write(ReqI);

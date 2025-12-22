@@ -1,18 +1,16 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the IS_CSC packet. CSCAction.
+    /// Represents the IS_CSC packet. CSCAction.
     /// </summary>
-    public enum CSCAction
-    {
+    public enum CSCAction {
         /// <summary>
-        ///     Car is stopped.
+        /// Car is stopped.
         /// </summary>
         CSC_STOP,
 
         /// <summary>
-        ///     Car is started.
+        /// Car is started.
         /// </summary>
-        CSC_START
+        CSC_START,
     }
 }

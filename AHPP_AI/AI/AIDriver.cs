@@ -5,6 +5,7 @@ using AHPP_AI.Util;
 using AHPP_AI.Waypoint;
 using InSimDotNet;
 using InSimDotNet.Packets;
+using InSimClient = InSimDotNet.InSimClient;
 
 namespace AHPP_AI.AI
 {
@@ -58,7 +59,7 @@ namespace AHPP_AI.AI
 
         private readonly Dictionary<byte, DateTime> engineStateTimers = new Dictionary<byte, DateTime>();
         private readonly GearboxController gearboxController;
-        private readonly InSim insim;
+        private readonly InSimClient insim;
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
@@ -81,7 +82,7 @@ namespace AHPP_AI.AI
             Logger logger,
             WaypointFollower waypointFollower,
             GearboxController gearboxController,
-            InSim insim)
+            InSimClient insim)
         {
             this.config = config;
             this.logger = logger;

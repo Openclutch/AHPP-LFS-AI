@@ -1,5 +1,7 @@
 # Changelog
 
+- Upgrade AHPP_AI and AHPP_AI_Tests to SDK-style .NET 6 projects with cross-platform dependencies (ImageSharp replacing System.Drawing).
+- Configure AHPP_AI to produce a Windows x86 RID for publishing an .exe alongside cross-platform builds.
 - Restore pits upgrade buttons to hide when leaving car selection and reappear beside the buy control once a car is chosen.
 - Fix connection HUD substate display when IS_CIM reports byte-based submodes.
 - Add debug HUD button to display the current UI substate beneath the connection state indicator.
@@ -142,4 +144,3 @@
 - now clear drift and speed score when starting any battle to prevent stale points giving lots of money
 - Missions now will be worth less if you continue grinding the same one within an hour. Encouraging a variety of activities.
 - Added real brand names for the brand deals!
-

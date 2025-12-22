@@ -1,15 +1,73 @@
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+
 namespace InSimDotNet.Packets
 {
     /// <summary>
-    ///     Pit stop packet.
+    /// Pit stop packet.
     /// </summary>
     /// <remarks>
-    ///     Sent when player completes a pit stop.
+    /// Sent when player completes a pit stop.
     /// </remarks>
     public class IS_PIT : IPacket
     {
         /// <summary>
-        ///     Creates a new pit stop packet.
+        /// Gets the size of the packet.
+        /// </summary>
+        public int Size { get; private set; }
+
+        /// <summary>
+        /// Gets the type of the packet.
+        /// </summary>
+        public PacketType Type { get; private set; }
+
+        /// <summary>
+        /// Gets the packet request ID.
+        /// </summary>
+        public byte ReqI { get; private set; }
+
+        /// <summary>
+        /// Gets the unique ID of the player.
+        /// </summary>
+        public byte PLID { get; private set; }
+
+        /// <summary>
+        /// Gets the laps completed by the player.
+        /// </summary>
+        public int LapsDone { get; private set; }
+
+        /// <summary>
+        /// Gets the player flags.
+        /// </summary>
+        public PlayerFlags Flags { get; private set; }
+
+        /// <summary>
+        /// /showfuel yes: fuel added percent / no: 255
+        /// </summary>
+        public byte FuelAdd { get; }
+
+        /// <summary>
+        /// Gets the players current penalty value.
+        /// </summary>
+        public PenaltyValue Penalty { get; private set; }
+
+        /// <summary>
+        /// Gets the number of pit stops completed by the player.
+        /// </summary>
+        public byte NumStops { get; private set; }
+
+        /// <summary>
+        /// Gets the tyres changed during the pit stop.
+        /// </summary>
+        public Tyres Tyres { get; private set; }
+
+        /// <summary>
+        /// Gets the work completed during the pit stop.
+        /// </summary>
+        public PitWorkFlags Work { get; private set; }
+
+        /// <summary>
+        /// Creates a new pit stop packet.
         /// </summary>
         public IS_PIT()
         {
@@ -18,13 +76,13 @@ namespace InSimDotNet.Packets
         }
 
         /// <summary>
-        ///     Creates a new pit stop packet.
+        /// Creates a new pit stop packet.
         /// </summary>
         /// <param name="buffer">A buffer contaning the packet data.</param>
         public IS_PIT(byte[] buffer)
             : this()
         {
-            var reader = new PacketReader(buffer);
+            PacketReader reader = new PacketReader(buffer);
             Size = reader.ReadSize();
             Type = (PacketType)reader.ReadByte();
             ReqI = reader.ReadByte();
@@ -42,60 +100,5 @@ namespace InSimDotNet.Packets
                 (TyreCompound)reader.ReadByte());
             Work = (PitWorkFlags)reader.ReadUInt32();
         }
-
-        /// <summary>
-        ///     Gets the unique ID of the player.
-        /// </summary>
-        public byte PLID { get; private set; }
-
-        /// <summary>
-        ///     Gets the laps completed by the player.
-        /// </summary>
-        public int LapsDone { get; private set; }
-
-        /// <summary>
-        ///     Gets the player flags.
-        /// </summary>
-        public PlayerFlags Flags { get; private set; }
-
-        /// <summary>
-        ///     /showfuel yes: fuel added percent / no: 255
-        /// </summary>
-        public byte FuelAdd { get; }
-
-        /// <summary>
-        ///     Gets the players current penalty value.
-        /// </summary>
-        public PenaltyValue Penalty { get; private set; }
-
-        /// <summary>
-        ///     Gets the number of pit stops completed by the player.
-        /// </summary>
-        public byte NumStops { get; private set; }
-
-        /// <summary>
-        ///     Gets the tyres changed during the pit stop.
-        /// </summary>
-        public Tyres Tyres { get; private set; }
-
-        /// <summary>
-        ///     Gets the work completed during the pit stop.
-        /// </summary>
-        public PitWorkFlags Work { get; private set; }
-
-        /// <summary>
-        ///     Gets the size of the packet.
-        /// </summary>
-        public int Size { get; }
-
-        /// <summary>
-        ///     Gets the type of the packet.
-        /// </summary>
-        public PacketType Type { get; }
-
-        /// <summary>
-        ///     Gets the packet request ID.
-        /// </summary>
-        public byte ReqI { get; }
     }
 }

@@ -1,18 +1,16 @@
-﻿namespace InSimDotNet.Packets
-{
+﻿namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the replay modes.
+    /// Represents the replay modes.
     /// </summary>
-    public enum ReplayMode
-    {
+    public enum ReplayMode {
         /// <summary>
-        ///     Single-player replay.
+        /// Single-player replay.
         /// </summary>
         Spr,
 
         /// <summary>
-        ///     Multiplayer replay.
+        /// Multiplayer replay.
         /// </summary>
-        Mpr
+        Mpr,
     }
 }

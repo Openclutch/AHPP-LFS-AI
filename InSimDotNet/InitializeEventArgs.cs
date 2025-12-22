@@ -1,24 +1,21 @@
 ﻿using System;
 
-namespace InSimDotNet
-{
+namespace InSimDotNet {
     /// <summary>
-    ///     Provides data for the <see cref="InSim" /> initialized event.
+    /// Provides data for the <see cref="InSimClient"/> initialized event.
     /// </summary>
-    public class InitializeEventArgs : EventArgs
-    {
+    public class InitializeEventArgs : EventArgs {
         /// <summary>
-        ///     Creates a new instance of the <see cref="InitializeEventArgs" /> object.
+        /// Gets the settings used to initialize the connection with LFS.
         /// </summary>
-        /// <param name="settings">The InSim settings used to initialize the connection with LFS.</param>
-        public InitializeEventArgs(ReadOnlyInSimSettings settings)
-        {
-            Settings = settings;
-        }
+        public InSimSettings Settings { get; private set; }
 
         /// <summary>
-        ///     Gets the settings used to initialize the connection with LFS.
+        /// Creates a new instance of the <see cref="InitializeEventArgs"/> object.
         /// </summary>
-        public ReadOnlyInSimSettings Settings { get; private set; }
+        /// <param name="settings">The InSim settings used to initialize the connection with LFS.</param>
+        public InitializeEventArgs(InSimSettings settings) {
+            this.Settings = settings;
+        }
     }
 }

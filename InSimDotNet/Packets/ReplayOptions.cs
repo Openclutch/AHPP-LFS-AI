@@ -1,26 +1,24 @@
 ﻿using System;
 
-namespace InSimDotNet.Packets
-{
+namespace InSimDotNet.Packets {
     /// <summary>
-    ///     Represents the replay options.
+    /// Represents the replay options.
     /// </summary>
     [Flags]
-    public enum ReplayOptions
-    {
+    public enum ReplayOptions {
         /// <summary>
-        ///     Loop replay.
+        /// Loop replay.
         /// </summary>
         RIPOPT_LOOP = 1,
 
         /// <summary>
-        ///     Download missing skins.
+        /// Download missing skins.
         /// </summary>
         RIPOPT_SKINS = 2,
 
         /// <summary>
-        ///     Have LFS calculate full physics during replay seek.
+        /// Have LFS calculate full physics during replay seek.
         /// </summary>
-        RIPOPT_FULL_PHYS = 4
+        RIPOPT_FULL_PHYS = 4,
     }
 }
