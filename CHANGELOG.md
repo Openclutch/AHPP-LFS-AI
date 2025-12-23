@@ -1,5 +1,6 @@
 # Changelog
 
+- Added visualization route selection buttons with detail controls so recorded routes render as directional chalk arrows (main white, pit red via LYT flag) while staying under the layout object cap.
 - Moved .NET Framework executable dependencies into a `lib` subfolder (with probing enabled) so the output folder highlights the runnable .exe.
 - Added route validation that reports missing data, duplicate names, invalid branch indices, and non-loop main routes directly to the InSim user.
 - Routes are now scoped per track/layout (with automatic migration of legacy files) so main/pit and detour recordings stay organized across circuits.

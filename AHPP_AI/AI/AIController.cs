@@ -47,6 +47,9 @@ namespace AHPP_AI.AI
         private readonly Random branchRandom = new Random();
         private readonly OutGauge outGauge;
         private string recordingRouteName = "main_loop";
+        private string visualizationRouteName = "main_loop";
+        private int visualizationDetailStep = 2;
+        private static readonly int[] VisualizationDetailSteps = { 1, 2, 4, 8, 16 };
 
         private float playerThrottle;
         private float playerBrake;
@@ -241,6 +244,7 @@ namespace AHPP_AI.AI
                 debugUIInitialized = true;
                 logger.Log("Debug UI initialized");
                 mainUI.Show();
+                mainUI.UpdateVisualizationDetail(visualizationDetailStep);
             }
         }
 
@@ -310,6 +314,26 @@ namespace AHPP_AI.AI
 
             AddOption(options, selection);
             mainUI?.SetRouteOptions(options, selection);
+
+            var visualizationOptions = new List<string>();
+            try
+            {
+                var routes = routeLibrary.ListRoutes();
+                foreach (var route in routes)
+                {
+                    AddOption(visualizationOptions, route?.Metadata?.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to refresh visualization routes from disk");
+            }
+
+            if (visualizationOptions.Count > 0 &&
+                !visualizationOptions.Exists(r => r.Equals(visualizationRouteName, StringComparison.OrdinalIgnoreCase)))
+                visualizationRouteName = visualizationOptions[0];
+
+            mainUI?.SetVisualizationRouteOptions(visualizationOptions, visualizationRouteName);
         }
 
         /// <summary>
@@ -324,6 +348,20 @@ namespace AHPP_AI.AI
             }
 
             return mainUI.TryGetRouteNameForButton(clickId, out routeName);
+        }
+
+        /// <summary>
+        /// Map a UI button click back to the visualization route it represents.
+        /// </summary>
+        public bool TryGetVisualizationRouteNameForButton(byte clickId, out string routeName)
+        {
+            if (mainUI == null)
+            {
+                routeName = string.Empty;
+                return false;
+            }
+
+            return mainUI.TryGetVisualizationRouteNameForButton(clickId, out routeName);
         }
 
         /// <summary>
@@ -497,27 +535,7 @@ namespace AHPP_AI.AI
                 return;
             }
 
-            // Always refresh the recorded routes before visualizing so recent recordings appear.
-            var routeNames = new List<string>();
-            if (!string.IsNullOrWhiteSpace(config.SpawnRouteName)) routeNames.Add(config.SpawnRouteName);
-            if (!string.IsNullOrWhiteSpace(config.MainRouteName)) routeNames.Add(config.MainRouteName);
-            if (config.BranchRouteNames != null) routeNames.AddRange(config.BranchRouteNames);
-
-            var firstRoute = true;
-            foreach (var name in routeNames)
-            {
-                waypointManager.LoadTrafficRoute(name);
-                var recorded = waypointManager.GetRecordedRoute(name);
-                if (recorded != null)
-                {
-                    lfsLayout.VisualizeRecordedRoute(viewPlid, recorded, firstRoute);
-                    firstRoute = false;
-                }
-                else logger.LogWarning($"No recorded route found for visualization: {name}");
-            }
-
-            lfsLayout.WaypointsVisualized = true;
-            insim.Send(new IS_MST { Msg = $"Visualized {routeNames.Count} recorded routes." });
+            VisualizeSelectedRoute(viewPlid);
         }
 
         public bool IsRecording => routeRecorder.IsRecording;
@@ -1243,7 +1261,83 @@ namespace AHPP_AI.AI
                 return;
             }
 
-            lfsLayout.VisualizeRecordedRoute(plid, recorded);
+            var detailStep = GetVisualizationStep(recorded.Nodes?.Count ?? 0, out _);
+            lfsLayout.VisualizeRecordedRoute(plid, recorded, detailStep);
+        }
+
+        /// <summary>
+        /// Update the selected visualization route name and refresh UI selection.
+        /// </summary>
+        public void SetVisualizationRouteSelection(string routeName)
+        {
+            visualizationRouteName = routeLibrary.NormalizeRouteName(
+                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
+        }
+
+        /// <summary>
+        /// Adjust the visualization detail step and optionally refresh the active layout.
+        /// </summary>
+        public void AdjustVisualizationDetail(bool increaseDetail, byte viewPlid)
+        {
+            var currentIndex = Array.IndexOf(VisualizationDetailSteps, visualizationDetailStep);
+            if (currentIndex < 0) currentIndex = 0;
+
+            var nextIndex = increaseDetail ? Math.Max(0, currentIndex - 1) : Math.Min(VisualizationDetailSteps.Length - 1,
+                currentIndex + 1);
+            visualizationDetailStep = VisualizationDetailSteps[nextIndex];
+            mainUI?.UpdateVisualizationDetail(visualizationDetailStep);
+
+            if (lfsLayout.WaypointsVisualized) VisualizeSelectedRoute(viewPlid);
+        }
+
+        /// <summary>
+        /// Visualize the currently selected recorded route with the configured detail level.
+        /// </summary>
+        public void VisualizeSelectedRoute(byte viewPlid)
+        {
+            if (viewPlid == 0)
+            {
+                logger.LogWarning("Cannot visualize routes: no player in view");
+                insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
+                return;
+            }
+
+            waypointManager.LoadTrafficRoute(visualizationRouteName);
+            var recorded = waypointManager.GetRecordedRoute(visualizationRouteName);
+            if (recorded == null)
+            {
+                logger.LogWarning($"No recorded route found for visualization: {visualizationRouteName}");
+                insim.Send(new IS_MST { Msg = $"No recorded route found for {visualizationRouteName}." });
+                return;
+            }
+
+            var detailStep = GetVisualizationStep(recorded.Nodes?.Count ?? 0, out var clamped);
+            lfsLayout.VisualizeRecordedRoute(viewPlid, recorded, detailStep, true);
+            lfsLayout.WaypointsVisualized = true;
+
+            if (clamped)
+            {
+                insim.Send(new IS_MST
+                {
+                    Msg = $"Detail clamped to every {detailStep} node(s) to stay under {LFSLayout.MaxVisibleWaypoints} objects."
+                });
+            }
+            else
+            {
+                insim.Send(new IS_MST { Msg = $"Visualized {visualizationRouteName} (x{detailStep})." });
+            }
+        }
+
+        /// <summary>
+        /// Calculate the effective detail step needed to stay under object limits.
+        /// </summary>
+        private int GetVisualizationStep(int nodeCount, out bool clamped)
+        {
+            var requiredStep = Math.Max(1, (int)Math.Ceiling(nodeCount / (double)LFSLayout.MaxVisibleWaypoints));
+            var effective = Math.Max(visualizationDetailStep, requiredStep);
+            clamped = effective != visualizationDetailStep;
+            return effective;
         }
     }
 }

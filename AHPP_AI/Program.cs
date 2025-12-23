@@ -280,6 +280,13 @@ namespace AHPP_AI
                 return;
             }
 
+            if (aiController.TryGetVisualizationRouteNameForButton(btc.ClickID, out var visualizationRoute))
+            {
+                aiController.SetVisualizationRouteSelection(visualizationRoute);
+                aiController.VisualizeSelectedRoute(currentViewPLID);
+                return;
+            }
+
             switch (btc.ClickID)
             {
                 case 1:
@@ -336,6 +343,12 @@ namespace AHPP_AI
                     break;
                 case 207:
                     aiController.SetTargetSpeedForAll(50);
+                    break;
+                case MainUI.VisualizationDetailMinusId:
+                    aiController.AdjustVisualizationDetail(false, currentViewPLID);
+                    break;
+                case MainUI.VisualizationDetailPlusId:
+                    aiController.AdjustVisualizationDetail(true, currentViewPLID);
                     break;
                 default:
                     aiController.TryRemoveAiFromButton(btc.ClickID);

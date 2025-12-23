@@ -23,6 +23,12 @@ namespace AHPP_AI.UI
         private const byte BTN_W = 20;
         private const byte SELECT_BTN_W = 20;
         private const byte SELECT_BTN_SPACING = 2;
+        private const byte VISUAL_ROUTE_START_ROW = 100;
+        private const byte VISUAL_ROUTE_COLUMNS = 2;
+        private const byte VISUAL_DETAIL_ROW = 160;
+        private const byte DETAIL_BTN_W = 6;
+        private const byte DETAIL_LABEL_W = 12;
+        private const byte DETAIL_BTN_SPACING = 1;
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
         private const byte ROUTE_NAME_ROW = 160;
@@ -32,14 +38,21 @@ namespace AHPP_AI.UI
         public const byte SpeedInputId = 151;
         public const byte RecordingIntervalId = 152;
         public const byte RouteNameInputId = 153;
+        public const byte VisualizationDetailMinusId = 90;
+        public const byte VisualizationDetailPlusId = 91;
+        public const byte VisualizationDetailLabelId = 92;
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly List<(byte id, string name)> routeButtons = new List<(byte id, string name)>();
+        private readonly List<(byte id, string name)> visualizationRouteButtons = new List<(byte id, string name)>();
         private const byte ROUTE_BUTTON_START_ID = 11;
         private const byte ROUTE_BUTTON_MAX_COUNT = 8;
+        private const byte VISUAL_ROUTE_BUTTON_START_ID = 30;
 
         private string selectedRoute = "main_loop";
+        private string selectedVisualizationRoute = "main_loop";
+        private int visualizationDetailStep = 2;
         private bool isRecording;
         private int recordedPoints;
         private bool uiInitialized;
@@ -73,6 +86,8 @@ namespace AHPP_AI.UI
 
             RenderRecordingSelectors();
             RenderRecordButton();
+            RenderVisualizationRouteSelectors();
+            RenderVisualizationDetailControls();
         }
 
         /// <summary>
@@ -114,7 +129,8 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Create a clickable button in the UI.
         /// </summary>
-        private void CreateButton(byte id, string text, byte left, byte top)
+        private void CreateButton(byte id, string text, byte left, byte top, byte width = BTN_W, byte height = ROW_HEIGHT,
+            bool clickable = true)
         {
             var btn = new IS_BTN
             {
@@ -122,11 +138,11 @@ namespace AHPP_AI.UI
                 UCID = 0,
                 ClickID = id,
                 Inst = 0,
-                BStyle = ButtonStyles.ISB_DARK | ButtonStyles.ISB_CLICK,
+                BStyle = clickable ? ButtonStyles.ISB_DARK | ButtonStyles.ISB_CLICK : ButtonStyles.ISB_DARK,
                 L = left,
                 T = top,
-                W = BTN_W,
-                H = ROW_HEIGHT,
+                W = width,
+                H = height,
                 Text = text
             };
             insim.Send(btn);
@@ -198,6 +214,51 @@ namespace AHPP_AI.UI
                     : option.name;
                 CreateButton(option.id, text, left, SELECT_ROW);
             }
+        }
+
+        /// <summary>
+        /// Render route buttons for selecting a recorded route to visualize.
+        /// </summary>
+        private void RenderVisualizationRouteSelectors()
+        {
+            if (!uiInitialized) return;
+
+            var maxButtons = GetVisualizationRouteButtonCapacity();
+            var count = Math.Min(visualizationRouteButtons.Count, maxButtons);
+
+            for (var i = 0; i < count; i++)
+            {
+                var option = visualizationRouteButtons[i];
+                var column = i % VISUAL_ROUTE_COLUMNS;
+                var row = i / VISUAL_ROUTE_COLUMNS;
+                var left = column == 0 ? LEFT_COL : RIGHT_COL;
+                var top = (byte)(VISUAL_ROUTE_START_ROW + row * ROW_HEIGHT);
+                DeleteButton(option.id);
+                var text = option.name.Equals(selectedVisualizationRoute, StringComparison.OrdinalIgnoreCase)
+                    ? $"[{option.name}]"
+                    : option.name;
+                CreateButton(option.id, text, left, top);
+            }
+        }
+
+        /// <summary>
+        /// Render the detail selector used for visualization sampling.
+        /// </summary>
+        private void RenderVisualizationDetailControls()
+        {
+            if (!uiInitialized) return;
+
+            var left = LEFT_COL;
+            DeleteButton(VisualizationDetailMinusId);
+            DeleteButton(VisualizationDetailPlusId);
+            DeleteButton(VisualizationDetailLabelId);
+
+            CreateButton(VisualizationDetailMinusId, "-", left, VISUAL_DETAIL_ROW, DETAIL_BTN_W);
+            left = (byte)(left + DETAIL_BTN_W + DETAIL_BTN_SPACING);
+            CreateButton(VisualizationDetailLabelId, $"Detail x{visualizationDetailStep}", left, VISUAL_DETAIL_ROW,
+                DETAIL_LABEL_W, ROW_HEIGHT, false);
+            left = (byte)(left + DETAIL_LABEL_W + DETAIL_BTN_SPACING);
+            CreateButton(VisualizationDetailPlusId, "+", left, VISUAL_DETAIL_ROW, DETAIL_BTN_W);
         }
 
         /// <summary>
@@ -278,6 +339,51 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Update the available route buttons to reflect current track/layout for visualization.
+        /// </summary>
+        public void SetVisualizationRouteOptions(IEnumerable<string> routeNames, string preferredSelection)
+        {
+            selectedVisualizationRoute = string.IsNullOrWhiteSpace(preferredSelection)
+                ? selectedVisualizationRoute
+                : preferredSelection;
+            var unique = new List<string>();
+
+            if (routeNames != null)
+            {
+                foreach (var name in routeNames)
+                {
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (unique.Exists(r => r.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+                    unique.Add(name);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(selectedVisualizationRoute) && unique.Count > 0)
+                selectedVisualizationRoute = unique[0];
+
+            if (!string.IsNullOrWhiteSpace(selectedVisualizationRoute) &&
+                !unique.Exists(r => r.Equals(selectedVisualizationRoute, StringComparison.OrdinalIgnoreCase)))
+                unique.Insert(0, selectedVisualizationRoute);
+
+            foreach (var button in visualizationRouteButtons) DeleteButton(button.id);
+            visualizationRouteButtons.Clear();
+            byte id = VISUAL_ROUTE_BUTTON_START_ID;
+            var maxButtons = GetVisualizationRouteButtonCapacity();
+            foreach (var name in unique)
+            {
+                if (visualizationRouteButtons.Count >= maxButtons) break;
+                visualizationRouteButtons.Add((id, name));
+                id++;
+            }
+
+            if (uiInitialized)
+            {
+                RenderVisualizationRouteSelectors();
+                RenderVisualizationDetailControls();
+            }
+        }
+
+        /// <summary>
         /// Map a route selection button ClickID back to the route name it represents.
         /// </summary>
         public bool TryGetRouteNameForButton(byte clickId, out string routeName)
@@ -296,11 +402,48 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Map a visualization route button ClickID back to the route name it represents.
+        /// </summary>
+        public bool TryGetVisualizationRouteNameForButton(byte clickId, out string routeName)
+        {
+            foreach (var button in visualizationRouteButtons)
+            {
+                if (button.id == clickId)
+                {
+                    routeName = button.name;
+                    return true;
+                }
+            }
+
+            routeName = string.Empty;
+            return false;
+        }
+
+        /// <summary>
         /// Get the currently selected recording route name.
         /// </summary>
         public string GetSelectedRoute()
         {
             return selectedRoute;
+        }
+
+        /// <summary>
+        /// Update the selected visualization route name and refresh UI.
+        /// </summary>
+        public void UpdateVisualizationRouteSelection(string routeName)
+        {
+            var normalized = string.IsNullOrWhiteSpace(routeName) ? selectedVisualizationRoute : routeName;
+            selectedVisualizationRoute = normalized;
+            EnsureVisualizationRouteButton(normalized);
+        }
+
+        /// <summary>
+        /// Update the visualization detail step and refresh UI.
+        /// </summary>
+        public void UpdateVisualizationDetail(int detailStep)
+        {
+            visualizationDetailStep = Math.Max(1, detailStep);
+            RenderVisualizationDetailControls();
         }
 
         /// <summary>
@@ -328,6 +471,47 @@ namespace AHPP_AI.UI
 
             RenderRecordingSelectors();
             RenderRecordButton();
+        }
+
+        /// <summary>
+        /// Make sure the selected visualization route has a button so it can be toggled.
+        /// </summary>
+        private void EnsureVisualizationRouteButton(string routeName)
+        {
+            if (visualizationRouteButtons.Exists(b => b.name.Equals(routeName, StringComparison.OrdinalIgnoreCase)))
+            {
+                RenderVisualizationRouteSelectors();
+                RenderVisualizationDetailControls();
+                return;
+            }
+
+            var maxButtons = GetVisualizationRouteButtonCapacity();
+            if (visualizationRouteButtons.Count >= maxButtons)
+            {
+                var removed = visualizationRouteButtons[visualizationRouteButtons.Count - 1];
+                DeleteButton(removed.id);
+                visualizationRouteButtons.RemoveAt(visualizationRouteButtons.Count - 1);
+            }
+
+            visualizationRouteButtons.Insert(0, (VISUAL_ROUTE_BUTTON_START_ID, routeName));
+            for (var i = 0; i < visualizationRouteButtons.Count; i++)
+            {
+                visualizationRouteButtons[i] =
+                    ((byte)(VISUAL_ROUTE_BUTTON_START_ID + i), visualizationRouteButtons[i].name);
+            }
+
+            RenderVisualizationRouteSelectors();
+            RenderVisualizationDetailControls();
+        }
+
+        /// <summary>
+        /// Determine how many visualization route buttons fit in the available grid.
+        /// </summary>
+        private int GetVisualizationRouteButtonCapacity()
+        {
+            var availableRows = (SELECT_ROW - VISUAL_ROUTE_START_ROW) / ROW_HEIGHT;
+            if (availableRows <= 0) availableRows = 1;
+            return availableRows * VISUAL_ROUTE_COLUMNS;
         }
     }
 }

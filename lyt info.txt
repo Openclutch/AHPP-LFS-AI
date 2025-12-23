@@ -1,0 +1,401 @@
+LYT FILES : Live for Speed 0.6H
+=========
+
+Layout File Format for the Live for Speed Racing Simulator.
+This document refers to the .LYT files created in the Autocross Editor.
+The OBJECT BLOCK is also used in the related InSim packets.
+
+
+Changes from 0.6B to 0.6H :
+===========================
+Floating objects allowed
+Added custom start positions
+Adjustable concrete objects included
+Zchar changed to Zbyte - negative values no longer used
+Index 255 now refers only to route checkers
+Index 254 now refers to a restricted area
+Changes to Flags byte in NOTE1 below
+The flags byte in the file header has also changed
+
+
+TYPES :
+=======
+
+1) short : 16 bit signed integer
+2) word  : 16 bit unsigned
+3) char  : 8 bit signed
+4) byte  : 8 bit unsigned
+
+
+FILE DESCRIPTION :
+==================
+
+num   unit    offset  description
+---   ----    ------  -----------
+
+HEADER BLOCK :
+
+6     char    0       LFSLYT              : do not read file if no match
+1     byte    6       version             : do not read file if > 0
+1     byte    7       revision            : do not read file if > 252
+1     word    8       num added objects   : number of OBJECT BLOCKS
+1     byte    10      laps                : number
+1     byte    11      flags               : 7 in new files  - see NOTE4
+......OBJECT BLOCKS
+
+
+OBJECT BLOCK :
+
+1     short   0       X                   : position (1 metre = 16)
+1     short   2       Y                   : position (1 metre = 16)
+1     byte    4       Zbyte               : height (1m = 4) - see NOTE3
+1     byte    5       Flags               : various         - see NOTE1
+1     byte    6       Index               : object index    - see NOTE1/5
+1     byte    7       Heading             : heading         - see NOTE2
+
+
+NOTE1 :
+-------
+For all objects EXCEPT the concrete objects AXO_CONCRETE_SLAB etc.
+
+if (Flags & 0x80) // highest bit of Flags is set
+{
+    // floating object - remains at altitude specified by Zbyte
+}
+
+How to distinguish between physical objects and special control objects
+like start positions, checkpoints, finish line and marshall circles.
+
+if (Index==0) // special control object
+{
+    // Heading has its usual meaning
+
+    // Flags byte :
+    // bits 0 to 1 :
+    // 00 = Start position (if width = 0) or finish line (if width > 0)
+    // 01 = Checkpoint 1
+    // 10 = Checkpoint 2
+    // 11 = Checkpoint 3
+    // bits 2 to 6 :
+    // half width in metres (1 to 31 - shifted left by 2 bits)
+}
+
+if (Index >= 4 && Index < 192) // an object from the list in NOTE5
+{
+    // Heading has its usual meaning
+
+    if (Index >= AXO_TYRE_SINGLE && Index <= AXO_TYRE_STACK4_BIG)
+    {
+        // Tyres - 3 bits refer to colour
+        int x_num = Flags & 0x07; // BLACK, WHITE, RED, BLUE, GREEN, YELLOW
+    }
+
+    if (Index >= AXO_CHALK_LINE && Index <= AXO_CHALK_RIGHT3)
+    {
+        // Chalk - 2 bits refer to colour
+        int x_num = info->Flags & 0x03; // WHITE, RED, BLUE, YELLOW
+    }
+
+    if (Index >= AXO_START_POSITION && Index <= AXO_PIT_START_POINT)
+    {
+        // Start point - 6 bits refer to position index
+        int x_num = info->Flags & 0x3f; // 0 to 47 (start pos 1 to 48)
+    }
+
+    if (Index >= AXO_CONCRETE_SLAB && Index <= AXO_CONCRETE_RAMP_WALL)
+    {
+        // Concrete objects - always floating regardless of 0x80 bit
+        // Flags byte contains various attributes depending on the object
+        // In this version each concrete object has three attributes
+
+        Attributes:
+
+        name     bits        values
+
+        Width  : 0x03 >> 0 : 2, 4, 8, 16
+        Length : 0x0c >> 2 : 2, 4, 8, 16
+        Size X : 0x03 >> 0 : 0.25, 0.5, 0.75, 1
+        Size Y : 0x0c >> 2 : 0.25, 0.5, 0.75, 1
+        Height : 0xf0 >> 4 : 0.25 to 4 in steps of 0.25
+        Pitch  : 0xf0 >> 4 : 0 to 90 in steps of 6 degrees
+        Colour : 0x03 >> 0 : grey / red / blue / yellow
+        Angle  : 0xf0 >> 4 : 5.625 to 90 in steps of 5.625 deg
+
+        Attributes used by each object:
+
+        AXO_CONCRETE_SLAB            : Width  / Length / Pitch
+        AXO_CONCRETE_RAMP            : Width  / Length / Height
+        AXO_CONCRETE_WALL            : Colour / Length / Height
+        AXO_CONCRETE_PILLAR          : Size X / Size Y / Height
+        AXO_CONCRETE_SLAB_WALL       : Colour / Length / Pitch
+        AXO_CONCRETE_RAMP_WALL       : Colour / Length / Height
+        AXO_CONCRETE_SHORT_SLAB_WALL : Colour / Size Y / Pitch
+        AXO_CONCRETE_WEDGE           : Colour / Length / Angle
+    }
+}
+
+if (Index==254) // a marshall circle (restricted area)
+{
+    // Heading has its usual meaning
+
+    // Flags byte :
+    // bits 0 to 1 :
+    // 00 = no marshall
+    // 01 = standing marshall
+    // 10 = marshall pointing left
+    // 11 = marshall pointing right
+    // bits 2 to 6 :
+    // radius in metres (1 to 31 - shifted left by 2 bits)
+}
+
+if (Index==255) // route checker
+{
+    // Heading is used not for heading, but the route index
+
+    // Flags byte :
+    // bits 2 to 6 :
+    // radius in metres (1 to 31 - shifted left by 2 bits)
+}
+
+
+NOTE2 :
+-------
+Heading represents 360 degrees in 256 values.
+
+Heading = (heading_in_degrees + 180) * 256 / 360
+
+128 : heading of zero
+192 : heading of 90 degrees
+0   : heading of 180 degrees
+64  : heading of -90 degrees
+
+
+NOTE3 :
+-------
+About Zbyte, the approximate altitude :
+
+LFS does contact checks to place objects accurately on the ground.
+
+For output purposes : Zbyte indicates the approximate altitude with a value 
+from 0 to 240 (60 metres).
+
+For input purposes : The ground check is performed with a test ray starting 
+from 2 metres above Zbyte.  Using a value lower than 240 allows objects to
+be placed on the road below a bridge, for example.  If you are creating
+objects from scratch and you are not sure of the approximate altitude, you
+can set Zbyte to its maximum value (240).  This will place the object on
+the first physical surface detected below that point.
+
+
+NOTE4 :
+-------
+If the file is saved in the most recent format, the 3 lowest bits of the
+flags byte (in the file header) must be set (total value 7).
+
+bit 0 : file does not need correction for the Blackwood scaling
+bit 1 : file does not need conversion for the new object indices
+bit 2 : file does not need conversion to the 0.6H file format
+
+Some very old layouts may not have bit 0 set.
+Layouts saved up to 0.5Z34 will not have bit 1 set.
+Layouts saved up to 0.6G3 will not have bit 2 set.
+
+
+NOTE5 :
+-------
+The first valid object index is 4 (AXO_CHALK_LINE).
+The gaps are to allow for future objects.
+Valid object indices are all less than 192.
+
+AXO_NULL
+AXO_1
+AXO_2
+AXO_3
+AXO_CHALK_LINE
+AXO_CHALK_LINE2
+AXO_CHALK_AHEAD
+AXO_CHALK_AHEAD2
+AXO_CHALK_LEFT
+AXO_CHALK_LEFT2
+AXO_CHALK_LEFT3
+AXO_CHALK_RIGHT
+AXO_CHALK_RIGHT2
+AXO_CHALK_RIGHT3
+AXO_14
+AXO_15
+AXO_16
+AXO_17
+AXO_18
+AXO_19
+AXO_CONE_RED
+AXO_CONE_RED2
+AXO_CONE_RED3
+AXO_CONE_BLUE
+AXO_CONE_BLUE2
+AXO_CONE_GREEN
+AXO_CONE_GREEN2
+AXO_CONE_ORANGE
+AXO_CONE_WHITE
+AXO_CONE_YELLOW
+AXO_CONE_YELLOW2
+AXO_31
+AXO_32
+AXO_33
+AXO_34
+AXO_35
+AXO_36
+AXO_37
+AXO_38
+AXO_39
+AXO_CONE_PTR_RED
+AXO_CONE_PTR_BLUE
+AXO_CONE_PTR_GREEN
+AXO_CONE_PTR_YELLOW
+AXO_44
+AXO_45
+AXO_46
+AXO_47
+AXO_TYRE_SINGLE
+AXO_TYRE_STACK2
+AXO_TYRE_STACK3
+AXO_TYRE_STACK4
+AXO_TYRE_SINGLE_BIG
+AXO_TYRE_STACK2_BIG
+AXO_TYRE_STACK3_BIG
+AXO_TYRE_STACK4_BIG
+AXO_56
+AXO_57
+AXO_58
+AXO_59
+AXO_60
+AXO_61
+AXO_62
+AXO_63
+AXO_MARKER_CURVE_L
+AXO_MARKER_CURVE_R
+AXO_MARKER_L
+AXO_MARKER_R
+AXO_MARKER_HARD_L
+AXO_MARKER_HARD_R
+AXO_MARKER_L_R
+AXO_MARKER_R_L
+AXO_MARKER_S_L
+AXO_MARKER_S_R
+AXO_MARKER_S2_L
+AXO_MARKER_S2_R
+AXO_MARKER_U_L
+AXO_MARKER_U_R
+AXO_78
+AXO_79
+AXO_80
+AXO_81
+AXO_82
+AXO_83
+AXO_DIST25
+AXO_DIST50
+AXO_DIST75
+AXO_DIST100
+AXO_DIST125
+AXO_DIST150
+AXO_DIST200
+AXO_DIST250
+AXO_92
+AXO_93
+AXO_94
+AXO_95
+AXO_ARMCO1
+AXO_ARMCO3
+AXO_ARMCO5
+AXO_99
+AXO_100
+AXO_101
+AXO_102
+AXO_103
+AXO_BARRIER_LONG
+AXO_BARRIER_RED
+AXO_BARRIER_WHITE
+AXO_107
+AXO_108
+AXO_109
+AXO_110
+AXO_111
+AXO_BANNER1
+AXO_BANNER2
+AXO_114
+AXO_115
+AXO_116
+AXO_117
+AXO_118
+AXO_119
+AXO_RAMP1
+AXO_RAMP2
+AXO_122
+AXO_123
+AXO_124
+AXO_125
+AXO_126
+AXO_127
+AXO_SPEED_HUMP_10M
+AXO_SPEED_HUMP_6M
+AXO_130
+AXO_131
+AXO_132
+AXO_133
+AXO_134
+AXO_135
+AXO_POST_GREEN
+AXO_POST_ORANGE
+AXO_POST_RED
+AXO_POST_WHITE
+AXO_140
+AXO_141
+AXO_142
+AXO_143
+AXO_BALE
+AXO_145
+AXO_146
+AXO_147
+AXO_RAILING
+AXO_START_LIGHTS
+AXO_150
+AXO_151
+AXO_152
+AXO_153
+AXO_154
+AXO_155
+AXO_156
+AXO_157
+AXO_158
+AXO_159
+AXO_SIGN_KEEP_LEFT
+AXO_SIGN_KEEP_RIGHT
+AXO_162
+AXO_163
+AXO_164
+AXO_165
+AXO_166
+AXO_167
+AXO_SIGN_SPEED_80
+AXO_SIGN_SPEED_50
+AXO_170
+AXO_171
+AXO_CONCRETE_SLAB
+AXO_CONCRETE_RAMP
+AXO_CONCRETE_WALL
+AXO_CONCRETE_PILLAR
+AXO_CONCRETE_SLAB_WALL
+AXO_CONCRETE_RAMP_WALL
+AXO_CONCRETE_SHORT_SLAB_WALL
+AXO_CONCRETE_WEDGE
+AXO_180
+AXO_181
+AXO_182
+AXO_183
+AXO_START_POSITION
+AXO_PIT_START_POINT
+AXO_PIT_STOP_BOX
+AXO_187
+AXO_188
+AXO_189
+AXO_190
+AXO_191

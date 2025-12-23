@@ -17,13 +17,15 @@ namespace AHPP_AI.Debug
         // Object IDs from ObjectHelper
         private const byte CHALK_AHEAD = 6; // Chalk arrow that points in the heading direction
         private const byte CONE_RED = 21; // Cone Red
+        private const byte CHALK_COLOR_WHITE = 0; // Flags: white chalk
+        private const byte CHALK_COLOR_RED = 1; // Flags: red chalk
         private const byte CONE_BLUE = 24; // Cone Blue
         private const byte CONE_GREEN = 26; // Cone Green
 
         private const float WAYPOINT_RADIUS = 2.5f; // Radius of waypoint visualization in meters
         private const int CONES_PER_CIRCLE = 0; // Number of cones to place around each waypoint
 
-        private const int MAX_VISIBLE_WAYPOINTS = 3000; // Maximum number of waypoints to visualize
+        public const int MaxVisibleWaypoints = 3600; // Maximum number of waypoints to visualize
 
         // Track active waypoint marker per PLID to remove old ones
         private readonly Dictionary<byte, ObjectInfo> activeWaypointMarkerIds = new Dictionary<byte, ObjectInfo>();
@@ -108,13 +110,13 @@ namespace AHPP_AI.Debug
             var waypointCount = path.Count;
 
             // If too many waypoints, sample them to avoid clutter
-            var step = Math.Max(1, waypointCount / MAX_VISIBLE_WAYPOINTS);
+            var step = Math.Max(1, waypointCount / MaxVisibleWaypoints);
 
             // Start with current waypoint and visualize forward
             var startIdx = 0;
             var placedCount = 0;
 
-            for (var i = 0; i < waypointCount && placedCount < MAX_VISIBLE_WAYPOINTS; i += step)
+            for (var i = 0; i < waypointCount && placedCount < MaxVisibleWaypoints; i += step)
             {
                 var idx = (startIdx + i) % waypointCount;
                 var waypoint = path[idx];
@@ -146,7 +148,7 @@ namespace AHPP_AI.Debug
                 placedCount++;
 
                 // Log every few placed waypoints
-                if (placedCount % 5 == 0 || placedCount == 1 || placedCount == MAX_VISIBLE_WAYPOINTS)
+                if (placedCount % 5 == 0 || placedCount == 1 || placedCount == MaxVisibleWaypoints)
                     logger.Log(
                         $"Placed waypoint visualization {placedCount} at X={centerX:F2}, Y={centerY:F2}, Index={idx}");
             }
@@ -156,9 +158,9 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
-        /// Visualize a recorded route with color-coded cones so it can be edited in the LFS layout editor.
+        /// Visualize a recorded route with configurable sampling to keep layout objects within limits.
         /// </summary>
-        public void VisualizeRecordedRoute(byte plid, RecordedRoute route, bool clearExisting = true)
+        public void VisualizeRecordedRoute(byte plid, RecordedRoute route, int detailStep, bool clearExisting = true)
         {
             if (route == null || route.Nodes == null || route.Nodes.Count == 0)
             {
@@ -179,13 +181,16 @@ namespace AHPP_AI.Debug
                 $"Visualizing recorded route {route.Metadata.Name} ({route.Metadata.Type}) for editing with {waypoints.Count} nodes");
 
             var count = 0;
-            var max = Math.Min(waypoints.Count, MAX_VISIBLE_WAYPOINTS);
-            // Default marker uses Chalk Ahead; color pit entry as red to make it distinct.
-            var markerType = route.Metadata.Type == RouteType.PitEntry ? CONE_RED : CHALK_AHEAD;
-            for (var i = 0; i < max; i++)
+            var step = Math.Max(1, detailStep);
+            var requiredStep = Math.Max(1, (int)Math.Ceiling(waypoints.Count / (double)MaxVisibleWaypoints));
+            var effectiveStep = Math.Max(step, requiredStep);
+            // Default marker uses Chalk Ahead; use red chalk for pit entry routes via flags.
+            var markerType = CHALK_AHEAD;
+            var markerFlags = route.Metadata.Type == RouteType.PitEntry ? CHALK_COLOR_RED : CHALK_COLOR_WHITE;
+            for (var i = 0; i < waypoints.Count && count < MaxVisibleWaypoints; i += effectiveStep)
             {
                 var heading = CalculateHeadingForIndex(waypoints, i, route.Metadata.IsLoop);
-                PlaceEditableWaypoint(plid, waypoints[i], heading, markerType);
+                PlaceEditableWaypoint(plid, waypoints[i], heading, markerType, markerFlags);
                 count++;
             }
 
@@ -230,14 +235,15 @@ namespace AHPP_AI.Debug
         /// <summary>
         /// Place a chalk arrow marker for a recorded route node to support manual editing.
         /// </summary>
-        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading, byte objectType)
+        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading, byte objectType,
+            byte flags = 0)
         {
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
 
             var xMeters = waypoint.Position.X / 65536.0f;
             var yMeters = waypoint.Position.Y / 65536.0f;
 
-            var marker = PlaceObject(plid, objectType, xMeters, yMeters, 0.5f, heading);
+            var marker = PlaceObject(plid, objectType, xMeters, yMeters, 0.5f, heading, flags);
             if (marker != null) placedObjectsByPlid[plid].Add(marker);
         }
 
@@ -307,7 +313,7 @@ namespace AHPP_AI.Debug
         ///     Place an object in the game world
         /// </summary>
         private ObjectInfo PlaceObject(byte plid, byte objectType, float xMeters, float yMeters, float zMeters,
-            byte heading = 0)
+            byte heading = 0, byte flags = 0)
         {
             try
             {
@@ -316,7 +322,7 @@ namespace AHPP_AI.Debug
                 var objZ = (byte)(zMeters * 4);
 
                 logger.Log($"Placing object: {ObjectHelper.GetObjName(objectType)} (Type={objectType}), " +
-                           $"Meters=({xMeters:F2},{yMeters:F2},{zMeters:F2}), Heading={heading}, LYT=({objX},{objY},{objZ})");
+                           $"Meters=({xMeters:F2},{yMeters:F2},{zMeters:F2}), Heading={heading}, Flags={flags}, LYT=({objX},{objY},{objZ})");
 
                 var objInfo = new ObjectInfo
                 {
@@ -324,7 +330,7 @@ namespace AHPP_AI.Debug
                     X = objX,
                     Y = objY,
                     Zbyte = objZ,
-                    Flags = 0,
+                    Flags = flags,
                     Heading = heading
                 };
 
