@@ -136,6 +136,7 @@ namespace AHPP_AI
 
                 // Now initialize debug UI (after InSim is connected)
                 aiController.InitializeDebugUI();
+                aiController.NotifyRouteValidationIssues();
 
                 // Spawn AI cars automatically if debug is enabled
                 if (autoSpawnAI)

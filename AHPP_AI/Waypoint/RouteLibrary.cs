@@ -337,7 +337,8 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Load and normalize all routes within a directory, avoiding duplicates by name.
         /// </summary>
-        private void LoadRoutesFromDirectory(string directory, List<RecordedRoute> routes, HashSet<string> seenNames)
+        private void LoadRoutesFromDirectory(string directory, List<RecordedRoute> routes, HashSet<string> seenNames,
+            List<string> duplicateNames = null)
         {
             try
             {
@@ -349,11 +350,16 @@ namespace AHPP_AI.Waypoint
                     {
                         var json = File.ReadAllText(file);
                         var name = Path.GetFileNameWithoutExtension(file);
-                        if (seenNames != null && seenNames.Contains(name)) continue;
+                        var normalizedName = NormalizeRouteName(name);
+                        if (seenNames != null && seenNames.Contains(normalizedName))
+                        {
+                            duplicateNames?.Add(normalizedName);
+                            continue;
+                        }
 
                         var route = NormalizeRoute(ParseRoute(json, name), name);
                         routes.Add(route);
-                        seenNames?.Add(route.Metadata?.Name ?? name);
+                        seenNames?.Add(route.Metadata?.Name ?? normalizedName);
                     }
                     catch (Exception ex)
                     {
@@ -372,16 +378,25 @@ namespace AHPP_AI.Waypoint
         /// </summary>
         public List<RecordedRoute> ListRoutes()
         {
+            return ListRoutes(out _);
+        }
+
+        /// <summary>
+        /// Enumerate recorded routes for the current track/layout context and track duplicate names.
+        /// </summary>
+        public List<RecordedRoute> ListRoutes(out List<string> duplicateNames)
+        {
             var contextPath = GetContextPath();
             EnsureContextPath(contextPath);
             var routes = new List<RecordedRoute>();
             var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            LoadRoutesFromDirectory(contextPath, routes, seenNames);
+            duplicateNames = new List<string>();
+            LoadRoutesFromDirectory(contextPath, routes, seenNames, duplicateNames);
 
             var legacyPath = routesRoot;
             if (!contextPath.Equals(legacyPath, StringComparison.OrdinalIgnoreCase))
             {
-                LoadRoutesFromDirectory(legacyPath, routes, seenNames);
+                LoadRoutesFromDirectory(legacyPath, routes, seenNames, duplicateNames);
             }
 
             return routes;

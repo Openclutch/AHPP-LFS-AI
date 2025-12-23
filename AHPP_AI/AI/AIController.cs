@@ -1187,7 +1187,48 @@ namespace AHPP_AI.AI
             }
 
             RefreshRouteOptions(recordingRouteName);
+            NotifyRouteValidationIssues();
             logger.Log("Routes reloaded and reapplied to active AIs");
+        }
+
+        /// <summary>
+        /// Inform the connected user about detected route validation issues.
+        /// </summary>
+        public void NotifyRouteValidationIssues()
+        {
+            var issues = pathManager.ValidationIssues;
+            if (issues == null || issues.Count == 0) return;
+
+            SendIssueSummary("Route errors", RouteValidationSeverity.Error, issues);
+            SendIssueSummary("Route warnings", RouteValidationSeverity.Warning, issues);
+        }
+
+        /// <summary>
+        /// Send a compact summary of issues through InSim chat.
+        /// </summary>
+        private void SendIssueSummary(string label, RouteValidationSeverity severity,
+            IReadOnlyCollection<RouteValidationIssue> issues)
+        {
+            var filtered = issues.Where(i => i.Severity == severity).ToList();
+            if (filtered.Count == 0) return;
+
+            var summary = BuildIssueSummary(filtered);
+            insim.Send(new IS_MST { Msg = $"{label}: {summary}" });
+        }
+
+        /// <summary>
+        /// Build a concise string for validation issues, trimming to chat-friendly length.
+        /// </summary>
+        private static string BuildIssueSummary(IReadOnlyCollection<RouteValidationIssue> issues)
+        {
+            if (issues == null || issues.Count == 0) return string.Empty;
+
+            const int maxLength = 120;
+            var parts = issues.Take(3).Select(i => i.Message).ToList();
+            var summary = string.Join(" | ", parts);
+            if (issues.Count > parts.Count) summary += $" (+{issues.Count - parts.Count} more)";
+            if (summary.Length > maxLength) summary = summary.Substring(0, maxLength - 3) + "...";
+            return summary;
         }
 
         /// <summary>
