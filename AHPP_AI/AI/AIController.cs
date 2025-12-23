@@ -39,9 +39,11 @@ namespace AHPP_AI.AI
         private readonly PathManager pathManager;
         private readonly RouteRecorder routeRecorder;
         private readonly RouteLibrary routeLibrary;
+        private readonly AILightController lightController;
         private readonly Dictionary<string, RouteMetadata> routePresets = new Dictionary<string, RouteMetadata>(StringComparer.OrdinalIgnoreCase);
         private readonly MainUI mainUI;
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Random branchRandom = new Random();
         private readonly OutGauge outGauge;
 
@@ -85,7 +87,8 @@ namespace AHPP_AI.AI
             var steeringCalculator = new SteeringCalculator(logger);
             waypointFollower = new WaypointFollower(config, logger, steeringCalculator);
             gearboxController = new GearboxController(config, logger);
-            driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim);
+            lightController = new AILightController(insim, logger);
+            driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim, lightController);
             driver.SetRecoveryFailedHandler(ResetAI);
             mainUI = new MainUI(insim, logger);
             routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
@@ -292,6 +295,46 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Manually set indicator state for an AI with optional auto-cancel.
+        /// </summary>
+        public void SetIndicators(byte plid, AILightController.IndicatorState state, TimeSpan? duration = null)
+        {
+            lightController.SetIndicators(plid, state, duration);
+        }
+
+        /// <summary>
+        /// Toggle hazard lights for an AI driver.
+        /// </summary>
+        public void SetHazards(byte plid, bool enabled, TimeSpan? duration = null)
+        {
+            lightController.SetHazards(plid, enabled, duration);
+        }
+
+        /// <summary>
+        /// Change the headlight mode (off/side/low/high) for an AI.
+        /// </summary>
+        public void SetHeadlights(byte plid, AILightController.HeadlightMode mode)
+        {
+            lightController.SetHeadlights(plid, mode);
+        }
+
+        /// <summary>
+        /// Flash the high beams on a specific AI for a short burst.
+        /// </summary>
+        public void FlashHighBeams(byte plid, byte durationHundredths = 15)
+        {
+            lightController.FlashHighBeams(plid, durationHundredths);
+        }
+
+        /// <summary>
+        /// Sound the horn on a specific AI car.
+        /// </summary>
+        public void Honk(byte plid, byte hornTone = 1, byte durationHundredths = 20)
+        {
+            lightController.Honk(plid, hornTone, durationHundredths);
+        }
+
+        /// <summary>
         /// Set the minimum distance in meters between recorded points.
         /// </summary>
         public void SetRecordingInterval(double meters)
@@ -345,6 +388,7 @@ namespace AHPP_AI.AI
             aiSpawnPositions.Remove(plid);
             engineStateMap.Remove(plid);
             currentRoute.Remove(plid);
+            activeBranchSelections.Remove(plid);
 
             insim.Send(new IS_MST { Msg = "/ai" });
             logger.Log($"Reset AI {plid} after max recovery attempts; spawned replacement");
@@ -435,6 +479,79 @@ namespace AHPP_AI.AI
             return closestIndex;
         }
 
+        /// <summary>
+        /// Determine indicator direction for a lane/route change by comparing path vectors.
+        /// </summary>
+        private AILightController.IndicatorState DetermineIndicatorDirection(
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath,
+            int targetIndex)
+        {
+            var fromVector = GetDirectionVector(fromPath, fromIndex);
+            var targetVector = GetDirectionVector(targetPath, targetIndex);
+            var fromPoint = GetWaypointPosition(fromPath, fromIndex);
+            var targetPoint = GetWaypointPosition(targetPath, targetIndex);
+            var offsetVector = NormalizeVector(targetPoint.x - fromPoint.x, targetPoint.y - fromPoint.y);
+
+            // Prefer lateral offset to decide side; fall back to heading difference.
+            var sideScore = Cross(fromVector, offsetVector);
+            if (Math.Abs(sideScore) < 0.01) sideScore = Cross(fromVector, targetVector);
+
+            if (Math.Abs(sideScore) < 0.01) return AILightController.IndicatorState.Hazard;
+
+            return sideScore > 0 ? AILightController.IndicatorState.Left : AILightController.IndicatorState.Right;
+        }
+
+        /// <summary>
+        /// Send a timed indicator signal for a lane or branch change with logging.
+        /// </summary>
+        private void SignalLaneChange(
+            byte plid,
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath,
+            int targetIndex,
+            string description)
+        {
+            var indicator = DetermineIndicatorDirection(fromPath, fromIndex, targetPath, targetIndex);
+            lightController.SetIndicators(plid, indicator, TimeSpan.FromSeconds(5));
+            logger.Log($"PLID={plid} ROUTE CHANGE: {description} using indicator {indicator}");
+        }
+
+        private static (double x, double y) GetDirectionVector(List<Util.Waypoint> path, int index)
+        {
+            if (path == null || path.Count < 2) return (0, 0);
+
+            var startIndex = Math.Max(0, Math.Min(path.Count - 1, index));
+            var endIndex = (startIndex + 1) % path.Count;
+            var start = path[startIndex].Position;
+            var end = path[endIndex].Position;
+            return NormalizeVector(
+                (end.X - start.X) / 65536.0,
+                (end.Y - start.Y) / 65536.0);
+        }
+
+        private static (double x, double y) GetWaypointPosition(List<Util.Waypoint> path, int index)
+        {
+            if (path == null || path.Count == 0) return (0, 0);
+            var clamped = Math.Max(0, Math.Min(path.Count - 1, index));
+            var pos = path[clamped].Position;
+            return (pos.X / 65536.0, pos.Y / 65536.0);
+        }
+
+        private static (double x, double y) NormalizeVector(double dx, double dy)
+        {
+            var magnitude = Math.Sqrt(dx * dx + dy * dy);
+            if (magnitude < 0.0001) return (0, 0);
+            return (dx / magnitude, dy / magnitude);
+        }
+
+        private static double Cross((double x, double y) a, (double x, double y) b)
+        {
+            return a.x * b.y - a.y * b.x;
+        }
+
         public void SetNumberOfAIs(int count)
         {
             config.NumberOfAIs = Math.Max(0, count);
@@ -470,6 +587,10 @@ namespace AHPP_AI.AI
             var plid = aiPLIDs[aiPLIDs.Count - 1];
             insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             aiPLIDs.Remove(plid);
+            aiSpawnPositions.Remove(plid);
+            engineStateMap.Remove(plid);
+            currentRoute.Remove(plid);
+            activeBranchSelections.Remove(plid);
             mainUI.UpdateAIList(GetAiTuples());
         }
 
@@ -481,6 +602,7 @@ namespace AHPP_AI.AI
             aiSpawnPositions.Remove(plid);
             engineStateMap.Remove(plid);
             currentRoute.Remove(plid);
+            activeBranchSelections.Remove(plid);
             mainUI.UpdateAIList(GetAiTuples());
         }
 
@@ -505,6 +627,10 @@ namespace AHPP_AI.AI
                 insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             }
             aiPLIDs.Clear();
+            aiSpawnPositions.Clear();
+            engineStateMap.Clear();
+            currentRoute.Clear();
+            activeBranchSelections.Clear();
             mainUI.UpdateAIList(GetAiTuples());
         }
 
@@ -551,6 +677,40 @@ namespace AHPP_AI.AI
             {
                 waypointFollower.SetManualTargetSpeed(plid, speed);
             }
+        }
+
+        /// <summary>
+        /// Request a lane change onto a specific recorded branch route and signal accordingly.
+        /// </summary>
+        public bool TrySwitchToBranch(byte plid, string branchName)
+        {
+            if (!aiPLIDs.Contains(plid)) return false;
+            if (!pathManager.TryGetBranchByName(branchName, out var branchInfo))
+            {
+                logger.LogWarning($"No branch named {branchName} available for lane change.");
+                return false;
+            }
+
+            var car = Array.Find(allCars, c => c.PLID == plid);
+            if (car.PLID == 0)
+            {
+                logger.LogWarning($"Cannot switch AI {plid} to {branchName}: no MCI data.");
+                return false;
+            }
+
+            SignalLaneChange(
+                plid,
+                pathManager.MainRoute,
+                branchInfo.StartIndex,
+                branchInfo.Path,
+                0,
+                $"Manual lane change to {branchName}");
+
+            var bestIndex = FindClosestIndex(branchInfo.Path, car);
+            waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+            currentRoute[plid] = "branch";
+            activeBranchSelections[plid] = branchInfo;
+            return true;
         }
 
         /// <summary>
@@ -780,19 +940,59 @@ namespace AHPP_AI.AI
                 }
                 else if (routeName == "main")
                 {
-                    if (pathManager.TryGetBranch(targetIndex, out var branchPath) && branchRandom.NextDouble() < 0.5)
+                    if (pathManager.TryGetBranch(targetIndex, out var branchInfo) && branchRandom.NextDouble() < 0.5)
                     {
-                        var bestIndex = FindClosestIndex(branchPath, car);
-                        waypointFollower.SetPath(plid, branchPath, bestIndex);
+                        SignalLaneChange(
+                            plid,
+                            pathManager.MainRoute,
+                            targetIndex,
+                            branchInfo.Path,
+                            0,
+                            $"Taking branch {branchInfo.Name}");
+
+                        var bestIndex = FindClosestIndex(branchInfo.Path, car);
+                        waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
                         currentRoute[plid] = "branch";
+                        activeBranchSelections[plid] = branchInfo;
                     }
                 }
                 else if (routeName == "branch")
                 {
                     var path = waypointFollower.GetPath(plid);
+                    if (path == null || path.Count == 0)
+                    {
+                        logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
+                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        activeBranchSelections.Remove(plid);
+                        currentRoute[plid] = "main";
+                        return;
+                    }
+
                     if (targetIndex >= path.Count - 1)
                     {
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+
+                        if (activeBranchSelections.TryGetValue(plid, out var branchInfo))
+                        {
+                            var hintedIndex = pathManager.MainRoute.Count == 0
+                                ? 0
+                                : Math.Max(
+                                    0,
+                                    Math.Min(pathManager.MainRoute.Count - 1, branchInfo.RejoinIndex));
+                            bestIndex = hintedIndex;
+
+                            var approachIndex = Math.Max(0, path.Count - 2);
+                            SignalLaneChange(
+                                plid,
+                                path,
+                                approachIndex,
+                                pathManager.MainRoute,
+                                bestIndex,
+                                $"Rejoining main from {branchInfo.Name}");
+
+                            activeBranchSelections.Remove(plid);
+                        }
+
                         waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
                         currentRoute[plid] = "main";
                     }

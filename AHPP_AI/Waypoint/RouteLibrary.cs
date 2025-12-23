@@ -19,13 +19,32 @@ namespace AHPP_AI.Waypoint
         public RouteLibrary(Logger logger)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            basePath = AppDomain.CurrentDomain.BaseDirectory;
+            basePath = InitializeBasePath();
             serializerOptions = new JsonSerializerOptions
             {
                 WriteIndented = true,
                 PropertyNameCaseInsensitive = true
             };
             serializerOptions.Converters.Add(new JsonStringEnumConverter());
+        }
+
+        /// <summary>
+        /// Determine and create the folder used to store route files.
+        /// Prefers a Routes subdirectory beside the executable for easy sharing.
+        /// </summary>
+        private string InitializeBasePath()
+        {
+            var routesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Routes");
+            try
+            {
+                Directory.CreateDirectory(routesPath);
+                return routesPath;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Could not create Routes folder at {routesPath}: {ex.Message}");
+                return AppDomain.CurrentDomain.BaseDirectory;
+            }
         }
 
         /// <summary>

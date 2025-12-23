@@ -59,6 +59,7 @@ namespace AHPP_AI.AI
 
         private readonly Dictionary<byte, DateTime> engineStateTimers = new Dictionary<byte, DateTime>();
         private readonly GearboxController gearboxController;
+        private readonly AILightController lightController;
         private readonly InSimClient insim;
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
@@ -87,13 +88,15 @@ namespace AHPP_AI.AI
             Logger logger,
             WaypointFollower waypointFollower,
             GearboxController gearboxController,
-            InSimClient insim)
+            InSimClient insim,
+            AILightController lightController)
         {
             this.config = config;
             this.logger = logger;
             this.waypointFollower = waypointFollower;
             this.gearboxController = gearboxController;
             this.insim = insim;
+            this.lightController = lightController;
         }
 
         public void SetRecoveryFailedHandler(Action<byte> handler)
@@ -111,6 +114,11 @@ namespace AHPP_AI.AI
             engineRunning[plid] = false; // Always start with engine "not running" to trigger start procedure
             engineStartStates[plid] = EngineStartState.PressClutch; // Start in clutch pressed state
             engineStateTimers[plid] = DateTime.Now;
+
+            // Reset lights and set a sensible default
+            lightController?.Reset(plid);
+            lightController?.SetHeadlights(plid, AILightController.HeadlightMode.LowBeam);
+            lightController?.CancelIndicators(plid);
 
             // Initialize wall recovery state
             wallRecoveryStates[plid] = WallRecoveryState.Normal;
@@ -140,6 +148,8 @@ namespace AHPP_AI.AI
         {
             try
             {
+                lightController?.Update(plid);
+
                 // Initialize path if needed
                 if (!waypointFollower.InitializePath(plid, car, waypointManager, config, layoutObjects))
                     return;

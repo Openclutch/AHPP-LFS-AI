@@ -1,5 +1,9 @@
 # Changelog
 
+- Added an AI light controller so headlights, high beams, hazards, indicators, and horn can be driven per-car with helper methods.
+- Lane/branch changes now trigger timed indicators (including manual branch switching support) so AIs signal before moving to alternate routes.
+- Guard waypoint targeting when no valid path is available so AI control no longer crashes on divide-by-zero errors.
+- Added a dedicated `Routes` folder (copied to build output) so recorded waypoint JSONs can be versioned and reviewed.
 - Cleaned the AI debug panel by removing unused buttons, clarifying labels, and adding inline inputs for AI count and speed.
 - Fixed type-in buttons so their labels are visible on-screen while also titling the dialog.
 - Validated AI count/speed entries and send chat confirmations when spawning AIs or updating their target speed from the UI.

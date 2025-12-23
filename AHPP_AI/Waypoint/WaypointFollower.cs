@@ -639,6 +639,12 @@ namespace AHPP_AI.Waypoint
             }
 
             // Normal waypoint targeting
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0)
+            {
+                logger.LogError($"PLID={plid} CalculateTargetData called without a valid path");
+                return (double.MaxValue, currentHeading, 0);
+            }
+
             if (!targetWaypointIndices.ContainsKey(plid))
                 targetWaypointIndices[plid] = 0;
 

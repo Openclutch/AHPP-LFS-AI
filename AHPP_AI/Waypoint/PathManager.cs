@@ -7,6 +7,18 @@ using AHPP_AI.Debug;
 namespace AHPP_AI.Waypoint
 {
     /// <summary>
+    /// Describes a detour branch with metadata and start/end indices on the main route.
+    /// </summary>
+    public class BranchRouteInfo
+    {
+        public string Name { get; set; }
+        public List<Util.Waypoint> Path { get; set; }
+        public int StartIndex { get; set; }
+        public int RejoinIndex { get; set; }
+        public RouteMetadata Metadata { get; set; }
+    }
+
+    /// <summary>
     /// Maintains the different traffic routes for AI including spawn, main loop and optional branches.
     /// </summary>
     public class PathManager
@@ -18,16 +30,8 @@ namespace AHPP_AI.Waypoint
         public List<Util.Waypoint> SpawnRoute { get; private set; } = new List<Util.Waypoint>();
         public List<Util.Waypoint> MainRoute { get; private set; } = new List<Util.Waypoint>();
 
-        private readonly Dictionary<string, BranchRoute> branches = new Dictionary<string, BranchRoute>();
-
-        private class BranchRoute
-        {
-            public string Name { get; set; }
-            public List<Util.Waypoint> Path { get; set; }
-            public int StartIndex { get; set; }
-            public int RejoinIndex { get; set; }
-            public RouteMetadata Metadata { get; set; }
-        }
+        private readonly Dictionary<string, BranchRouteInfo> branches =
+            new Dictionary<string, BranchRouteInfo>(StringComparer.OrdinalIgnoreCase);
 
         public PathManager(WaypointManager waypointManager, Logger logger)
         {
@@ -69,7 +73,7 @@ namespace AHPP_AI.Waypoint
                 var metadata = waypointManager.GetRecordedRoute(name)?.Metadata;
                 var startIndex = metadata?.AttachMainIndex ?? FindNearestIndex(MainRoute, path[0]);
                 var rejoinIndex = metadata?.RejoinMainIndex ?? FindNearestIndex(MainRoute, path[path.Count - 1]);
-                branches[name] = new BranchRoute
+                branches[name] = new BranchRouteInfo
                 {
                     Name = name,
                     Path = path,
@@ -106,18 +110,32 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Check if there is a branch starting at the given main route index.
         /// </summary>
-        public bool TryGetBranch(int mainIndex, out List<Util.Waypoint> branchPath)
+        public bool TryGetBranch(int mainIndex, out BranchRouteInfo branchInfo)
         {
             foreach (var b in branches.Values)
             {
                 if (b.StartIndex == mainIndex)
                 {
-                    branchPath = b.Path;
+                    branchInfo = b;
                     return true;
                 }
             }
-            branchPath = null;
+            branchInfo = null;
             return false;
+        }
+
+        /// <summary>
+        /// Find a branch by name for manual selection (case-insensitive).
+        /// </summary>
+        public bool TryGetBranchByName(string name, out BranchRouteInfo branchInfo)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                branchInfo = null;
+                return false;
+            }
+
+            return branches.TryGetValue(name, out branchInfo);
         }
 
         /// <summary>
