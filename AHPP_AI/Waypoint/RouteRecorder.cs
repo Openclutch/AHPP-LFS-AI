@@ -140,6 +140,8 @@ namespace AHPP_AI.Waypoint
                 Name = metadata.Name,
                 Type = metadata.Type,
                 Description = metadata.Description,
+                Track = metadata.Track,
+                Layout = metadata.Layout,
                 IsLoop = metadata.IsLoop,
                 AttachMainIndex = metadata.AttachMainIndex,
                 RejoinMainIndex = metadata.RejoinMainIndex,

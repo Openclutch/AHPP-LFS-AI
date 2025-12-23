@@ -25,22 +25,19 @@ namespace AHPP_AI.UI
         private const byte SELECT_BTN_SPACING = 2;
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
+        private const byte ROUTE_NAME_ROW = 160;
         private const byte REMOVE_BTN_W = 6;
 
         public const byte AddAiDialogId = 150;
         public const byte SpeedInputId = 151;
         public const byte RecordingIntervalId = 152;
+        public const byte RouteNameInputId = 153;
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
-        private readonly (byte id, string name, string label)[] routeOptions =
-        {
-            (11, "main_loop", "Main"),
-            (12, "pit_entry", "Pit"),
-            (13, "detour1", "Detour1"),
-            (14, "detour2", "Detour2"),
-            (15, "detour3", "Detour3")
-        };
+        private readonly List<(byte id, string name)> routeButtons = new List<(byte id, string name)>();
+        private const byte ROUTE_BUTTON_START_ID = 11;
+        private const byte ROUTE_BUTTON_MAX_COUNT = 8;
 
         private string selectedRoute = "main_loop";
         private bool isRecording;
@@ -69,6 +66,7 @@ namespace AHPP_AI.UI
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
+            CreateInputButton(RouteNameInputId, RIGHT_COL, ROUTE_NAME_ROW, "Route Name", 24);
             CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(104, "Pit All AI", RIGHT_COL, row);
@@ -153,7 +151,7 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Create a type-in text field style button for numeric input.
         /// </summary>
-        private void CreateInputButton(byte id, byte left, byte top, string caption)
+        private void CreateInputButton(byte id, byte left, byte top, string caption, byte typeIn = 3)
         {
             var btn = new IS_BTN
             {
@@ -162,7 +160,7 @@ namespace AHPP_AI.UI
                 ClickID = id,
                 Inst = 0,
                 BStyle = ButtonStyles.ISB_DARK | ButtonStyles.ISB_CLICK,
-                TypeIn = 3,
+                TypeIn = typeIn,
                 L = left,
                 T = top,
                 W = BTN_W,
@@ -181,17 +179,23 @@ namespace AHPP_AI.UI
         {
             if (!uiInitialized) return;
 
-            byte totalWidth = (byte)(routeOptions.Length * SELECT_BTN_W + (routeOptions.Length - 1) * SELECT_BTN_SPACING);
+            if (routeButtons.Count == 0)
+            {
+                SetRouteOptions(new[] { "main_loop", "pit_entry" }, selectedRoute);
+                return;
+            }
+
+            byte totalWidth = (byte)(routeButtons.Count * SELECT_BTN_W + (routeButtons.Count - 1) * SELECT_BTN_SPACING);
             var startLeft = (byte)Math.Max(0, (200 - totalWidth) / 2);
 
-            for (var i = 0; i < routeOptions.Length; i++)
+            for (var i = 0; i < routeButtons.Count; i++)
             {
-                var option = routeOptions[i];
+                var option = routeButtons[i];
                 var left = (byte)(startLeft + i * (SELECT_BTN_W + SELECT_BTN_SPACING));
-                var text = option.name.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)
-                    ? $"[{option.label}]"
-                    : option.label;
                 DeleteButton(option.id);
+                var text = option.name.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)
+                    ? $"[{option.name}]"
+                    : option.name;
                 CreateButton(option.id, text, left, SELECT_ROW);
             }
         }
@@ -216,9 +220,9 @@ namespace AHPP_AI.UI
         /// </summary>
         public void UpdateRecordingRouteSelection(string routeName)
         {
-            selectedRoute = string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName;
-            RenderRecordingSelectors();
-            RenderRecordButton();
+            var normalized = string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName;
+            selectedRoute = normalized;
+            EnsureRouteButton(normalized);
         }
 
         /// <summary>
@@ -233,6 +237,96 @@ namespace AHPP_AI.UI
 
             isRecording = recording;
             recordedPoints = Math.Max(0, pointCount);
+            RenderRecordButton();
+        }
+
+        /// <summary>
+        /// Update the available route buttons to reflect current track/layout.
+        /// </summary>
+        public void SetRouteOptions(IEnumerable<string> routeNames, string preferredSelection)
+        {
+            selectedRoute = string.IsNullOrWhiteSpace(preferredSelection) ? selectedRoute : preferredSelection;
+            var unique = new List<string>();
+
+            if (routeNames != null)
+            {
+                foreach (var name in routeNames)
+                {
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (unique.Exists(r => r.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+                    unique.Add(name);
+                }
+            }
+
+            if (!unique.Exists(r => r.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)))
+                unique.Insert(0, selectedRoute);
+
+            routeButtons.Clear();
+            byte id = ROUTE_BUTTON_START_ID;
+            foreach (var name in unique)
+            {
+                if (routeButtons.Count >= ROUTE_BUTTON_MAX_COUNT) break;
+                routeButtons.Add((id, name));
+                id++;
+            }
+
+            if (uiInitialized)
+            {
+                RenderRecordingSelectors();
+                RenderRecordButton();
+            }
+        }
+
+        /// <summary>
+        /// Map a route selection button ClickID back to the route name it represents.
+        /// </summary>
+        public bool TryGetRouteNameForButton(byte clickId, out string routeName)
+        {
+            foreach (var button in routeButtons)
+            {
+                if (button.id == clickId)
+                {
+                    routeName = button.name;
+                    return true;
+                }
+            }
+
+            routeName = string.Empty;
+            return false;
+        }
+
+        /// <summary>
+        /// Get the currently selected recording route name.
+        /// </summary>
+        public string GetSelectedRoute()
+        {
+            return selectedRoute;
+        }
+
+        /// <summary>
+        /// Make sure the selected route has a button so it can be toggled.
+        /// </summary>
+        private void EnsureRouteButton(string routeName)
+        {
+            if (routeButtons.Exists(b => b.name.Equals(routeName, StringComparison.OrdinalIgnoreCase)))
+            {
+                RenderRecordingSelectors();
+                RenderRecordButton();
+                return;
+            }
+
+            if (routeButtons.Count >= ROUTE_BUTTON_MAX_COUNT)
+            {
+                routeButtons.RemoveAt(routeButtons.Count - 1);
+            }
+
+            routeButtons.Insert(0, (ROUTE_BUTTON_START_ID, routeName));
+            for (var i = 0; i < routeButtons.Count; i++)
+            {
+                routeButtons[i] = ((byte)(ROUTE_BUTTON_START_ID + i), routeButtons[i].name);
+            }
+
+            RenderRecordingSelectors();
             RenderRecordButton();
         }
     }

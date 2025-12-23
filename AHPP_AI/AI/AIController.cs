@@ -46,6 +46,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Random branchRandom = new Random();
         private readonly OutGauge outGauge;
+        private string recordingRouteName = "main_loop";
 
         private float playerThrottle;
         private float playerBrake;
@@ -77,7 +78,7 @@ namespace AHPP_AI.AI
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
 
-            pathManager = new PathManager(waypointManager, logger);
+            pathManager = new PathManager(waypointManager, logger, routeLibrary);
             pathManager.LoadRoutes(config);
 
             // Initialize debug UI if enabled
@@ -161,6 +162,8 @@ namespace AHPP_AI.AI
                 Name = metadata.Name,
                 Type = metadata.Type,
                 Description = metadata.Description,
+                Track = metadata.Track,
+                Layout = metadata.Layout,
                 IsLoop = metadata.IsLoop,
                 AttachMainIndex = metadata.AttachMainIndex,
                 RejoinMainIndex = metadata.RejoinMainIndex,
@@ -191,12 +194,15 @@ namespace AHPP_AI.AI
                 };
             }
 
+            metadata.Name = routeLibrary.NormalizeRouteName(metadata.Name);
             if (type != RouteType.Unknown) metadata.Type = type;
             if (metadata.Type == RouteType.MainLoop) metadata.IsLoop = true;
             if (attachIndex.HasValue) metadata.AttachMainIndex = attachIndex;
             if (rejoinIndex.HasValue) metadata.RejoinMainIndex = rejoinIndex;
             if (metadata.Type == RouteType.Unknown) metadata.Type = routeLibrary.GuessRouteType(metadata.Name);
             if (!metadata.DefaultSpeedLimit.HasValue) metadata.DefaultSpeedLimit = 60;
+            if (string.IsNullOrWhiteSpace(metadata.Track)) metadata.Track = routeLibrary.TrackCode;
+            if (string.IsNullOrWhiteSpace(metadata.Layout)) metadata.Layout = routeLibrary.LayoutName;
 
             return metadata;
         }
@@ -245,6 +251,8 @@ namespace AHPP_AI.AI
             int? rejoinIndex = null)
         {
             var metadata = BuildRecordingMetadata(name, type, attachIndex, rejoinIndex);
+            recordingRouteName = metadata.Name;
+            RefreshRouteOptions(recordingRouteName);
             routeRecorder.Start(metadata);
         }
 
@@ -268,7 +276,80 @@ namespace AHPP_AI.AI
         /// </summary>
         public void SetRecordingRouteSelection(string routeName)
         {
-            mainUI?.UpdateRecordingRouteSelection(routeName);
+            recordingRouteName = routeLibrary.NormalizeRouteName(
+                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            mainUI?.UpdateRecordingRouteSelection(recordingRouteName);
+            RefreshRouteOptions(recordingRouteName);
+        }
+
+        /// <summary>
+        /// Refresh available route selection buttons based on the current track/layout context.
+        /// </summary>
+        public void RefreshRouteOptions(string preferredSelection = null)
+        {
+            var selection = string.IsNullOrWhiteSpace(preferredSelection)
+                ? recordingRouteName
+                : routeLibrary.NormalizeRouteName(preferredSelection);
+
+            var options = new List<string>();
+            AddOption(options, config.MainRouteName);
+            AddOption(options, config.SpawnRouteName);
+
+            try
+            {
+                var routes = routeLibrary.ListRoutes();
+                foreach (var route in routes)
+                {
+                    AddOption(options, route?.Metadata?.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to refresh route options from disk");
+            }
+
+            AddOption(options, selection);
+            mainUI?.SetRouteOptions(options, selection);
+        }
+
+        /// <summary>
+        /// Map a UI button click back to the recording route it represents.
+        /// </summary>
+        public bool TryGetRouteNameForButton(byte clickId, out string routeName)
+        {
+            if (mainUI == null)
+            {
+                routeName = string.Empty;
+                return false;
+            }
+
+            return mainUI.TryGetRouteNameForButton(clickId, out routeName);
+        }
+
+        /// <summary>
+        /// Add a route name to the provided list if it is valid and not already present.
+        /// </summary>
+        private static void AddOption(List<string> options, string name)
+        {
+            if (options == null) return;
+            if (string.IsNullOrWhiteSpace(name)) return;
+            if (options.Exists(o => o.Equals(name, StringComparison.OrdinalIgnoreCase))) return;
+            options.Add(name);
+        }
+
+        /// <summary>
+        /// Apply the current track and layout context so routes are loaded from the correct folder.
+        /// </summary>
+        public void SetTrackLayoutContext(string trackCode, string layoutName)
+        {
+            var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
+            var layout = string.IsNullOrWhiteSpace(layoutName) ? "DefaultLayout" : layoutName.Trim();
+
+            routeLibrary.SetTrackLayout(track, layout);
+            waypointManager.ClearRoutes();
+            ReloadRoutes(true);
+            RefreshRouteOptions(recordingRouteName);
+            logger.Log($"Route context set to Track={track}, Layout={layout}");
         }
 
         /// <summary>
@@ -1071,8 +1152,9 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Reload all route files from disk and reapply paths to active AIs.
         /// </summary>
-        public void ReloadRoutes()
+        public void ReloadRoutes(bool silent = false)
         {
+            waypointManager.ClearRoutes();
             pathManager.LoadRoutes(config);
 
             foreach (var plid in aiPLIDs)
@@ -1099,7 +1181,12 @@ namespace AHPP_AI.AI
                 }
             }
 
-            insim.Send(new IS_MST { Msg = "Routes reloaded from disk" });
+            if (!silent)
+            {
+                insim.Send(new IS_MST { Msg = "Routes reloaded from disk" });
+            }
+
+            RefreshRouteOptions(recordingRouteName);
             logger.Log("Routes reloaded and reapplied to active AIs");
         }
 

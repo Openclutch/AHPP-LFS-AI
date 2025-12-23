@@ -14,12 +14,17 @@ namespace AHPP_AI.Waypoint
     {
         private readonly Logger logger;
         private readonly JsonSerializerOptions serializerOptions;
-        private readonly string basePath;
+        private readonly string routesRoot;
+        private string trackCode = "UnknownTrack";
+        private string layoutName = "DefaultLayout";
+
+        public string TrackCode => trackCode;
+        public string LayoutName => layoutName;
 
         public RouteLibrary(Logger logger)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            basePath = InitializeBasePath();
+            routesRoot = InitializeRoutesRoot();
             serializerOptions = new JsonSerializerOptions
             {
                 WriteIndented = true,
@@ -29,10 +34,10 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
-        /// Determine and create the folder used to store route files.
+        /// Determine and create the root folder used to store route files.
         /// Prefers a Routes subdirectory beside the executable for easy sharing.
         /// </summary>
-        private string InitializeBasePath()
+        private string InitializeRoutesRoot()
         {
             var routesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Routes");
             try
@@ -48,13 +53,59 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        /// Update the active track and layout context so routes are stored per combo.
+        /// </summary>
+        public void SetTrackLayout(string track, string layout)
+        {
+            var safeTrack = string.IsNullOrWhiteSpace(track) ? "UnknownTrack" : SanitizeName(track);
+            var safeLayout = string.IsNullOrWhiteSpace(layout) ? "DefaultLayout" : SanitizeName(layout);
+
+            if (safeTrack.Equals(trackCode, StringComparison.OrdinalIgnoreCase) &&
+                safeLayout.Equals(layoutName, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            trackCode = safeTrack;
+            layoutName = safeLayout;
+
+            var contextPath = GetContextPath();
+            try
+            {
+                Directory.CreateDirectory(contextPath);
+                logger.Log($"Route library context set to {trackCode}/{layoutName}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, $"Failed to create route directory {contextPath}");
+            }
+        }
+
+        /// <summary>
         /// Load a recorded route from disk, creating a template file if none exists.
         /// </summary>
         public RecordedRoute Load(string name)
         {
+            var contextPath = GetContextPath();
+            EnsureContextPath(contextPath);
             var file = GetRoutePath(name);
             if (!File.Exists(file))
             {
+                var legacy = GetLegacyRoutePath(name);
+                if (!string.IsNullOrWhiteSpace(legacy) && File.Exists(legacy))
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(legacy);
+                        var migrated = NormalizeRoute(ParseRoute(json, name), name);
+                        Save(migrated, file);
+                        logger.Log($"Migrated legacy route {migrated.Metadata.Name} into {GetContextPath()}");
+                        return migrated;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogException(ex, $"Failed to migrate legacy route {legacy}");
+                    }
+                }
+
                 var template = CreateTemplate(name);
                 Save(template, file);
                 logger.Log($"Created new route template at {file}");
@@ -107,6 +158,8 @@ namespace AHPP_AI.Waypoint
         {
             if (route == null) throw new ArgumentNullException(nameof(route));
             var normalized = NormalizeRoute(route, Path.GetFileNameWithoutExtension(file));
+            var directory = Path.GetDirectoryName(file);
+            if (!string.IsNullOrWhiteSpace(directory)) EnsureContextPath(directory);
             File.WriteAllText(file, JsonSerializer.Serialize(normalized, serializerOptions));
             logger.Log($"Saved route {normalized.Metadata.Name} with {normalized.Nodes.Count} points to {file}");
         }
@@ -188,6 +241,11 @@ namespace AHPP_AI.Waypoint
             if (string.IsNullOrWhiteSpace(route.Metadata.Name))
                 route.Metadata.Name = string.IsNullOrWhiteSpace(fallbackName) ? "route" : fallbackName;
 
+            route.Metadata.Name = NormalizeRouteName(route.Metadata.Name);
+
+            route.Metadata.Track = trackCode;
+            route.Metadata.Layout = layoutName;
+
             if (route.Metadata.Type == RouteType.Unknown)
                 route.Metadata.Type = GuessRouteType(route.Metadata.Name);
 
@@ -214,17 +272,25 @@ namespace AHPP_AI.Waypoint
         {
             return new RouteMetadata
             {
-                Name = string.IsNullOrWhiteSpace(name) ? "route" : name,
+                Name = NormalizeRouteName(string.IsNullOrWhiteSpace(name) ? "route" : name),
                 Type = type == RouteType.Unknown ? GuessRouteType(name) : type,
                 IsLoop = type == RouteType.MainLoop,
-                DefaultSpeedLimit = 60
+                DefaultSpeedLimit = 60,
+                Track = trackCode,
+                Layout = layoutName
             };
         }
 
         private string GetRoutePath(string name)
         {
-            var safeName = string.IsNullOrWhiteSpace(name) ? "route" : name;
-            return Path.Combine(basePath, $"{safeName}.json");
+            var safeName = NormalizeRouteName(name);
+            return Path.Combine(GetContextPath(), $"{safeName}.json");
+        }
+
+        private string GetLegacyRoutePath(string name)
+        {
+            var safeName = NormalizeRouteName(name);
+            return Path.Combine(routesRoot, $"{safeName}.json");
         }
 
         private RecordedRoute CreateTemplate(string name)
@@ -237,6 +303,88 @@ namespace AHPP_AI.Waypoint
                 Metadata = metadata,
                 Nodes = new List<RoutePoint>()
             };
+        }
+
+        private string GetContextPath()
+        {
+            return Path.Combine(routesRoot, trackCode, layoutName);
+        }
+
+        private static string SanitizeName(string name)
+        {
+            foreach (var invalid in Path.GetInvalidFileNameChars())
+            {
+                name = name.Replace(invalid, '_');
+            }
+            return name.Trim();
+        }
+
+        private void EnsureContextPath(string contextPath)
+        {
+            if (Directory.Exists(contextPath)) return;
+            Directory.CreateDirectory(contextPath);
+        }
+
+        /// <summary>
+        /// Normalize route names for safe storage while keeping the original intent.
+        /// </summary>
+        public string NormalizeRouteName(string name)
+        {
+            var cleaned = SanitizeName(string.IsNullOrWhiteSpace(name) ? "route" : name);
+            return string.IsNullOrWhiteSpace(cleaned) ? "route" : cleaned;
+        }
+
+        /// <summary>
+        /// Load and normalize all routes within a directory, avoiding duplicates by name.
+        /// </summary>
+        private void LoadRoutesFromDirectory(string directory, List<RecordedRoute> routes, HashSet<string> seenNames)
+        {
+            try
+            {
+                if (!Directory.Exists(directory)) return;
+
+                foreach (var file in Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly))
+                {
+                    try
+                    {
+                        var json = File.ReadAllText(file);
+                        var name = Path.GetFileNameWithoutExtension(file);
+                        if (seenNames != null && seenNames.Contains(name)) continue;
+
+                        var route = NormalizeRoute(ParseRoute(json, name), name);
+                        routes.Add(route);
+                        seenNames?.Add(route.Metadata?.Name ?? name);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogException(ex, $"Failed to read route {file}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, $"Failed to list routes in {directory}");
+            }
+        }
+
+        /// <summary>
+        /// Enumerate recorded routes for the current track/layout context.
+        /// </summary>
+        public List<RecordedRoute> ListRoutes()
+        {
+            var contextPath = GetContextPath();
+            EnsureContextPath(contextPath);
+            var routes = new List<RecordedRoute>();
+            var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            LoadRoutesFromDirectory(contextPath, routes, seenNames);
+
+            var legacyPath = routesRoot;
+            if (!contextPath.Equals(legacyPath, StringComparison.OrdinalIgnoreCase))
+            {
+                LoadRoutesFromDirectory(legacyPath, routes, seenNames);
+            }
+
+            return routes;
         }
     }
 }

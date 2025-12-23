@@ -45,6 +45,8 @@ namespace AHPP_AI
         private static readonly string spawnRouteName;
         private static readonly string mainRouteName;
         private static readonly List<string> branchRouteNames = new List<string>();
+        private static string currentTrackCode = "UnknownTrack";
+        private static string currentLayoutName = "DefaultLayout";
         private static readonly int initialAiCount;
         private static readonly int spawnDelayMs;
         private static readonly int lookaheadWaypoints;
@@ -68,13 +70,14 @@ namespace AHPP_AI
             debugWaypoints = appConfig.GetBool("DebugAI", "AutoVisualizeWaypoints", true);
             debugCoordinateSystem = appConfig.GetBool("DebugAI", "AutoVisualizeAxes", false);
 
-            mainRouteName = appConfig.GetString("Routes", "Main", "main_loop");
-            spawnRouteName = appConfig.GetString("Routes", "Spawn", "pit_entry");
-            var detour1 = appConfig.GetString("Routes", "Detour1", "detour1");
-            var detour2 = appConfig.GetString("Routes", "Detour2", "detour2");
-            var detour3 = appConfig.GetString("Routes", "Detour3", "detour3");
+            routeLibrary = new RouteLibrary(logger);
+            mainRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Main", "main_loop"));
+            spawnRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Spawn", "pit_entry"));
+            var detour1 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour1", "detour1"));
+            var detour2 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour2", "detour2"));
+            var detour3 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour3", "detour3"));
             branchRouteNames.AddRange(new[] { detour1, detour2, detour3 }.Where(n => !string.IsNullOrWhiteSpace(n)));
-            currentRecordingRoute = mainRouteName;
+            currentRecordingRoute = routeLibrary.NormalizeRouteName(mainRouteName);
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
             spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
@@ -83,7 +86,6 @@ namespace AHPP_AI
             recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
 
             // Initialize components in the correct order
-            routeLibrary = new RouteLibrary(logger);
             waypointManager = new WaypointManager(logger, routeLibrary);
             visualizer = new LFSLayout(logger, insim);
 
@@ -264,31 +266,24 @@ namespace AHPP_AI
             // System related
             insim.IS_TINY += (_, e) => OnTiny(e.Packet);
             insim.IS_VER += (_, e) => OnVersion(e.Packet);
+            insim.IS_STA += (_, e) => OnState(e.Packet);
+            insim.IS_AXI += (_, e) => OnAutoXInfo(e.Packet);
         }
 
 
         private static void OnButtonClick(IS_BTC btc)
         {
+            if (aiController.TryGetRouteNameForButton(btc.ClickID, out var selectedRoute))
+            {
+                SetRecordingRoute(selectedRoute);
+                return;
+            }
+
             switch (btc.ClickID)
             {
                 case 1:
                     if (aiController.IsRecording) aiController.StopRecording();
                     else aiController.StartRecording(currentRecordingRoute, GetRouteTypeFromName(currentRecordingRoute));
-                    break;
-                case 11:
-                    SetRecordingRoute(mainRouteName);
-                    break;
-                case 12:
-                    SetRecordingRoute(spawnRouteName);
-                    break;
-                case 13:
-                    SetRecordingRoute(GetBranchRoute(0, "detour1"));
-                    break;
-                case 14:
-                    SetRecordingRoute(GetBranchRoute(1, "detour2"));
-                    break;
-                case 15:
-                    SetRecordingRoute(GetBranchRoute(2, "detour3"));
                     break;
                 case 2:
                     aiController.ReloadRoutes();
@@ -395,6 +390,13 @@ namespace AHPP_AI
                     insim.Send(new IS_MST { Msg = "Enter a valid recording interval in meters." });
                 }
             }
+
+            if (btt.ClickID == MainUI.RouteNameInputId)
+            {
+                var normalized = routeLibrary.NormalizeRouteName(btt.Text);
+                SetRecordingRoute(normalized);
+                return;
+            }
         }
 
 
@@ -419,6 +421,8 @@ namespace AHPP_AI
 
                 // Request version information
                 insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_VER });
+                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_SST });
+                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_AXI });
 
                 // Request layout objects
                 insim.Send(new IS_TINY { SubT = TinyType.TINY_AXM, ReqI = 1 });
@@ -523,8 +527,11 @@ namespace AHPP_AI
         /// </summary>
         private static void SetRecordingRoute(string routeName)
         {
-            currentRecordingRoute = string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName;
+            var normalized = routeLibrary.NormalizeRouteName(
+                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            currentRecordingRoute = normalized;
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
+            aiController.RefreshRouteOptions(currentRecordingRoute);
             insim.Send(new IS_MST { Msg = $"Recording route set to {currentRecordingRoute}" });
         }
 
@@ -556,6 +563,26 @@ namespace AHPP_AI
             return fallback;
         }
 
+        /// <summary>
+        /// Track the active track/layout and inform downstream components when it changes.
+        /// </summary>
+        private static void UpdateRouteContext(string trackCode, string layoutName)
+        {
+            var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
+            var layout = string.IsNullOrWhiteSpace(layoutName) ? "DefaultLayout" : layoutName.Trim();
+
+            if (track.Equals(currentTrackCode, StringComparison.OrdinalIgnoreCase) &&
+                layout.Equals(currentLayoutName, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            currentTrackCode = track;
+            currentLayoutName = layout;
+
+            aiController.SetTrackLayoutContext(currentTrackCode, currentLayoutName);
+            aiController.SetRecordingRouteSelection(currentRecordingRoute);
+            logger.Log($"Route context changed to Track={currentTrackCode}, Layout={currentLayoutName}");
+        }
+
         private static void OnCameraChange(IS_CCH cch)
         {
             currentViewPLID = cch.PLID;
@@ -568,6 +595,25 @@ namespace AHPP_AI
         private static void OnVersion(IS_VER ver)
         {
             logger.Log($"Connected to LFS {ver.Version} {ver.Product}, InSim version: {ver.InSimVer}");
+        }
+
+        /// <summary>
+        /// Handle state updates so we know which track/config is loaded.
+        /// </summary>
+        private static void OnState(IS_STA sta)
+        {
+            var track = (sta.Track ?? string.Empty).Trim();
+            UpdateRouteContext(track, currentLayoutName);
+        }
+
+        /// <summary>
+        /// Handle AutoX info packets to learn the current layout name.
+        /// </summary>
+        private static void OnAutoXInfo(IS_AXI axi)
+        {
+            var layout = (axi.LName ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(layout)) layout = currentLayoutName;
+            UpdateRouteContext(currentTrackCode, layout);
         }
     }
 }

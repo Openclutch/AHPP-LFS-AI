@@ -26,6 +26,7 @@ namespace AHPP_AI.Waypoint
         private readonly WaypointManager waypointManager;
         private readonly Logger logger;
         private readonly Random random = new Random();
+        private readonly RouteLibrary routeLibrary;
 
         public List<Util.Waypoint> SpawnRoute { get; private set; } = new List<Util.Waypoint>();
         public List<Util.Waypoint> MainRoute { get; private set; } = new List<Util.Waypoint>();
@@ -33,10 +34,11 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<string, BranchRouteInfo> branches =
             new Dictionary<string, BranchRouteInfo>(StringComparer.OrdinalIgnoreCase);
 
-        public PathManager(WaypointManager waypointManager, Logger logger)
+        public PathManager(WaypointManager waypointManager, Logger logger, RouteLibrary routeLibrary)
         {
             this.waypointManager = waypointManager;
             this.logger = logger;
+            this.routeLibrary = routeLibrary;
         }
 
         /// <summary>
@@ -65,7 +67,10 @@ namespace AHPP_AI.Waypoint
             logger.Log(
                 $"Loaded main route {config.MainRouteName} ({mainMeta?.Type ?? RouteType.MainLoop}) with {MainRoute.Count} points");
 
-            foreach (var name in config.BranchRouteNames)
+            var branchNames = BuildBranchList(config);
+            config.BranchRouteNames = branchNames;
+
+            foreach (var name in branchNames)
             {
                 waypointManager.LoadTrafficRoute(name);
                 var path = waypointManager.GetTrafficRoute(name);
@@ -147,6 +152,59 @@ namespace AHPP_AI.Waypoint
             var values = branches.Values.ToList();
             var branch = values[random.Next(values.Count)];
             return branch.Path;
+        }
+
+        /// <summary>
+        /// Build the list of detour branches from config and any recorded detour routes.
+        /// </summary>
+        private List<string> BuildBranchList(AIConfig config)
+        {
+            var names = new List<string>();
+            if (config.BranchRouteNames != null)
+            {
+                foreach (var name in config.BranchRouteNames)
+                {
+                    AddUnique(names, name);
+                }
+            }
+
+            try
+            {
+                var recorded = routeLibrary.ListRoutes();
+                foreach (var route in recorded)
+                {
+                    var meta = route?.Metadata;
+                    if (meta == null) continue;
+                    if (string.IsNullOrWhiteSpace(meta.Name)) continue;
+                    if (meta.Name.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (meta.Name.Equals(config.SpawnRouteName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var type = meta.Type == RouteType.Unknown
+                        ? routeLibrary.GuessRouteType(meta.Name)
+                        : meta.Type;
+
+                    if (type == RouteType.Unknown) type = RouteType.Detour;
+
+                    if (type == RouteType.Detour)
+                        AddUnique(names, meta.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to discover recorded detour routes");
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// Add a string to a list if it is non-empty and not already present (case-insensitive).
+        /// </summary>
+        private static void AddUnique(List<string> list, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (list.Exists(v => v.Equals(value, StringComparison.OrdinalIgnoreCase))) return;
+            list.Add(value);
         }
     }
 }

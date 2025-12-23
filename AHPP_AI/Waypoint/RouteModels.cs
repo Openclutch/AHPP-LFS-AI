@@ -22,6 +22,8 @@ namespace AHPP_AI.Waypoint
         public string Name { get; set; } = string.Empty;
         public RouteType Type { get; set; } = RouteType.Unknown;
         public string Description { get; set; } = string.Empty;
+        public string Track { get; set; } = string.Empty;
+        public string Layout { get; set; } = string.Empty;
         public bool IsLoop { get; set; }
         public int? AttachMainIndex { get; set; }
         public int? RejoinMainIndex { get; set; }

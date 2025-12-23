@@ -186,6 +186,15 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        /// Clear cached route data so a new track/layout context can be loaded cleanly.
+        /// </summary>
+        public void ClearRoutes()
+        {
+            trafficRoutes.Clear();
+            recordedRoutes.Clear();
+        }
+
+        /// <summary>
         /// Get the detected route type for a named route.
         /// </summary>
         public RouteType GetRouteType(string name)

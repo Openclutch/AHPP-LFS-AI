@@ -1,5 +1,8 @@
 # Changelog
 
+- Routes are now scoped per track/layout (with automatic migration of legacy files) so main/pit and detour recordings stay organized across circuits.
+- Added an InSim route-name input and dynamic selector buttons that surface main/pit plus any custom recordings for the active track/layout.
+- Discovered detour routes are auto-loaded as branches and connected to the main loop using recorded attach/rejoin waypoint metadata or nearest-point matching.
 - Removed orphaned TougeBattle projects from the solution and added smoke tests so the test harness runs and validates core utilities.
 - Tightened AI recovery logic: fixed reverse gear mapping, added a real ignition pause, removed redundant path init, and detect waypoint progress stalls so wall recovery kicks in instead of staying stuck.
 - Added a debug button that tracks the viewed AI and shows whether it is driving normally, recovering, or restarting.
