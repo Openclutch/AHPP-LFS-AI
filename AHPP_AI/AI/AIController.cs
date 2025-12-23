@@ -484,14 +484,13 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Reset layout visuals and remove all AI cars.
+        /// Reset layout visuals.
         /// </summary>
-        public void ResetLayoutAndAI()
+        public void ResetLayout()
         {
             lfsLayout.ClearAllVisualizations();
             lfsLayout.WaypointsVisualized = false;
-            RemoveAllAICars();
-            insim.Send(new IS_MST { Msg = "Layout cleared and all AI removed." });
+            insim.Send(new IS_MST { Msg = "Layout cleared." });
         }
 
         /// <summary>

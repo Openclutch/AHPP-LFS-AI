@@ -297,7 +297,7 @@ namespace AHPP_AI
                     aiController.ReloadRoutes();
                     break;
                 case 6:
-                    aiController.ResetLayoutAndAI();
+                    aiController.ResetLayout();
                     break;
                 case 5:
                     aiController.ToggleRouteVisualization(currentViewPLID);

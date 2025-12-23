@@ -73,7 +73,7 @@ namespace AHPP_AI.UI
             byte row = 70;
             CreateButton(2, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(5, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
-            CreateButton(6, "Reset Layout/AI", LEFT_COL, row);
+            CreateButton(6, "Reset Layout", LEFT_COL, row);
 
             row = 70;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
