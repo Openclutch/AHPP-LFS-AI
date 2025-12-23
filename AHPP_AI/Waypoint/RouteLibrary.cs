@@ -79,7 +79,7 @@ namespace AHPP_AI.Waypoint
         /// </summary>
         public void Save(RecordedRoute route)
         {
-            var file = GetRoutePath(route?.Metadata?.Name);
+            var file = GetRoutePath(route?.Metadata?.Name ?? "route");
             Save(route, file);
         }
 

@@ -1,5 +1,7 @@
 # Changelog
 
+- Prevent AI cars from orbiting tight waypoints by dropping steering focus to the current node when close or facing extreme turns, even with a longer lookahead.
+- Rebuild AI waypoint paths when an empty route is set so driving continues on a fallback path instead of spamming missing-path errors.
 - Added an AI light controller so headlights, high beams, hazards, indicators, and horn can be driven per-car with helper methods.
 - Lane/branch changes now trigger timed indicators (including manual branch switching support) so AIs signal before moving to alternate routes.
 - Guard waypoint targeting when no valid path is available so AI control no longer crashes on divide-by-zero errors.

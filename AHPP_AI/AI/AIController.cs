@@ -155,7 +155,7 @@ namespace AHPP_AI.AI
         /// </summary>
         private static RouteMetadata CloneMetadata(RouteMetadata metadata)
         {
-            if (metadata == null) return null;
+            if (metadata == null) return new RouteMetadata();
             return new RouteMetadata
             {
                 Name = metadata.Name,

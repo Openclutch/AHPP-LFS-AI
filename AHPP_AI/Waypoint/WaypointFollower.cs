@@ -67,9 +67,14 @@ namespace AHPP_AI.Waypoint
         public bool InitializePath(byte plid, CompCar car, WaypointManager waypointManager, AIConfig config,
             List<ObjectInfo> layoutObjects)
         {
-            // If path already exists, just return
-            if (aiPaths.ContainsKey(plid) && aiPaths[plid] != null)
-                return true;
+            // If a non-empty path already exists, just return. Empty paths should be rebuilt.
+            if (aiPaths.TryGetValue(plid, out var existingPath))
+            {
+                if (existingPath != null && existingPath.Count > 0)
+                    return true;
+
+                logger.LogWarning($"PLID={plid} Existing path is empty, rebuilding from recorded route or fallback");
+            }
 
             var currentPos = new Vec(car.X, car.Y, car.Z);
 
@@ -663,16 +668,32 @@ namespace AHPP_AI.Waypoint
             var dyCurrent = currentY - carY;
             var distanceToCurrent = Math.Sqrt(dxCurrent * dxCurrent + dyCurrent * dyCurrent);
 
-            // Heading aims toward the lookahead waypoint to give more reaction time.
+            // Heading aims toward the lookahead waypoint by default to give more reaction time.
             var lookX = lookaheadWaypoint.Position.X / 65536.0;
             var lookY = lookaheadWaypoint.Position.Y / 65536.0;
             var dxLook = lookX - carX;
             var dyLook = lookY - carY;
 
             var normalizedHeadingToWaypoint = CoordinateUtils.NormalizeHeading(currentHeading);
+
+            var desiredHeadingToCurrent = CoordinateUtils.CalculateHeadingToTarget(dxCurrent, dyCurrent);
+            var headingErrorToCurrent =
+                CoordinateUtils.CalculateHeadingError(normalizedHeadingToWaypoint, desiredHeadingToCurrent);
+
             var desiredHeadingToWaypoint = CoordinateUtils.CalculateHeadingToTarget(dxLook, dyLook);
             var headingErrorToWaypoint =
                 CoordinateUtils.CalculateHeadingError(normalizedHeadingToWaypoint, desiredHeadingToWaypoint);
+
+            // Drop to the current waypoint for very tight turns or when we're already close so we don't orbit
+            // around the target because the lookahead point is too far away to hit.
+            var headingErrorDegrees = Math.Abs(CoordinateUtils.HeadingToDegrees(Math.Abs(headingErrorToWaypoint)));
+            if (headingErrorDegrees > 180) headingErrorDegrees = 360 - headingErrorDegrees;
+
+            var closeRangeMeters = Math.Max(8.0, config.WaypointMaxThreshold * 2.0);
+            var useCurrentWaypoint = distanceToCurrent < closeRangeMeters || headingErrorDegrees > 110.0;
+
+            if (useCurrentWaypoint)
+                return (distanceToCurrent, desiredHeadingToCurrent, headingErrorToCurrent);
 
             return (distanceToCurrent, desiredHeadingToWaypoint, headingErrorToWaypoint);
         }
