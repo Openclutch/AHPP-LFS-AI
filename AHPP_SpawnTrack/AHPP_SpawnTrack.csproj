@@ -13,6 +13,7 @@
         <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
         <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+        <DependencyOutputSubfolder>lib</DependencyOutputSubfolder>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -44,12 +45,24 @@
         <Compile Include="Properties\AssemblyInfo.cs"/>
     </ItemGroup>
     <ItemGroup>
+        <None Include="App.config"/>
+    </ItemGroup>
+    <ItemGroup>
         <ProjectReference Include="..\InSimDotNet\InSimDotNet.csproj">
             <Project>{4b4c5b90-2cef-400c-b448-3e26ab737392}</Project>
             <Name>InSimDotNet</Name>
         </ProjectReference>
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+    <Target Name="AfterBuild">
+        <ItemGroup>
+            <DependencyFiles Include="$(TargetDir)*.dll;$(TargetDir)*.pdb;$(TargetDir)*.xml"
+                             Exclude="$(TargetDir)$(TargetName).pdb;$(TargetDir)$(TargetName).xml"/>
+        </ItemGroup>
+        <MakeDir Directories="$(TargetDir)$(DependencyOutputSubfolder)" Condition="@(DependencyFiles) != ''"/>
+        <Move SourceFiles="@(DependencyFiles)"
+              DestinationFiles="@(DependencyFiles->'$(TargetDir)$(DependencyOutputSubfolder)\\%(Filename)%(Extension)')"/>
+    </Target>
     <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
          Other similar extension points exist, see Microsoft.Common.targets.
     <Target Name="BeforeBuild">

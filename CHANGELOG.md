@@ -1,5 +1,6 @@
 # Changelog
 
+- Moved .NET Framework executable dependencies into a `lib` subfolder (with probing enabled) so the output folder highlights the runnable .exe.
 - Added route validation that reports missing data, duplicate names, invalid branch indices, and non-loop main routes directly to the InSim user.
 - Routes are now scoped per track/layout (with automatic migration of legacy files) so main/pit and detour recordings stay organized across circuits.
 - Added an InSim route-name input and dynamic selector buttons that surface main/pit plus any custom recordings for the active track/layout.
