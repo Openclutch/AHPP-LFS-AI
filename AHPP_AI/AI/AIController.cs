@@ -254,6 +254,7 @@ namespace AHPP_AI.AI
 
             if (aiPLIDs.Contains(viewPlid))
             {
+                debugUI.SetAIPLID(viewPlid);
                 debugUI.ShowAIButtons(true);
             }
             else
@@ -862,13 +863,16 @@ namespace AHPP_AI.AI
                 var waypointIndices = new Dictionary<byte, int>();
                 var targetSpeeds = new Dictionary<byte, double>();
                 var controlInfo = new Dictionary<byte, string>();
+                var aiStates = new Dictionary<byte, string>();
 
                 foreach (var plid in aiPLIDs)
                 {
-                    var (targetIndex, _, targetSpeed, _) = waypointFollower.GetFollowerInfo(plid);
+                    var (targetIndex, _, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
                     waypointIndices[plid] = targetIndex;
                     targetSpeeds[plid] = targetSpeed;
                     controlInfo[plid] = driver.GetControlInfo(plid);
+                    var state = driver.GetStateDescription(plid);
+                    aiStates[plid] = BuildAiStateLabel(plid, state, inRecovery);
 
                     // Place active waypoint marker
                     var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
@@ -880,8 +884,55 @@ namespace AHPP_AI.AI
                 var paths = new Dictionary<byte, List<Util.Waypoint>>();
                 foreach (var plid in aiPLIDs) paths[plid] = waypointFollower.GetPath(plid);
 
-                debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo);
+                debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo, aiStates);
             }
+        }
+
+        /// <summary>
+        /// Build a short label describing the AI's current driving state and route.
+        /// </summary>
+        private string BuildAiStateLabel(byte plid, string driverState, bool inRecovery)
+        {
+            var state = string.IsNullOrWhiteSpace(driverState) ? "Driving" : driverState;
+
+            if (inRecovery && state.Equals("Driving", StringComparison.OrdinalIgnoreCase))
+                state = "Waypoint Rec";
+
+            var routeLabel = GetRouteLabel(plid);
+            if (!string.IsNullOrWhiteSpace(routeLabel))
+            {
+                if (state.Equals("Driving", StringComparison.OrdinalIgnoreCase))
+                    return $"Driving ({routeLabel})";
+
+                return $"{state} ({routeLabel})";
+            }
+
+            return state;
+        }
+
+        /// <summary>
+        /// Summarize the active route for a specific AI as a compact label.
+        /// </summary>
+        private string GetRouteLabel(byte plid)
+        {
+            if (!currentRoute.TryGetValue(plid, out var routeName))
+                return string.Empty;
+
+            if (routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase))
+                return "Spawn";
+
+            if (routeName.Equals("main", StringComparison.OrdinalIgnoreCase))
+                return "Main";
+
+            if (routeName.Equals("branch", StringComparison.OrdinalIgnoreCase))
+            {
+                if (activeBranchSelections.TryGetValue(plid, out var branch) &&
+                    !string.IsNullOrWhiteSpace(branch?.Name))
+                    return $"Branch {branch.Name}";
+                return "Branch";
+            }
+
+            return routeName;
         }
 
         /// <summary>

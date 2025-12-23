@@ -47,6 +47,7 @@ namespace AHPP_AI.Debug
             { "TargetSpeed", 215 },
             { "ControlInfo", 214 },
             { "RouteInfo", 213 },
+            { "State", 205 },
             { "StartAll", 206 }
         };
 
@@ -240,12 +241,14 @@ namespace AHPP_AI.Debug
         /// <param name="aiPaths">Dictionary of AI paths</param>
         /// <param name="aiTargetSpeeds">Dictionary of AI target speeds</param>
         /// <param name="aiControlInfo">Optional dictionary with AI control information</param>
+        /// <param name="aiStates">Optional dictionary with high-level AI state descriptions</param>
         public void UpdateDebugInfo(
             CompCar[] allCars,
             Dictionary<byte, int> aiTargetWaypointIndices = null,
             Dictionary<byte, List<Util.Waypoint>> aiPaths = null,
             Dictionary<byte, double> aiTargetSpeeds = null,
-            Dictionary<byte, string> aiControlInfo = null)
+            Dictionary<byte, string> aiControlInfo = null,
+            Dictionary<byte, string> aiStates = null)
         {
             // Check if we need to update (throttle updates to reduce bandwidth)
             if ((DateTime.Now - lastDebugUpdate).TotalMilliseconds < DEBUG_UPDATE_INTERVAL_MS)
@@ -269,7 +272,8 @@ namespace AHPP_AI.Debug
 
                 // Update AI data if available
                 if (aiPLID > 0 && aiTargetWaypointIndices != null && aiPaths != null && aiTargetSpeeds != null)
-                    UpdateAIDebugInfo(allCars, aiTargetWaypointIndices, aiPaths, aiTargetSpeeds, aiControlInfo);
+                    UpdateAIDebugInfo(allCars, aiTargetWaypointIndices, aiPaths, aiTargetSpeeds, aiControlInfo,
+                        aiStates);
             }
             catch (Exception ex)
             {
@@ -436,7 +440,8 @@ namespace AHPP_AI.Debug
             Dictionary<byte, int> aiTargetWaypointIndices,
             Dictionary<byte, List<Util.Waypoint>> aiPaths,
             Dictionary<byte, double> aiTargetSpeeds,
-            Dictionary<byte, string> aiControlInfo = null)
+            Dictionary<byte, string> aiControlInfo = null,
+            Dictionary<byte, string> aiStates = null)
         {
             // Get AI car data
             var car = Array.Find(allCars, c => c.PLID == aiPLID);
@@ -507,6 +512,10 @@ namespace AHPP_AI.Debug
                 UpdateDebugButton(aiButtonIds["ControlInfo"], $"AI_CTL: {controlInfo}");
 
             UpdateDebugButton(aiButtonIds["RouteInfo"], $"AI_WP_POS: {wpX:F1},{wpY:F1}");
+            if (aiStates != null && aiStates.TryGetValue(aiPLID, out var state))
+                UpdateDebugButton(aiButtonIds["State"], $"AI_ST: {state}");
+            else
+                UpdateDebugButton(aiButtonIds["State"], "AI_ST: --");
         }
 
         /// <summary>

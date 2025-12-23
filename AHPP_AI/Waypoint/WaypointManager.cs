@@ -89,6 +89,10 @@ namespace AHPP_AI.Waypoint
             return closestIndex;
         }
 
+        /// <summary>
+        /// Find the waypoint that is both near the car and aligns with its current heading.
+        /// Returns the index and whether the path should be used in its recorded (clockwise) order.
+        /// </summary>
         public (int waypointIndex, bool clockwise) FindBestWaypointForDirection(Vec position, int heading, List<Util.Waypoint> path)
         {
             if (path == null || path.Count < 2)
@@ -97,8 +101,60 @@ namespace AHPP_AI.Waypoint
                 return (0, true);
             }
 
-            var closestIndex = FindNearestWaypoint(position, path);
-            return (closestIndex, true);
+            var posX = position.X / 65536.0;
+            var posY = position.Y / 65536.0;
+            var normalizedHeading = CoordinateUtils.NormalizeHeading(heading);
+
+            var bestForwardScore = double.MaxValue;
+            var bestForwardIndex = 0;
+            var bestReverseScore = double.MaxValue;
+            var bestReverseIndex = 0;
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                var wpX = path[i].Position.X / 65536.0;
+                var wpY = path[i].Position.Y / 65536.0;
+                var distance = Math.Sqrt(Math.Pow(wpX - posX, 2) + Math.Pow(wpY - posY, 2));
+
+                // Forward direction uses the next waypoint; reverse uses the previous waypoint.
+                var next = path[(i + 1) % path.Count];
+                var prev = path[(i - 1 + path.Count) % path.Count];
+
+                var forwardHeading = CoordinateUtils.CalculateHeadingToTarget(
+                    next.Position.X / 65536.0 - wpX,
+                    next.Position.Y / 65536.0 - wpY);
+                var forwardError = Math.Abs(CoordinateUtils.CalculateHeadingError(normalizedHeading, forwardHeading));
+                var forwardPenalty = forwardError * 360.0 / CoordinateUtils.FULL_CIRCLE / 45.0;
+                var forwardScore = distance + forwardPenalty;
+
+                if (forwardScore < bestForwardScore)
+                {
+                    bestForwardScore = forwardScore;
+                    bestForwardIndex = i;
+                }
+
+                var reverseHeading = CoordinateUtils.CalculateHeadingToTarget(
+                    prev.Position.X / 65536.0 - wpX,
+                    prev.Position.Y / 65536.0 - wpY);
+                var reverseError = Math.Abs(CoordinateUtils.CalculateHeadingError(normalizedHeading, reverseHeading));
+                var reversePenalty = reverseError * 360.0 / CoordinateUtils.FULL_CIRCLE / 45.0;
+                var reverseScore = distance + reversePenalty;
+
+                if (reverseScore < bestReverseScore)
+                {
+                    bestReverseScore = reverseScore;
+                    bestReverseIndex = i;
+                }
+            }
+
+            var useForward = bestForwardScore <= bestReverseScore;
+
+            if (!useForward)
+            {
+                logger.Log($"Path reversed to match heading at index {bestReverseIndex} (forward score {bestForwardScore:F2}, reverse score {bestReverseScore:F2})");
+            }
+
+            return (useForward ? bestForwardIndex : bestReverseIndex, useForward);
         }
 
         /// <summary>

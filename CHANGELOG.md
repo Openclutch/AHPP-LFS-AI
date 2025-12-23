@@ -1,5 +1,9 @@
 # Changelog
 
+- Removed orphaned TougeBattle projects from the solution and added smoke tests so the test harness runs and validates core utilities.
+- Tightened AI recovery logic: fixed reverse gear mapping, added a real ignition pause, removed redundant path init, and detect waypoint progress stalls so wall recovery kicks in instead of staying stuck.
+- Added a debug button that tracks the viewed AI and shows whether it is driving normally, recovering, or restarting.
+- Select the nearest waypoint that matches the car heading (reversing the path if needed) so AI handoffs onto recorded routes follow the loop instead of steering 180° or falling back to circles.
 - Prevent AI cars from orbiting tight waypoints by dropping steering focus to the current node when close or facing extreme turns, even with a longer lookahead.
 - Rebuild AI waypoint paths when an empty route is set so driving continues on a fallback path instead of spamming missing-path errors.
 - Added an AI light controller so headlights, high beams, hazards, indicators, and horn can be driven per-car with helper methods.

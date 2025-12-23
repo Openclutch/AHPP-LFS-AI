@@ -163,10 +163,6 @@ namespace AHPP_AI.AI
                 var carY = car.Y / 65536.0;
                 var carZ = car.Z / 65536.0;
 
-                // Initialize path if needed
-                if (!waypointFollower.InitializePath(plid, car, waypointManager, config, layoutObjects))
-                    return;
-
                 // Get current speed in km/h
                 var speedKmh = 360.0 * car.Speed / 32768.0;
                 double currentHeading = car.Heading;
@@ -332,6 +328,14 @@ namespace AHPP_AI.AI
             if (wallRecoveryStates[plid] != WallRecoveryState.Normal)
                 return;
 
+            // If wall recovery is disabled, keep state clean and skip detection
+            if (!config.WallRecoveryEnabled)
+            {
+                wallRecoveryAttempts[plid] = 0;
+                wallRecoveryStates[plid] = WallRecoveryState.Normal;
+                return;
+            }
+
             // Only check at regular intervals
             if ((DateTime.Now - lastStuckCheckTime[plid]).TotalMilliseconds < STUCK_CHECK_INTERVAL_MS)
                 return;
@@ -364,6 +368,13 @@ namespace AHPP_AI.AI
             {
                 isStuck = true;
                 logger.Log($"PLID={plid} STUCK DETECTION: Moved only {distanceMoved:F2}m, speed={speedKmh:F1}km/h");
+            }
+
+            // Option 2: We're not reducing distance to the waypoint despite low speed
+            if (!isStuck && distanceProgress <= 0.1 && speedKmh < 10.0)
+            {
+                isStuck = true;
+                logger.Log($"PLID={plid} PROGRESS STALL: Distance to target not improving (Δ={distanceProgress:F2}m)");
             }
 
             if (isStuck)
@@ -550,7 +561,7 @@ namespace AHPP_AI.AI
 
                 var inputs = new List<AIInputVal>
                 {
-                    new AIInputVal { Input = AicInputType.CS_GEAR, Value = 1 }, // reverse gear
+                    new AIInputVal { Input = AicInputType.CS_GEAR, Value = 0 }, // reverse gear
                     new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = 20000 },
                     new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 5000 },
                     new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steer }
@@ -636,11 +647,7 @@ namespace AHPP_AI.AI
                                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 2 } })
                             { PLID = plid });
                     }
-                    else if (elapsed < 100)
-                    {
-                        // Small pause between off and on, maintain throttle
-                    }
-                    else
+                    else if (elapsed >= 600)
                     {
                         // Turn ignition on (crank the engine) while maintaining throttle
                         insim.Send(new IS_AIC(new List<AIInputVal>
@@ -729,6 +736,43 @@ namespace AHPP_AI.AI
         public string GetControlInfo(byte plid)
         {
             return controlInfo.ContainsKey(plid) ? controlInfo[plid] : "Not initialized";
+        }
+
+        /// <summary>
+        /// Provide a compact description of the AI's current driving state for UI display.
+        /// </summary>
+        public string GetStateDescription(byte plid)
+        {
+            if (wallRecoveryStates.TryGetValue(plid, out var wallState) && wallState != WallRecoveryState.Normal)
+                return $"WallRec: {wallState}";
+
+            if (reverseRecoveryActive.TryGetValue(plid, out var reverseActive) && reverseActive)
+                return "ReverseRec";
+
+            if (engineStartStates.TryGetValue(plid, out var engineState) &&
+                engineState != EngineStartState.Normal)
+            {
+                return engineState switch
+                {
+                    EngineStartState.StallDetected => "Engine: Stall",
+                    EngineStartState.PressClutch => "Engine: Clutch",
+                    EngineStartState.TurnIgnition => "Engine: Ignition",
+                    EngineStartState.ReleaseClutch => "Engine: Release",
+                    EngineStartState.Recovery => "Engine: Recovery",
+                    _ => "Engine: Restart"
+                };
+            }
+
+            if (controlInfo.TryGetValue(plid, out var info))
+            {
+                if (info.StartsWith("COLLISION", StringComparison.OrdinalIgnoreCase))
+                    return "Collision Stop";
+
+                if (info.IndexOf("Recovery", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return "Recovery";
+            }
+
+            return "Driving";
         }
 
         /// <summary>
