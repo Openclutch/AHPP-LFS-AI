@@ -416,6 +416,22 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure a heading error deadzone in degrees to ignore small steering corrections.
+        /// </summary>
+        public void SetSteeringDeadzoneDegrees(double deadzoneDegrees)
+        {
+            config.SteeringDeadzoneDegrees = Math.Max(0.0, deadzoneDegrees);
+        }
+
+        /// <summary>
+        /// Adjust steering response damping to tune how aggressively heading errors are corrected.
+        /// </summary>
+        public void SetSteeringResponseDamping(double damping)
+        {
+            config.SteeringResponseDamping = Math.Max(0.1, damping);
+        }
+
+        /// <summary>
         /// Manually set indicator state for an AI with optional auto-cancel.
         /// </summary>
         public void SetIndicators(byte plid, AILightController.IndicatorState state, TimeSpan? duration = null)
@@ -502,6 +518,7 @@ namespace AHPP_AI.AI
             if (!aiPLIDs.Contains(plid))
                 return;
 
+            insim.Send(new IS_MST { Msg = $"/pit {plid}" });
             insim.Send(new IS_MST { Msg = $"/spec {plid}" });
 
             aiPLIDs.Remove(plid);
@@ -511,7 +528,7 @@ namespace AHPP_AI.AI
             activeBranchSelections.Remove(plid);
 
             insim.Send(new IS_MST { Msg = "/ai" });
-            logger.Log($"Reset AI {plid} after max recovery attempts; spawned replacement");
+            logger.Log($"Reset AI {plid} after failed recovery; sent to pits/spectate and spawned replacement");
             mainUI.UpdateAIList(GetAiTuples());
         }
 

@@ -74,7 +74,6 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
         private Action<byte> recoveryFailedHandler;
         private readonly Logger logger;
-        private readonly Dictionary<byte, int> stuckHeading = new Dictionary<byte, int>();
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
         private readonly Dictionary<byte, double> stuckPositionY = new Dictionary<byte, double>();
         private readonly Dictionary<byte, MovementIssue> movementIssues = new Dictionary<byte, MovementIssue>();
@@ -136,7 +135,6 @@ namespace AHPP_AI.AI
             wallRecoveryAttempts[plid] = 0;
             stuckPositionX[plid] = 0;
             stuckPositionY[plid] = 0;
-            stuckHeading[plid] = 0;
             wallRecoverySteeringDirection[plid] = 1; // Default to turning right in recovery
             lastStuckCheckTime[plid] = DateTime.Now;
             lastProgressDistance[plid] = 0;
@@ -174,7 +172,6 @@ namespace AHPP_AI.AI
                 // Calculate position in meters
                 var carX = car.X / 65536.0;
                 var carY = car.Y / 65536.0;
-                var carZ = car.Z / 65536.0;
 
                 // Get current speed in km/h
                 var speedKmh = 360.0 * car.Speed / 32768.0;
@@ -216,7 +213,8 @@ namespace AHPP_AI.AI
                 var recoveryFailed = waypointFollower.CheckWaypointProgress(plid, distance);
                 if (recoveryFailed)
                 {
-                    controlInfo[plid] = "Recovery reset";
+                    controlInfo[plid] = "Recovery failed - resetting";
+                    logger.LogWarning($"PLID={plid} RECOVERY FAILED: Pitting/spectating AI to clear track");
                     recoveryFailedHandler?.Invoke(plid);
                     return;
                 }
@@ -363,7 +361,6 @@ namespace AHPP_AI.AI
             {
                 stuckPositionX[plid] = carX;
                 stuckPositionY[plid] = carY;
-                stuckHeading[plid] = currentHeading;
                 lastProgressDistance[plid] = currentDistance;
                 if (!movementIssues.ContainsKey(plid))
                     movementIssues[plid] = MovementIssue.None;
@@ -439,7 +436,6 @@ namespace AHPP_AI.AI
             // Update for next check
             stuckPositionX[plid] = carX;
             stuckPositionY[plid] = carY;
-            stuckHeading[plid] = currentHeading;
             lastProgressDistance[plid] = currentDistance;
         }
 
@@ -545,7 +541,6 @@ namespace AHPP_AI.AI
                     wallRecoveryAttempts[plid] = 0;
                     stuckPositionX[plid] = carX;
                     stuckPositionY[plid] = carY;
-                    stuckHeading[plid] = currentHeading;
                     logger.Log($"PLID={plid} WALL RECOVERY: Returning to normal operation");
                     return false;
 
@@ -776,17 +771,7 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Send ignition command to start the engine
-        /// </summary>
-        private void SendIgnitionCommand(byte plid)
-        {
-            // Turn on ignition
-            insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } }) { PLID = plid });
-        }
-
-        /// <summary>
-        ///     Get current control info for debugging
+        ///     Provide the latest control/debug string for the specified AI.
         /// </summary>
         public string GetControlInfo(byte plid)
         {
@@ -861,10 +846,18 @@ namespace AHPP_AI.AI
         {
             const int STEERING_CENTER = 32768;
 
+            var damping = Math.Max(0.1, config.SteeringResponseDamping);
+            var deadzoneDeg = Math.Max(0.0, config.SteeringDeadzoneDegrees);
+            var deadzoneUnits = deadzoneDeg * 65536.0 / 360.0;
+
+            var adjustedError = Math.Max(0.0, Math.Abs(headingError) - deadzoneUnits);
+            if (adjustedError <= 0.0) return STEERING_CENTER;
+
+            var response = Math.Min(1.0, adjustedError / 16384.0 * damping);
+
             // Basic proportional steering - invert the sign to correct direction
-            return STEERING_CENTER - (int)(Math.Sign(headingError) *
-                                           Math.Min(1.0, Math.Abs(headingError) / 16384.0) *
-                                           (STEERING_CENTER - 100));
+            return STEERING_CENTER -
+                   (int)(Math.Sign(headingError) * response * (STEERING_CENTER - 100));
         }
 
         /// <summary>

@@ -1,5 +1,9 @@
 # Changelog
 
+- Added configurable steering deadzone (`AI.SteeringDeadzoneDegrees`) alongside damping so small heading errors can be ignored to calm straight-line oscillations.
+- Added configurable steering damping (`AI.SteeringDamping`) so heading corrections can be softened to reduce fishtailing on straights.
+- AI now sends unrecoverable cars to the pits/spectate after failed recovery cycles so they don't block the track.
+- Enabled wall recovery by default and removed dead AIDriver helpers (unused ignition command, stored headings) so recovery routines stay active and simpler.
 - Improved AI stall recovery by turning toward waypoints, boosting throttle when steering, and backing up after repeated stalls.
 - Moving a selected layout marker now writes the new position back into the corresponding route JSON so edits persist.
 - Set a non-zero ReqI on TTC selection requests to stop LFS warning about IS_TTC packets with no request id.

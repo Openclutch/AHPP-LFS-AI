@@ -34,6 +34,7 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<byte, int> currentApproachPointIndex = new Dictionary<byte, int>();
         private readonly Dictionary<byte, Queue<int>> headingErrorHistory = new Dictionary<byte, Queue<int>>();
         private readonly Dictionary<byte, bool> inRecoveryMode = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, int> failedRecoveryCycles = new Dictionary<byte, int>();
         private readonly Dictionary<byte, bool> reverseRecoveryRequested = new Dictionary<byte, bool>();
         private readonly Dictionary<byte, ProgressState> progressStates = new Dictionary<byte, ProgressState>();
 
@@ -120,6 +121,7 @@ namespace AHPP_AI.Waypoint
             waypointTimers[plid] = DateTime.Now;
             lastDistanceToWaypoint[plid] = double.MaxValue;
             recoveryAttempts[plid] = 0;
+            failedRecoveryCycles[plid] = 0;
             inRecoveryMode[plid] = false;
             progressStates[plid] = ProgressState.Progressing;
             headingErrorHistory[plid] = new Queue<int>();
@@ -318,6 +320,9 @@ namespace AHPP_AI.Waypoint
             if (!recoveryAttempts.ContainsKey(plid))
                 recoveryAttempts[plid] = 0;
 
+            if (!failedRecoveryCycles.ContainsKey(plid))
+                failedRecoveryCycles[plid] = 0;
+
             if (!progressStates.ContainsKey(plid))
                 progressStates[plid] = ProgressState.Progressing;
 
@@ -336,6 +341,20 @@ namespace AHPP_AI.Waypoint
                     progressStates[plid] = ProgressState.ReverseRecoveryPending;
                     recoveryAttempts[plid] = 0;
                     reverseRecoveryRequested[plid] = true;
+                    failedRecoveryCycles[plid] = failedRecoveryCycles.TryGetValue(plid, out var cycles)
+                        ? cycles + 1
+                        : 1;
+
+                    logger.Log(
+                        $"PLID={plid} PROGRESS STALLED: Reverse recovery cycle {failedRecoveryCycles[plid]} of {config.MaxFailedRecoveryCycles}");
+
+                    if (failedRecoveryCycles[plid] >= config.MaxFailedRecoveryCycles)
+                    {
+                        logger.LogWarning(
+                            $"PLID={plid} RECOVERY FAILED: Exceeded recovery cycles, requesting pit or spectate.");
+                        return true;
+                    }
+
                     lastDistanceToWaypoint[plid] = currentDistance;
                     lastProgressCheckTimes[plid] = DateTime.Now;
                     return false;
@@ -356,6 +375,7 @@ namespace AHPP_AI.Waypoint
                 {
                     // Good progress, reset recovery attempts
                     recoveryAttempts[plid] = 0;
+                    failedRecoveryCycles[plid] = 0;
                     progressStates[plid] = ProgressState.Progressing;
                 }
 
@@ -481,6 +501,7 @@ namespace AHPP_AI.Waypoint
             targetSpeeds[plid] = aiPaths[plid][nextIndex].SpeedLimit;
             waypointTimers[plid] = DateTime.Now;
             recoveryAttempts[plid] = 0;
+            failedRecoveryCycles[plid] = 0;
             inRecoveryMode[plid] = false;
             headingErrorHistory[plid].Clear();
             stationaryChecks[plid] = 0;
@@ -613,12 +634,16 @@ namespace AHPP_AI.Waypoint
                 targetWaypointIndices[plid] = 0;
                 lookAheadWaypointIndices[plid] = 0;
                 progressStates[plid] = ProgressState.Unknown;
+                recoveryAttempts[plid] = 0;
+                failedRecoveryCycles[plid] = 0;
                 return;
             }
 
             var clampedIndex = Math.Max(0, Math.Min(path.Count - 1, startIndex ?? 0));
             targetWaypointIndices[plid] = clampedIndex;
             UpdateLookaheadIndex(plid);
+            recoveryAttempts[plid] = 0;
+            failedRecoveryCycles[plid] = 0;
             progressStates[plid] = ProgressState.Progressing;
         }
 

@@ -35,6 +35,8 @@ namespace AHPP_AI.AI
         public int MaxSteering { get; set; } = 65535;
         public int MinSteering { get; set; } = 1;
         public int SteeringCenter { get; set; } = 32768;
+        public double SteeringResponseDamping { get; set; } = 1.0;
+        public double SteeringDeadzoneDegrees { get; set; } = 0.0;
 
         // Gearbox settings
         public int ShiftDelayMs { get; set; } = 500;
@@ -47,11 +49,12 @@ namespace AHPP_AI.AI
         public int ClutchReleaseIntervalMs { get; set; } = 100;
 
         // Waypoint and recovery settings
-        public bool WallRecoveryEnabled { get; set; } = false;
+        public bool WallRecoveryEnabled { get; set; } = true;
         public int WaypointTimeoutSeconds { get; set; } = 30;
         public int ProgressCheckIntervalMs { get; set; } = 5000;
         public double MinRequiredProgress { get; set; } = 5.0;
         public int MaxRecoveryAttempts { get; set; } = 5;
+        public int MaxFailedRecoveryCycles { get; set; } = 2;
         public double MinSpeedThreshold { get; set; } = 0.5;
         public int StationaryCheckCount { get; set; } = 3;
         public int LookaheadWaypoints { get; set; } = 2;

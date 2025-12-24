@@ -54,6 +54,8 @@ namespace AHPP_AI
         private static readonly int lookaheadWaypoints;
         private static readonly double recordingIntervalMeters;
         private static readonly double waypointProximityMultiplier;
+        private static readonly double steeringResponseDamping;
+        private static readonly double steeringDeadzoneDegrees;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -88,6 +90,8 @@ namespace AHPP_AI
             spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
             lookaheadWaypoints = appConfig.GetInt("AI", "LookaheadWaypoints", 2);
             waypointProximityMultiplier = appConfig.GetDouble("AI", "WaypointProximityMultiplier", 1.0);
+            steeringResponseDamping = appConfig.GetDouble("AI", "SteeringDamping", 1.0);
+            steeringDeadzoneDegrees = appConfig.GetDouble("AI", "SteeringDeadzoneDegrees", 0.0);
             recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
 
             // Initialize components in the correct order
@@ -105,6 +109,8 @@ namespace AHPP_AI
             aiController.SetLookaheadWaypoints(lookaheadWaypoints);
             aiController.SetRecordingInterval(recordingIntervalMeters);
             aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
+            aiController.SetSteeringResponseDamping(steeringResponseDamping);
+            aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
         }
 
         /// <summary>
