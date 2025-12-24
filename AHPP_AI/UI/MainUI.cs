@@ -54,6 +54,9 @@ namespace AHPP_AI.UI
         public const byte LayoutSelectionLabelId = 93;
         public const byte LayoutAttachIndexId = 106;
         public const byte LayoutRejoinIndexId = 107;
+        public const byte ConnectOnlineId = 108;
+        public const byte ConnectLocalId = 109;
+        public const byte RefreshSelectionFeedId = 110;
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
@@ -88,6 +91,9 @@ namespace AHPP_AI.UI
             CreateButton(2, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(5, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(6, "Reset Layout", LEFT_COL, row);
+            CreateButton(ConnectOnlineId, "InSim Online", LEFT_COL, (byte)(row + ROW_HEIGHT));
+            CreateButton(ConnectLocalId, "InSim Local", LEFT_COL, (byte)(row + ROW_HEIGHT * 2));
+            CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
 
             row = 70;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
@@ -97,9 +103,13 @@ namespace AHPP_AI.UI
             CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(104, "Pit All AI", RIGHT_COL, row);
-            CreateButton(LayoutAttachIndexId, "Set Attach", LEFT_COL, LAYOUT_EDIT_ROW);
-            CreateButton(LayoutRejoinIndexId, "Set Rejoin", LEFT_COL, (byte)(LAYOUT_EDIT_ROW + ROW_HEIGHT));
-            CreateInputButton(NodeSpeedInputId, RIGHT_COL, LAYOUT_EDIT_ROW, "Node Speed");
+            var layoutButtonGroupWidth = (byte)(BTN_W * 3 + SELECT_BTN_SPACING * 2);
+            var layoutButtonLeft = (byte)Math.Max(0, (SCREEN_WIDTH - layoutButtonGroupWidth) / 2);
+            var nodeSpeedLeft = (byte)(layoutButtonLeft + BTN_W + SELECT_BTN_SPACING);
+            var rejoinLeft = (byte)(nodeSpeedLeft + BTN_W + SELECT_BTN_SPACING);
+            CreateButton(LayoutAttachIndexId, "Set Attach", layoutButtonLeft, LAYOUT_EDIT_ROW);
+            CreateInputButton(NodeSpeedInputId, nodeSpeedLeft, LAYOUT_EDIT_ROW, "Node Speed");
+            CreateButton(LayoutRejoinIndexId, "Set Rejoin", rejoinLeft, LAYOUT_EDIT_ROW);
 
             RenderRecordingSelectors();
             RenderRecordButton();

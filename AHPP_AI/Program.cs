@@ -37,7 +37,9 @@ namespace AHPP_AI
         private static readonly bool autoSpawnAI;
 
         // Host settings
-        private static readonly string host;
+        private static readonly string onlineHost;
+        private static readonly string localHost;
+        private static string currentHost;
         private static readonly int port;
         private static readonly int outGaugePort;
         private static byte currentViewPLID = 0;
@@ -61,7 +63,10 @@ namespace AHPP_AI
             var basePath = AppDomain.CurrentDomain.BaseDirectory;
             appConfig = AppConfig.Load(Path.Combine(basePath, "config.ini"), logger);
 
-            host = appConfig.GetString("InSim", "Host", "10.211.55.4");
+            onlineHost = appConfig.GetString("InSim", "HostOnline",
+                appConfig.GetString("InSim", "Host", "10.211.55.4"));
+            localHost = appConfig.GetString("InSim", "HostLocal", "127.0.0.1");
+            currentHost = onlineHost;
             port = appConfig.GetInt("InSim", "Port", 29999);
             outGaugePort = appConfig.GetInt("InSim", "OutGaugePort", 30000);
 
@@ -92,6 +97,7 @@ namespace AHPP_AI
             // Create AIController with dependencies
             aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
             visualizer.LayoutSelectionChanged += aiController.OnLayoutSelectionChanged;
+            visualizer.LayoutObjectMoved += aiController.OnLayoutObjectMoved;
             aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, branchRouteNames);
             aiController.SetNumberOfAIs(initialAiCount);
             aiController.SetSpawnDelayMs(spawnDelayMs);
@@ -121,7 +127,7 @@ namespace AHPP_AI
 
                 // Initialize connection to LFS
                 InitializeInSim();
-                aiController.ConnectOutGauge(host, outGaugePort);
+                aiController.ConnectOutGauge(currentHost, outGaugePort);
 
                 // not sure if we need this, use logging to see if already call the layout, maybe on init
                 /*
@@ -315,6 +321,15 @@ namespace AHPP_AI
                 case 104:
                     aiController.PitAllAIs();
                     break;
+                case MainUI.ConnectOnlineId:
+                    ReconnectInSim(onlineHost);
+                    break;
+                case MainUI.ConnectLocalId:
+                    ReconnectInSim(localHost);
+                    break;
+                case MainUI.RefreshSelectionFeedId:
+                    RequestLayoutSelectionFeed();
+                    break;
                 case MainUI.LayoutAttachIndexId:
                     aiController.SetSelectedNodeAsAttachIndex();
                     break;
@@ -441,13 +456,13 @@ namespace AHPP_AI
         /// </summary>
         private static void InitializeInSim()
         {
-            logger.Log($"Initializing InSim connection to {host}:{port}");
+            logger.Log($"Initializing InSim connection to {currentHost}:{port}");
 
             try
             {
                 insim.Initialize(new InSimSettings
                 {
-                    Host = host,
+                    Host = currentHost,
                     Port = port,
                     Admin = "", // No admin password
                     Interval = 100, // Send NLI packet every 100ms
@@ -464,8 +479,7 @@ namespace AHPP_AI
                 insim.Send(new IS_TINY { SubT = TinyType.TINY_AXM, ReqI = 1 });
                 visualizer.LayoutObjectsRequested = true;
 
-                // Request layout selection updates while in the Shift+U editor.
-                insim.Send(new IS_TTC { SubT = TtcType.TTC_SEL_START, UCID = 0 });
+                RequestLayoutSelectionFeed();
 
                 // Send welcome message
                 insim.Send(new IS_MST { Msg = "AI Car Control initialized" });
@@ -653,6 +667,50 @@ namespace AHPP_AI
             var layout = (axi.LName ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(layout)) layout = currentLayoutName;
             UpdateRouteContext(currentTrackCode, layout);
+        }
+
+        /// <summary>
+        /// Request TTC selection updates so we receive AXM PMO_SELECTION packets for Shift+U picks.
+        /// </summary>
+        private static void RequestLayoutSelectionFeed()
+        {
+            try
+            {
+                logger.Log("Requesting layout selection feed (TTC_SEL_START)");
+                // Use a non-zero ReqI so LFS accepts the TTC request without warning
+                insim.Send(new IS_TTC { SubT = TtcType.TTC_SEL_START, UCID = 0, ReqI = 1 });
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to request layout selection feed");
+            }
+        }
+
+        /// <summary>
+        /// Reconnect InSim and OutGauge to a target host so the layout editor selection can be tracked on the right instance.
+        /// </summary>
+        private static void ReconnectInSim(string targetHost)
+        {
+            if (string.IsNullOrWhiteSpace(targetHost))
+            {
+                logger.LogWarning("Reconnect requested without a valid host");
+                return;
+            }
+
+            try
+            {
+                logger.Log($"Reconnecting InSim to {targetHost}:{port}");
+                if (insim != null && insim.IsConnected)
+                    insim.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Error while closing InSim for reconnect");
+            }
+
+            currentHost = targetHost;
+            InitializeInSim();
+            aiController.ConnectOutGauge(currentHost, outGaugePort);
         }
     }
 }

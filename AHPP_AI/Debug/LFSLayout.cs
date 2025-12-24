@@ -43,6 +43,11 @@ namespace AHPP_AI.Debug
         public event Action<ObjectInfo> LayoutSelectionChanged;
 
         /// <summary>
+        /// Fired when a layout object is moved in the editor (PMO_MOVE_MODIFY).
+        /// </summary>
+        public event Action<ObjectInfo> LayoutObjectMoved;
+
+        /// <summary>
         ///     Initializes a new instance of the LFSLayout
         /// </summary>
         /// <param name="logger">Logger for debug information</param>
@@ -67,6 +72,11 @@ namespace AHPP_AI.Debug
             {
                 NotifyLayoutSelection(axm);
                 return;
+            }
+
+            if (axm.PMOFlags.HasFlag(PMOFlags.PMO_MOVE_MODIFY) && axm.PMOAction == ActionFlags.PMO_ADD_OBJECTS)
+            {
+                NotifyLayoutMove(axm);
             }
 
             if (axm.PMOAction == ActionFlags.PMO_LOADING_FILE ||
@@ -100,6 +110,17 @@ namespace AHPP_AI.Debug
             }
 
             LayoutSelectionChanged.Invoke(axm.Info[0]);
+        }
+
+        /// <summary>
+        /// Dispatch layout move events to listeners when a layout object is repositioned.
+        /// </summary>
+        private void NotifyLayoutMove(IS_AXM axm)
+        {
+            if (LayoutObjectMoved == null) return;
+            if (axm.Info == null || axm.Info.Count == 0) return;
+
+            LayoutObjectMoved.Invoke(axm.Info[0]);
         }
 
         /// <summary>

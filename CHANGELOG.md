@@ -1,5 +1,13 @@
 # Changelog
 
+- Improved AI stall recovery by turning toward waypoints, boosting throttle when steering, and backing up after repeated stalls.
+- Moving a selected layout marker now writes the new position back into the corresponding route JSON so edits persist.
+- Set a non-zero ReqI on TTC selection requests to stop LFS warning about IS_TTC packets with no request id.
+- AI debug state button now surfaces real driving conditions (slow progress, moving away, stuck/low speed, reverse recovery) instead of a generic driving label.
+- Blend steering toward multiple upcoming waypoints (weighted by proximity) so highway following uses a smoother lookahead path instead of chasing a single far point.
+- Added a debug button to re-request AXM selection feed (TTC_SEL_START) plus online/local reconnect buttons to help single-player layouts stream Shift+U selections reliably.
+- Added UI buttons to reconnect InSim to either the online host or local host so layout selection tracking can be pointed at the right server.
+- Centered the layout node editing controls (attach, node speed, rejoin) along the bottom so the Shift+U editor buttons sit in the middle of the screen.
 - Route visualization now falls back to the default player/AI when no camera view is selected, instead of requiring manual driver selection.
 - Added a "Recording" label above the bottom selector row and moved visualization routes into a single right-hand column flush with the 200px edge topped with a "Visualizer" label so those controls are easier to understand at a glance.
 - Added layout editor selection handling with UI controls to tag route nodes with speed limits and attach/rejoin indices while editing in Shift+U.

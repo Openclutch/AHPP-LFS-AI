@@ -37,8 +37,16 @@ namespace AHPP_AI.AI
             Complete // Recovery complete
         }
 
+        private enum MovementIssue
+        {
+            None,
+            SlowProgress,
+            StuckLowSpeed
+        }
+
         // Wall recovery configuration
         private const int MAX_WALL_RECOVERY_ATTEMPTS = 2;
+        private const int STALL_REVERSE_TRIGGER = 3;
         private const double REVERSE_TIME_MS = 2000;
         private const double TURNING_TIME_MS = 3000;
         private const double STOPPING_TIME_MS = 500;
@@ -69,7 +77,9 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, int> stuckHeading = new Dictionary<byte, int>();
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
         private readonly Dictionary<byte, double> stuckPositionY = new Dictionary<byte, double>();
+        private readonly Dictionary<byte, MovementIssue> movementIssues = new Dictionary<byte, MovementIssue>();
         private readonly Dictionary<byte, int> wallRecoveryAttempts = new Dictionary<byte, int>();
+        private readonly Dictionary<byte, int> consecutiveStalls = new Dictionary<byte, int>();
 
         // Wall recovery state tracking
         private readonly Dictionary<byte, WallRecoveryState> wallRecoveryStates =
@@ -130,6 +140,9 @@ namespace AHPP_AI.AI
             wallRecoverySteeringDirection[plid] = 1; // Default to turning right in recovery
             lastStuckCheckTime[plid] = DateTime.Now;
             lastProgressDistance[plid] = 0;
+            movementIssues[plid] = MovementIssue.None;
+            consecutiveStalls[plid] = 0;
+            reverseRecoveryActive[plid] = false;
 
             // Send initial controls to configure AI car
             SendAIControls(plid);
@@ -178,15 +191,7 @@ namespace AHPP_AI.AI
                         return; // Skip normal controls while handling wall recovery
                     }
 
-                // Handle engine stall and restart if necessary
-                if (HandleEngineState(plid, speedKmh))
-                {
-                    // Update control info for debug display to show stall recovery
-                    controlInfo[plid] = $"Engine Restart: {engineStartStates[plid]}";
-                    return; // Skip normal controls while handling stall
-                }
-
-                // Calculate distance and heading to target waypoint
+                // Calculate distance and heading to target waypoint early for recovery steering.
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
 
@@ -198,6 +203,14 @@ namespace AHPP_AI.AI
                 }
 
                 if (HandleReverseRecovery(plid)) return;
+
+                // Handle engine stall and restart if necessary
+                if (HandleEngineState(plid, speedKmh, headingError))
+                {
+                    // Update control info for debug display to show stall recovery
+                    controlInfo[plid] = $"Engine Restart: {engineStartStates[plid]}";
+                    return; // Skip normal controls while handling stall
+                }
 
                 // Check progress toward waypoint and also check if stuck
                 var recoveryFailed = waypointFollower.CheckWaypointProgress(plid, distance);
@@ -336,6 +349,9 @@ namespace AHPP_AI.AI
                 return;
             }
 
+            if (!movementIssues.ContainsKey(plid))
+                movementIssues[plid] = MovementIssue.None;
+
             // Only check at regular intervals
             if ((DateTime.Now - lastStuckCheckTime[plid]).TotalMilliseconds < STUCK_CHECK_INTERVAL_MS)
                 return;
@@ -349,6 +365,8 @@ namespace AHPP_AI.AI
                 stuckPositionY[plid] = carY;
                 stuckHeading[plid] = currentHeading;
                 lastProgressDistance[plid] = currentDistance;
+                if (!movementIssues.ContainsKey(plid))
+                    movementIssues[plid] = MovementIssue.None;
                 return;
             }
 
@@ -362,11 +380,13 @@ namespace AHPP_AI.AI
 
             // Detect if we're making insufficient progress
             var isStuck = false;
+            var movementIssue = MovementIssue.None;
 
             // Option 1: We haven't moved enough physically
             if (distanceMoved < POSITION_CHANGE_THRESHOLD && speedKmh < 5.0)
             {
                 isStuck = true;
+                movementIssue = MovementIssue.StuckLowSpeed;
                 logger.Log($"PLID={plid} STUCK DETECTION: Moved only {distanceMoved:F2}m, speed={speedKmh:F1}km/h");
             }
 
@@ -374,11 +394,14 @@ namespace AHPP_AI.AI
             if (!isStuck && distanceProgress <= 0.1 && speedKmh < 10.0)
             {
                 isStuck = true;
+                movementIssue = MovementIssue.SlowProgress;
                 logger.Log($"PLID={plid} PROGRESS STALL: Distance to target not improving (Δ={distanceProgress:F2}m)");
             }
 
             if (isStuck)
             {
+                movementIssues[plid] = movementIssue;
+
                 // Increment wall recovery attempts 
                 wallRecoveryAttempts[plid]++;
 
@@ -408,6 +431,9 @@ namespace AHPP_AI.AI
                     logger.Log($"PLID={plid} PROGRESS OK: Resetting stuck detection, moved {distanceMoved:F2}m");
                     wallRecoveryAttempts[plid] = 0;
                 }
+
+                if (movementIssues.ContainsKey(plid) && movementIssues[plid] != MovementIssue.None)
+                    movementIssues[plid] = MovementIssue.None;
             }
 
             // Update for next check
@@ -592,7 +618,12 @@ namespace AHPP_AI.AI
                 {
                     engineStartStates[plid] = EngineStartState.StallDetected;
                     engineStateTimers[plid] = DateTime.Now;
+                    consecutiveStalls[plid] = consecutiveStalls.TryGetValue(plid, out var stalls) ? stalls + 1 : 1;
                     logger.Log($"PLID={plid} STALL: Starting engine recovery procedure");
+                }
+                else
+                {
+                    consecutiveStalls[plid] = 0;
                 }
             }
 
@@ -602,11 +633,14 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Handle engine stall and restart process
         /// </summary>
-        private bool HandleEngineState(byte plid, double speedKmh)
+        private bool HandleEngineState(byte plid, double speedKmh, int headingError)
         {
             // If engine is running, no need for recovery
             if (engineRunning[plid] && engineStartStates[plid] == EngineStartState.Normal)
                 return false;
+
+            var steering = CalculateSteering(headingError);
+            var throttleBoost = CalculateStallRecoveryThrottleBoost(steering);
 
             // Get elapsed time since last state change
             var elapsed = DateTime.Now.Subtract(engineStateTimers[plid]).TotalMilliseconds;
@@ -615,6 +649,15 @@ namespace AHPP_AI.AI
             switch (engineStartStates[plid])
             {
                 case EngineStartState.StallDetected:
+                    if (consecutiveStalls.TryGetValue(plid, out var stalls) && stalls >= STALL_REVERSE_TRIGGER &&
+                        (!reverseRecoveryActive.TryGetValue(plid, out var reverseActive) || !reverseActive))
+                    {
+                        consecutiveStalls[plid] = 0;
+                        StartReverseRecovery(plid, headingError);
+                        logger.Log($"PLID={plid} STALL: Triggering reverse recovery after repeated stalls");
+                        return true;
+                    }
+
                     // Initialize restart procedure
                     engineStartStates[plid] = EngineStartState.PressClutch;
                     engineStateTimers[plid] = DateTime.Now;
@@ -623,7 +666,7 @@ namespace AHPP_AI.AI
 
                 case EngineStartState.PressClutch:
                     // Press clutch fully and apply some throttle
-                    SendControlInputs(plid, config.SteeringCenter, 3000, 0, 2, config.ClutchFullyPressed);
+                    SendControlInputs(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
 
                     // Wait for clutch press delay
                     if (elapsed >= 500)
@@ -637,7 +680,7 @@ namespace AHPP_AI.AI
 
                 case EngineStartState.TurnIgnition:
                     // Keep clutch pressed and apply significant throttle before ignition
-                    SendControlInputs(plid, config.SteeringCenter, 15000, 0, 2, config.ClutchFullyPressed);
+                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
 
                     // First turn ignition off, then back on to crank the engine
                     if (elapsed < 300)
@@ -678,13 +721,13 @@ namespace AHPP_AI.AI
 
                     // Apply much more throttle before and during clutch release
                     // Start with high throttle and maintain it throughout
-                    var throttle = 20000; // Much higher base throttle
+                    var throttle = Math.Min(30000, 20000 + throttleBoost); // Much higher base throttle
 
                     // Use lower gear for initial starts
                     byte gear = 2; // 1st gear
 
                     // Send controls with extremely gradual clutch release
-                    SendControlInputs(plid, config.SteeringCenter, throttle, 0, gear, clutchValue);
+                    SendControlInputs(plid, steering, throttle, 0, gear, clutchValue);
 
                     // Log clutch release progress periodically
                     if ((int)(elapsed / 1000) != (int)((elapsed - 20) / 1000))
@@ -711,13 +754,25 @@ namespace AHPP_AI.AI
                     }
 
                     // Hold high throttle to prevent immediate stall
-                    SendControlInputs(plid, config.SteeringCenter, 15000, 0, 2, 0);
+                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, 0);
                     return true;
                 default:
                     // Should not get here, but reset if it does
                     engineStartStates[plid] = EngineStartState.Normal;
                     return false;
             }
+        }
+
+        /// <summary>
+        ///     Apply extra throttle during stall recovery when steering away from center.
+        /// </summary>
+        private int CalculateStallRecoveryThrottleBoost(int steering)
+        {
+            var steeringOffset = Math.Abs(steering - config.SteeringCenter);
+            if (steeringOffset < 1000)
+                return 0;
+
+            return Math.Min(8000, steeringOffset / 4);
         }
 
         /// <summary>
@@ -736,6 +791,22 @@ namespace AHPP_AI.AI
         public string GetControlInfo(byte plid)
         {
             return controlInfo.ContainsKey(plid) ? controlInfo[plid] : "Not initialized";
+        }
+
+        /// <summary>
+        ///     Translate any tracked movement issues into a short label for debug display.
+        /// </summary>
+        private string GetMovementIssueLabel(byte plid)
+        {
+            if (!movementIssues.TryGetValue(plid, out var issue))
+                return string.Empty;
+
+            return issue switch
+            {
+                MovementIssue.SlowProgress => "Slow progress",
+                MovementIssue.StuckLowSpeed => "Stuck (low speed)",
+                _ => string.Empty
+            };
         }
 
         /// <summary>
@@ -771,6 +842,14 @@ namespace AHPP_AI.AI
                 if (info.IndexOf("Recovery", StringComparison.OrdinalIgnoreCase) >= 0)
                     return "Recovery";
             }
+
+            var movementLabel = GetMovementIssueLabel(plid);
+            if (!string.IsNullOrEmpty(movementLabel))
+                return movementLabel;
+
+            var progressLabel = waypointFollower.GetProgressStateLabel(plid);
+            if (!string.IsNullOrEmpty(progressLabel))
+                return progressLabel;
 
             return "Driving";
         }

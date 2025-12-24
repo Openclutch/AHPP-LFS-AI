@@ -1322,6 +1322,29 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Persist moved layout object coordinates back into the selected route node.
+        /// </summary>
+        public void OnLayoutObjectMoved(ObjectInfo movedObject)
+        {
+            if (movedObject == null) return;
+
+            var route = GetEditableRoute();
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+
+            route.Nodes[index].X = movedObject.X / 16.0;
+            route.Nodes[index].Y = movedObject.Y / 16.0;
+            route.Nodes[index].Z = movedObject.Zbyte / 4.0;
+            routeLibrary.Save(route);
+
+            var status = $"Node {index} moved to ({route.Nodes[index].X:F1}, {route.Nodes[index].Y:F1})";
+            mainUI?.UpdateLayoutSelectionStatus(status);
+            insim.Send(new IS_MST
+            {
+                Msg = $"{route.Metadata.Name}: saved moved node {index}."
+            });
+        }
+
+        /// <summary>
         /// Update the speed limit on the currently selected node in the layout editor.
         /// </summary>
         public void UpdateSelectedNodeSpeed(double speedKmh)
