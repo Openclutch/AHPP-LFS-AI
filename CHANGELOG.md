@@ -2,6 +2,7 @@
 
 - Route visualization now falls back to the default player/AI when no camera view is selected, instead of requiring manual driver selection.
 - Added a "Recording" label above the bottom selector row and moved visualization routes into a single right-hand column flush with the 200px edge topped with a "Visualizer" label so those controls are easier to understand at a glance.
+- Added layout editor selection handling with UI controls to tag route nodes with speed limits and attach/rejoin indices while editing in Shift+U.
 - Reset Layout now only clears layout visuals without removing AI.
 - Added visualization route selection buttons with detail controls so recorded routes render as directional chalk arrows (main white, pit red via LYT flag) while staying under the layout object cap.
 - Moved .NET Framework executable dependencies into a `lib` subfolder (with probing enabled) so the output folder highlights the runnable .exe.

@@ -50,6 +50,7 @@ namespace AHPP_AI.AI
         private string visualizationRouteName = "main_loop";
         private int visualizationDetailStep = 2;
         private static readonly int[] VisualizationDetailSteps = { 1, 2, 4, 8, 16 };
+        private int? selectedRouteNodeIndex;
 
         private float playerThrottle;
         private float playerBrake;
@@ -1285,6 +1286,162 @@ namespace AHPP_AI.AI
             visualizationRouteName = routeLibrary.NormalizeRouteName(
                 string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
             mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
+            ClearLayoutSelection();
+        }
+
+        /// <summary>
+        /// Handle layout editor selection changes to map layout objects back to route nodes.
+        /// </summary>
+        public void OnLayoutSelectionChanged(ObjectInfo selectedObject)
+        {
+            if (selectedObject == null)
+            {
+                ClearLayoutSelection();
+                return;
+            }
+
+            var route = GetEditableRoute();
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                ClearLayoutSelection();
+                insim.Send(new IS_MST { Msg = "No recorded route loaded for layout selection." });
+                return;
+            }
+
+            var index = FindClosestRouteNodeIndex(route, selectedObject, out var distanceMeters);
+            selectedRouteNodeIndex = index;
+
+            var node = route.Nodes[index];
+            var speed = node.SpeedLimit ?? node.Speed;
+            var status = $"Node {index} @ {speed:F0} km/h";
+            mainUI?.UpdateLayoutSelectionStatus(status);
+            insim.Send(new IS_MST
+            {
+                Msg = $"Selected node {index} ({distanceMeters:F1}m) on {route.Metadata.Name}."
+            });
+        }
+
+        /// <summary>
+        /// Update the speed limit on the currently selected node in the layout editor.
+        /// </summary>
+        public void UpdateSelectedNodeSpeed(double speedKmh)
+        {
+            var route = GetEditableRoute();
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+
+            var clamped = Math.Max(0, speedKmh);
+            route.Nodes[index].SpeedLimit = clamped;
+            routeLibrary.Save(route);
+
+            mainUI?.UpdateLayoutSelectionStatus($"Node {index} @ {clamped:F0} km/h");
+            insim.Send(new IS_MST { Msg = $"Set node {index} speed to {clamped:F0} km/h." });
+        }
+
+        /// <summary>
+        /// Assign the selected node as the attach-to-main index for the route metadata.
+        /// </summary>
+        public void SetSelectedNodeAsAttachIndex()
+        {
+            ApplySelectedNodeMetadata((route, index) => route.Metadata.AttachMainIndex = index, "attach");
+        }
+
+        /// <summary>
+        /// Assign the selected node as the rejoin-to-main index for the route metadata.
+        /// </summary>
+        public void SetSelectedNodeAsRejoinIndex()
+        {
+            ApplySelectedNodeMetadata((route, index) => route.Metadata.RejoinMainIndex = index, "rejoin");
+        }
+
+        /// <summary>
+        /// Clear layout selection state and reset UI label.
+        /// </summary>
+        private void ClearLayoutSelection()
+        {
+            selectedRouteNodeIndex = null;
+            mainUI?.UpdateLayoutSelectionStatus("No node selected");
+        }
+
+        /// <summary>
+        /// Apply a metadata update to the selected node and persist to disk.
+        /// </summary>
+        private void ApplySelectedNodeMetadata(Action<RecordedRoute, int> updater, string label)
+        {
+            var route = GetEditableRoute();
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+
+            updater(route, index);
+            routeLibrary.Save(route);
+            insim.Send(new IS_MST { Msg = $"Set {label} node to {index} for {route.Metadata.Name}." });
+        }
+
+        /// <summary>
+        /// Get the recorded route currently selected for visualization and editing.
+        /// </summary>
+        private RecordedRoute GetEditableRoute()
+        {
+            var route = waypointManager.GetRecordedRoute(visualizationRouteName);
+            if (route != null) return route;
+
+            waypointManager.LoadTrafficRoute(visualizationRouteName);
+            return waypointManager.GetRecordedRoute(visualizationRouteName);
+        }
+
+        /// <summary>
+        /// Try to resolve the selected node index from the current layout selection state.
+        /// </summary>
+        private bool TryGetSelectedNodeIndex(RecordedRoute route, out int index)
+        {
+            index = 0;
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                insim.Send(new IS_MST { Msg = "No recorded route data available." });
+                return false;
+            }
+
+            if (!selectedRouteNodeIndex.HasValue)
+            {
+                insim.Send(new IS_MST { Msg = "Select a node in the layout editor first." });
+                return false;
+            }
+
+            index = selectedRouteNodeIndex.Value;
+            if (index < 0 || index >= route.Nodes.Count)
+            {
+                insim.Send(new IS_MST { Msg = "Selected node index is out of range." });
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Find the closest recorded route node to a selected layout object.
+        /// </summary>
+        private int FindClosestRouteNodeIndex(RecordedRoute route, ObjectInfo selectedObject, out double distanceMeters)
+        {
+            var targetX = selectedObject.X / 16.0;
+            var targetY = selectedObject.Y / 16.0;
+
+            var bestIndex = 0;
+            var bestDistance = double.MaxValue;
+
+            for (var i = 0; i < route.Nodes.Count; i++)
+            {
+                var node = route.Nodes[i];
+                var dx = node.X - targetX;
+                var dy = node.Y - targetY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestIndex = i;
+                }
+            }
+
+            distanceMeters = bestDistance;
+            return bestIndex;
         }
 
         /// <summary>
