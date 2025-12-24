@@ -23,8 +23,9 @@ namespace AHPP_AI.UI
         private const byte BTN_W = 20;
         private const byte SELECT_BTN_W = 20;
         private const byte SELECT_BTN_SPACING = 2;
+        private const byte SCREEN_WIDTH = 200;
         private const byte VISUAL_ROUTE_START_ROW = 100;
-        private const byte VISUAL_ROUTE_COLUMNS = 2;
+        private const byte VISUAL_COLUMN_LEFT = (byte)(SCREEN_WIDTH > BTN_W ? SCREEN_WIDTH - BTN_W : 0);
         private const byte VISUAL_DETAIL_ROW = 160;
         private const byte DETAIL_BTN_W = 6;
         private const byte DETAIL_LABEL_W = 12;
@@ -33,6 +34,11 @@ namespace AHPP_AI.UI
         private const byte RECORD_ROW = 180;
         private const byte ROUTE_NAME_ROW = 160;
         private const byte REMOVE_BTN_W = 6;
+        private const byte RECORD_LABEL_ID = 210;
+        private const byte RECORD_LABEL_ROW = (byte)(SELECT_ROW - ROW_HEIGHT - 1);
+        private const byte RECORD_LABEL_W = 42;
+        private const byte VISUALIZER_LABEL_ID = 211;
+        private const byte VISUALIZER_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
 
         public const byte AddAiDialogId = 150;
         public const byte SpeedInputId = 151;
@@ -195,6 +201,8 @@ namespace AHPP_AI.UI
         {
             if (!uiInitialized) return;
 
+            RenderRecordingLabel();
+
             if (routeButtons.Count == 0)
             {
                 SetRouteOptions(new[] { "main_loop", "pit_entry" }, selectedRoute);
@@ -223,16 +231,16 @@ namespace AHPP_AI.UI
         {
             if (!uiInitialized) return;
 
+            RenderVisualizationLabel();
+
             var maxButtons = GetVisualizationRouteButtonCapacity();
             var count = Math.Min(visualizationRouteButtons.Count, maxButtons);
 
             for (var i = 0; i < count; i++)
             {
                 var option = visualizationRouteButtons[i];
-                var column = i % VISUAL_ROUTE_COLUMNS;
-                var row = i / VISUAL_ROUTE_COLUMNS;
-                var left = column == 0 ? LEFT_COL : RIGHT_COL;
-                var top = (byte)(VISUAL_ROUTE_START_ROW + row * ROW_HEIGHT);
+                var left = VISUAL_COLUMN_LEFT;
+                var top = (byte)(VISUAL_ROUTE_START_ROW + i * ROW_HEIGHT);
                 DeleteButton(option.id);
                 var text = option.name.Equals(selectedVisualizationRoute, StringComparison.OrdinalIgnoreCase)
                     ? $"[{option.name}]"
@@ -242,13 +250,25 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Draw the label that identifies the visualization column.
+        /// </summary>
+        private void RenderVisualizationLabel()
+        {
+            if (!uiInitialized) return;
+
+            DeleteButton(VISUALIZER_LABEL_ID);
+            CreateButton(VISUALIZER_LABEL_ID, "Visualizer", VISUAL_COLUMN_LEFT, VISUALIZER_LABEL_ROW, BTN_W, ROW_HEIGHT, false);
+        }
+
+        /// <summary>
         /// Render the detail selector used for visualization sampling.
         /// </summary>
         private void RenderVisualizationDetailControls()
         {
             if (!uiInitialized) return;
 
-            var left = LEFT_COL;
+            var detailWidth = DETAIL_BTN_W + DETAIL_BTN_SPACING + DETAIL_LABEL_W + DETAIL_BTN_SPACING + DETAIL_BTN_W;
+            var left = (byte)Math.Max(0, SCREEN_WIDTH - detailWidth);
             DeleteButton(VisualizationDetailMinusId);
             DeleteButton(VisualizationDetailPlusId);
             DeleteButton(VisualizationDetailLabelId);
@@ -274,6 +294,18 @@ namespace AHPP_AI.UI
                 ? $"^2Rec {selectedRoute} ({recordedPoints})"
                 : $"Record {selectedRoute}";
             CreateButton(1, label, left, RECORD_ROW);
+        }
+
+        /// <summary>
+        /// Draw the label describing the recording controls below the route selectors.
+        /// </summary>
+        private void RenderRecordingLabel()
+        {
+            if (!uiInitialized) return;
+
+            DeleteButton(RECORD_LABEL_ID);
+            var left = (byte)Math.Max(0, (200 - RECORD_LABEL_W) / 2);
+            CreateButton(RECORD_LABEL_ID, "Recording", left, RECORD_LABEL_ROW, RECORD_LABEL_W, ROW_HEIGHT, false);
         }
 
         /// <summary>
@@ -505,13 +537,14 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
-        /// Determine how many visualization route buttons fit in the available grid.
+        /// Determine how many visualization route buttons fit vertically between the label and recording selectors.
         /// </summary>
         private int GetVisualizationRouteButtonCapacity()
         {
-            var availableRows = (SELECT_ROW - VISUAL_ROUTE_START_ROW) / ROW_HEIGHT;
+            var bottomRow = Math.Min((int)VISUAL_DETAIL_ROW, (int)SELECT_ROW);
+            var availableRows = (bottomRow - VISUAL_ROUTE_START_ROW) / ROW_HEIGHT;
             if (availableRows <= 0) availableRows = 1;
-            return availableRows * VISUAL_ROUTE_COLUMNS;
+            return availableRows;
         }
     }
 }

@@ -517,9 +517,13 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Toggle visualization of recorded routes in the layout editor for the current viewer.
         /// </summary>
+        /// <summary>
+        /// Toggle the visualization of recorded routes for the current view, with a fallback to a default player.
+        /// </summary>
         public void ToggleRouteVisualization(byte viewPlid)
         {
-            if (viewPlid == 0)
+            var effectivePlid = viewPlid == 0 ? GetDefaultVisualizationPlid() : viewPlid;
+            if (effectivePlid == 0)
             {
                 logger.LogWarning("Cannot visualize routes: no player in view");
                 insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
@@ -534,7 +538,7 @@ namespace AHPP_AI.AI
                 return;
             }
 
-            VisualizeSelectedRoute(viewPlid);
+            VisualizeSelectedRoute(effectivePlid);
         }
 
         public bool IsRecording => routeRecorder.IsRecording;
@@ -545,6 +549,15 @@ namespace AHPP_AI.AI
         public byte GetFirstAICarID()
         {
             return aiPLIDs.Count > 0 ? aiPLIDs[0] : (byte)0;
+        }
+
+        /// <summary>
+        /// Pick a fallback PLID for visualization when no camera view is selected.
+        /// </summary>
+        private byte GetDefaultVisualizationPlid()
+        {
+            if (playerPLID != 0) return playerPLID;
+            return GetFirstAICarID();
         }
 
         /// <summary>
@@ -1295,7 +1308,8 @@ namespace AHPP_AI.AI
         /// </summary>
         public void VisualizeSelectedRoute(byte viewPlid)
         {
-            if (viewPlid == 0)
+            var effectivePlid = viewPlid == 0 ? GetDefaultVisualizationPlid() : viewPlid;
+            if (effectivePlid == 0)
             {
                 logger.LogWarning("Cannot visualize routes: no player in view");
                 insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
@@ -1312,7 +1326,7 @@ namespace AHPP_AI.AI
             }
 
             var detailStep = GetVisualizationStep(recorded.Nodes?.Count ?? 0, out var clamped);
-            lfsLayout.VisualizeRecordedRoute(viewPlid, recorded, detailStep, true);
+            lfsLayout.VisualizeRecordedRoute(effectivePlid, recorded, detailStep, true);
             lfsLayout.WaypointsVisualized = true;
 
             if (clamped)
