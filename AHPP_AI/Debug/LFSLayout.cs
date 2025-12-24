@@ -37,6 +37,10 @@ namespace AHPP_AI.Debug
         private readonly Dictionary<byte, List<ObjectInfo>> placedObjectsByPlid = new Dictionary<byte, List<ObjectInfo>>();
         private readonly HashSet<Tuple<float, float>> waypointPositions = new HashSet<Tuple<float, float>>();
 
+        /// <summary>
+        /// Fired when the layout editor selection changes (Shift+U selection updates).
+        /// </summary>
+        public event Action<ObjectInfo> LayoutSelectionChanged;
 
         /// <summary>
         ///     Initializes a new instance of the LFSLayout
@@ -59,6 +63,12 @@ namespace AHPP_AI.Debug
         {
             logger.Log($"AXM received: PMOAction={axm.PMOAction}, NumO={axm.NumO}");
 
+            if (axm.PMOAction == ActionFlags.PMO_SELECTION || axm.PMOAction == ActionFlags.PMO_TTC_SEL)
+            {
+                NotifyLayoutSelection(axm);
+                return;
+            }
+
             if (axm.PMOAction == ActionFlags.PMO_LOADING_FILE ||
                 axm.PMOAction == ActionFlags.PMO_ADD_OBJECTS ||
                 axm.PMOAction == ActionFlags.PMO_TINY_AXM)
@@ -74,6 +84,22 @@ namespace AHPP_AI.Debug
                     //$"Object: {objName}, Index={obj.Index}, X={xMeters:F2}m, Y={yMeters:F2}m, Z={zMeters:F2}m, Heading={obj.Heading}, Flags={obj.Flags}");
                     layoutObjects.Add(obj);
                 }
+        }
+
+        /// <summary>
+        /// Dispatch layout selection changes to listeners.
+        /// </summary>
+        private void NotifyLayoutSelection(IS_AXM axm)
+        {
+            if (LayoutSelectionChanged == null) return;
+
+            if (axm.Info == null || axm.Info.Count == 0)
+            {
+                LayoutSelectionChanged.Invoke(null);
+                return;
+            }
+
+            LayoutSelectionChanged.Invoke(axm.Info[0]);
         }
 
         /// <summary>
