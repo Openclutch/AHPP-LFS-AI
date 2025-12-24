@@ -91,6 +91,7 @@ namespace AHPP_AI
 
             // Create AIController with dependencies
             aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
+            visualizer.LayoutSelectionChanged += aiController.OnLayoutSelectionChanged;
             aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, branchRouteNames);
             aiController.SetNumberOfAIs(initialAiCount);
             aiController.SetSpawnDelayMs(spawnDelayMs);
@@ -272,6 +273,9 @@ namespace AHPP_AI
         }
 
 
+        /// <summary>
+        /// Handle button click responses from the UI.
+        /// </summary>
         private static void OnButtonClick(IS_BTC btc)
         {
             if (aiController.TryGetRouteNameForButton(btc.ClickID, out var selectedRoute))
@@ -310,6 +314,12 @@ namespace AHPP_AI
                     break;
                 case 104:
                     aiController.PitAllAIs();
+                    break;
+                case MainUI.LayoutAttachIndexId:
+                    aiController.SetSelectedNodeAsAttachIndex();
+                    break;
+                case MainUI.LayoutRejoinIndexId:
+                    aiController.SetSelectedNodeAsRejoinIndex();
                     break;
                 case 239:
                     if (aiController.IsRecording) aiController.StopRecording();
@@ -411,6 +421,18 @@ namespace AHPP_AI
                 SetRecordingRoute(normalized);
                 return;
             }
+
+            if (btt.ClickID == MainUI.NodeSpeedInputId)
+            {
+                if (double.TryParse(btt.Text, out var speed))
+                {
+                    aiController.UpdateSelectedNodeSpeed(speed);
+                }
+                else
+                {
+                    insim.Send(new IS_MST { Msg = "Enter a valid node speed." });
+                }
+            }
         }
 
 
@@ -441,6 +463,9 @@ namespace AHPP_AI
                 // Request layout objects
                 insim.Send(new IS_TINY { SubT = TinyType.TINY_AXM, ReqI = 1 });
                 visualizer.LayoutObjectsRequested = true;
+
+                // Request layout selection updates while in the Shift+U editor.
+                insim.Send(new IS_TTC { SubT = TtcType.TTC_SEL_START, UCID = 0 });
 
                 // Send welcome message
                 insim.Send(new IS_MST { Msg = "AI Car Control initialized" });

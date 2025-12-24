@@ -33,14 +33,21 @@ namespace AHPP_AI.UI
         private const byte RECORD_ROW = 180;
         private const byte ROUTE_NAME_ROW = 160;
         private const byte REMOVE_BTN_W = 6;
+        private const byte LAYOUT_EDIT_ROW = 190;
+        private const byte LAYOUT_STATUS_ROW = 195;
+        private const byte LAYOUT_STATUS_W = 30;
 
         public const byte AddAiDialogId = 150;
         public const byte SpeedInputId = 151;
         public const byte RecordingIntervalId = 152;
         public const byte RouteNameInputId = 153;
+        public const byte NodeSpeedInputId = 154;
         public const byte VisualizationDetailMinusId = 90;
         public const byte VisualizationDetailPlusId = 91;
         public const byte VisualizationDetailLabelId = 92;
+        public const byte LayoutSelectionLabelId = 93;
+        public const byte LayoutAttachIndexId = 106;
+        public const byte LayoutRejoinIndexId = 107;
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
@@ -56,6 +63,7 @@ namespace AHPP_AI.UI
         private bool isRecording;
         private int recordedPoints;
         private bool uiInitialized;
+        private string layoutSelectionStatus = "No node selected";
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -83,11 +91,15 @@ namespace AHPP_AI.UI
             CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(104, "Pit All AI", RIGHT_COL, row);
+            CreateButton(LayoutAttachIndexId, "Set Attach", LEFT_COL, LAYOUT_EDIT_ROW);
+            CreateButton(LayoutRejoinIndexId, "Set Rejoin", LEFT_COL, (byte)(LAYOUT_EDIT_ROW + ROW_HEIGHT));
+            CreateInputButton(NodeSpeedInputId, RIGHT_COL, LAYOUT_EDIT_ROW, "Node Speed");
 
             RenderRecordingSelectors();
             RenderRecordButton();
             RenderVisualizationRouteSelectors();
             RenderVisualizationDetailControls();
+            RenderLayoutSelectionStatus();
         }
 
         /// <summary>
@@ -444,6 +456,27 @@ namespace AHPP_AI.UI
         {
             visualizationDetailStep = Math.Max(1, detailStep);
             RenderVisualizationDetailControls();
+        }
+
+        /// <summary>
+        /// Update the layout editor selection status label.
+        /// </summary>
+        public void UpdateLayoutSelectionStatus(string status)
+        {
+            layoutSelectionStatus = string.IsNullOrWhiteSpace(status) ? "No node selected" : status;
+            RenderLayoutSelectionStatus();
+        }
+
+        /// <summary>
+        /// Render the layout selection status label for editing.
+        /// </summary>
+        private void RenderLayoutSelectionStatus()
+        {
+            if (!uiInitialized) return;
+
+            DeleteButton(LayoutSelectionLabelId);
+            CreateButton(LayoutSelectionLabelId, layoutSelectionStatus, RIGHT_COL, LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
+                ROW_HEIGHT, false);
         }
 
         /// <summary>
