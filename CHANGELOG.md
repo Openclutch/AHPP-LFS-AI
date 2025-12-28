@@ -1,5 +1,6 @@
 # Changelog
 
+- Recorded route visualization now places chalk markers at the recorded Z height with rounded coordinates so 1x detail renders stop failing with “invalid position” errors.
 - Guard AI debug updates when car telemetry is missing so the debug UI stops throwing null reference errors.
 - Offloaded AI spawning and recorded-route visualization to background tasks so large batches or heavy layouts no longer block InSim commands.
 - Added low-RPM clutch protection so AIs press the clutch when RPM dips under ~500, let the engine recover, and then resume their previous action without stalling.

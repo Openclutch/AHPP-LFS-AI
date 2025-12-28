@@ -223,21 +223,21 @@ namespace AHPP_AI.Debug
             // Reset per-route duplicate tracking so multiple routes can overlay while each still avoids self-duplicates.
             waypointPositions.Clear();
 
-            var waypoints = route.ToWaypoints();
+            var nodes = route.Nodes;
             logger.Log(
-                $"Visualizing recorded route {route.Metadata.Name} ({route.Metadata.Type}) for editing with {waypoints.Count} nodes");
+                $"Visualizing recorded route {route.Metadata.Name} ({route.Metadata.Type}) for editing with {nodes.Count} nodes");
 
             var count = 0;
             var step = Math.Max(1, detailStep);
-            var requiredStep = Math.Max(1, (int)Math.Ceiling(waypoints.Count / (double)MaxVisibleWaypoints));
+            var requiredStep = Math.Max(1, (int)Math.Ceiling(nodes.Count / (double)MaxVisibleWaypoints));
             var effectiveStep = Math.Max(step, requiredStep);
             // Default marker uses Chalk Ahead; use red chalk for pit entry routes via flags.
             var markerType = CHALK_AHEAD;
             var markerFlags = route.Metadata.Type == RouteType.PitEntry ? CHALK_COLOR_RED : CHALK_COLOR_WHITE;
-            for (var i = 0; i < waypoints.Count && count < MaxVisibleWaypoints; i += effectiveStep)
+            for (var i = 0; i < nodes.Count && count < MaxVisibleWaypoints; i += effectiveStep)
             {
-                var heading = CalculateHeadingForIndex(waypoints, i, route.Metadata.IsLoop);
-                PlaceEditableWaypoint(plid, waypoints[i], heading, markerType, markerFlags);
+                var heading = CalculateHeadingForNode(nodes, i, route.Metadata.IsLoop);
+                PlaceEditableWaypoint(plid, nodes[i], heading, markerType, markerFlags);
                 count++;
             }
 
@@ -282,36 +282,37 @@ namespace AHPP_AI.Debug
         /// <summary>
         /// Place a chalk arrow marker for a recorded route node to support manual editing.
         /// </summary>
-        private void PlaceEditableWaypoint(byte plid, Util.Waypoint waypoint, byte heading, byte objectType,
+        private void PlaceEditableWaypoint(byte plid, RoutePoint node, byte heading, byte objectType,
             byte flags = 0)
         {
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
 
-            var xMeters = waypoint.Position.X / 65536.0f;
-            var yMeters = waypoint.Position.Y / 65536.0f;
+            var xMeters = (float)node.X;
+            var yMeters = (float)node.Y;
+            var zMeters = (float)node.Z;
 
-            var marker = PlaceObject(plid, objectType, xMeters, yMeters, 0.5f, heading, flags);
+            var marker = PlaceObject(plid, objectType, xMeters, yMeters, zMeters, heading, flags);
             if (marker != null) placedObjectsByPlid[plid].Add(marker);
         }
 
         /// <summary>
-        /// Calculate an arrow heading toward the next waypoint so arrows show flow direction.
+        /// Calculate an arrow heading toward the next recorded node so arrows show flow direction.
         /// </summary>
-        private byte CalculateHeadingForIndex(IReadOnlyList<Util.Waypoint> waypoints, int index, bool isLoop)
+        private byte CalculateHeadingForNode(IReadOnlyList<RoutePoint> nodes, int index, bool isLoop)
         {
-            if (waypoints == null || waypoints.Count == 0) return 0;
+            if (nodes == null || nodes.Count == 0) return 0;
 
-            var current = waypoints[index];
+            var current = nodes[index];
             var nextIndex = index + 1;
-            if (nextIndex >= waypoints.Count)
+            if (nextIndex >= nodes.Count)
             {
                 if (!isLoop) return 0;
                 nextIndex = 0;
             }
 
-            var next = waypoints[nextIndex];
-            var dx = (next.Position.X - current.Position.X) / 65536.0;
-            var dy = (next.Position.Y - current.Position.Y) / 65536.0;
+            var next = nodes[nextIndex];
+            var dx = next.X - current.X;
+            var dy = next.Y - current.Y;
             if (Math.Abs(dx) < 0.0001 && Math.Abs(dy) < 0.0001) return 0;
 
             var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
@@ -364,9 +365,12 @@ namespace AHPP_AI.Debug
         {
             try
             {
-                var objX = (short)(xMeters * 16);
-                var objY = (short)(yMeters * 16);
-                var objZ = (byte)(zMeters * 4);
+                var roundedX = (int)Math.Round(xMeters * 16f);
+                var roundedY = (int)Math.Round(yMeters * 16f);
+                var roundedZ = (int)Math.Round(zMeters * 4f);
+                var objX = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, roundedX));
+                var objY = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, roundedY));
+                var objZ = (byte)Math.Max(byte.MinValue, Math.Min(byte.MaxValue, roundedZ));
 
                 logger.Log($"Placing object: {ObjectHelper.GetObjName(objectType)} (Type={objectType}), " +
                            $"Meters=({xMeters:F2},{yMeters:F2},{zMeters:F2}), Heading={heading}, Flags={flags}, LYT=({objX},{objY},{objZ})");
