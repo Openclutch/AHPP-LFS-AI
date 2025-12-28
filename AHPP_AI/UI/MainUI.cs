@@ -24,6 +24,9 @@ namespace AHPP_AI.UI
         private const byte SELECT_BTN_W = 20;
         private const byte SELECT_BTN_SPACING = 2;
         private const byte SCREEN_WIDTH = 200;
+        private const byte SHOW_BUTTON_LEFT = 0;
+        private const byte SHOW_BUTTON_TOP = 0;
+        private const byte SHOW_BUTTON_W = 12;
         private const byte VISUAL_ROUTE_START_ROW = 100;
         private const byte VISUAL_COLUMN_LEFT = (byte)(SCREEN_WIDTH > BTN_W ? SCREEN_WIDTH - BTN_W : 0);
         private const byte VISUAL_DETAIL_ROW = 160;
@@ -33,6 +36,8 @@ namespace AHPP_AI.UI
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
         private const byte ROUTE_NAME_ROW = 160;
+        private const byte HIDE_BUTTON_ROW = 60;
+        private const byte INSIM_STATUS_ROW = 85;
         private const byte REMOVE_BTN_W = 6;
         private const byte RECORD_LABEL_ROW = (byte)(SELECT_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = 42;
@@ -45,8 +50,8 @@ namespace AHPP_AI.UI
         public const byte ReloadRoutesId = (byte)(ButtonIds.MainStart + 1);
         public const byte ToggleLayoutId = (byte)(ButtonIds.MainStart + 2);
         public const byte ResetLayoutId = (byte)(ButtonIds.MainStart + 3);
-        public const byte ConnectOnlineId = (byte)(ButtonIds.MainStart + 4);
-        public const byte ConnectLocalId = (byte)(ButtonIds.MainStart + 5);
+        public const byte InSimStatusLabelId = (byte)(ButtonIds.MainStart + 4);
+        public const byte InSimHostLabelId = (byte)(ButtonIds.MainStart + 5);
         public const byte RefreshSelectionFeedId = (byte)(ButtonIds.MainStart + 6);
         public const byte StartAllAisId = (byte)(ButtonIds.MainStart + 7);
         public const byte StopAllAisId = (byte)(ButtonIds.MainStart + 8);
@@ -61,6 +66,8 @@ namespace AHPP_AI.UI
         public const byte LayoutSelectionLabelId = (byte)(ButtonIds.MainStart + 17);
         private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 18);
         private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
+        public const byte HideUiButtonId = (byte)(ButtonIds.MainStart + 63);
+        public const byte ShowUiButtonId = (byte)(ButtonIds.MainStart + 64);
         public const byte VisualizationDetailMinusId = (byte)(ButtonIds.MainStart + 60);
         public const byte VisualizationDetailPlusId = (byte)(ButtonIds.MainStart + 61);
         public const byte VisualizationDetailLabelId = (byte)(ButtonIds.MainStart + 62);
@@ -69,6 +76,7 @@ namespace AHPP_AI.UI
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly List<(byte id, string name)> routeButtons = new List<(byte id, string name)>();
         private readonly List<(byte id, string name)> visualizationRouteButtons = new List<(byte id, string name)>();
+        private readonly List<(byte id, string name)> lastAiSnapshot = new List<(byte id, string name)>();
         private const byte ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 20);
         private const byte ROUTE_BUTTON_MAX_COUNT = 8;
         private const byte VISUAL_ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 40);
@@ -79,7 +87,10 @@ namespace AHPP_AI.UI
         private bool isRecording;
         private int recordedPoints;
         private bool uiInitialized;
+        private bool uiHidden;
         private string layoutSelectionStatus = "No node selected";
+        private string insimStatus = "InSim: not connected";
+        private string insimHost = "Host: pending";
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -93,13 +104,14 @@ namespace AHPP_AI.UI
         public void Show()
         {
             uiInitialized = true;
+            uiHidden = false;
 
             byte row = 70;
+            CreateButton(HideUiButtonId, "Hide UI", LEFT_COL, HIDE_BUTTON_ROW);
             CreateButton(ReloadRoutesId, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(ToggleLayoutId, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(ResetLayoutId, "Reset Layout", LEFT_COL, row);
-            CreateButton(ConnectOnlineId, "InSim Online", LEFT_COL, (byte)(row + ROW_HEIGHT));
-            CreateButton(ConnectLocalId, "InSim Local", LEFT_COL, (byte)(row + ROW_HEIGHT * 2));
+            RenderInSimStatus();
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
 
             row = 70;
@@ -123,6 +135,7 @@ namespace AHPP_AI.UI
             RenderVisualizationRouteSelectors();
             RenderVisualizationDetailControls();
             RenderLayoutSelectionStatus();
+            RenderAIList(lastAiSnapshot);
         }
 
         /// <summary>
@@ -130,27 +143,15 @@ namespace AHPP_AI.UI
         /// </summary>
         public void UpdateAIList(IEnumerable<(byte id, string name)> ai)
         {
-            byte row = (byte)(5 + ROW_HEIGHT * 4);
-            foreach (var b in aiListButtons.Values) DeleteButton(b);
-            foreach (var b in aiRemoveButtons.Keys) DeleteButton(b);
-            aiListButtons.Clear();
-            aiRemoveButtons.Clear();
-
-            byte index = 0;
-            foreach (var (id, name) in ai)
+            lastAiSnapshot.Clear();
+            if (ai != null)
             {
-                var labelId = ButtonIds.Dynamic(index);
-                var removeId = ButtonIds.Remove(index);
-                var top = (byte)(row + ROW_HEIGHT * index);
-                var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
-
-                CreateButton(removeId, "X", removeLeft, top);
-                CreateButton(labelId, $"{name}", AI_LIST_COL, top);
-
-                aiListButtons[id] = labelId;
-                aiRemoveButtons[removeId] = id;
-                index++;
+                lastAiSnapshot.AddRange(ai);
             }
+
+            if (!uiInitialized || uiHidden) return;
+
+            RenderAIList(lastAiSnapshot);
         }
 
         /// <summary>
@@ -228,7 +229,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderRecordingSelectors()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             RenderRecordingLabel();
 
@@ -258,7 +259,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderVisualizationRouteSelectors()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             RenderVisualizationLabel();
 
@@ -283,7 +284,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderVisualizationLabel()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             DeleteButton(VISUALIZER_LABEL_ID);
             CreateButton(VISUALIZER_LABEL_ID, "Visualizer", VISUAL_COLUMN_LEFT, VISUALIZER_LABEL_ROW, BTN_W, ROW_HEIGHT, false);
@@ -294,7 +295,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderVisualizationDetailControls()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             var detailWidth = DETAIL_BTN_W + DETAIL_BTN_SPACING + DETAIL_LABEL_W + DETAIL_BTN_SPACING + DETAIL_BTN_W;
             var left = (byte)Math.Max(0, SCREEN_WIDTH - detailWidth);
@@ -315,7 +316,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderRecordButton()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             var left = (byte)Math.Max(0, (200 - BTN_W) / 2);
             DeleteButton(RecordToggleId);
@@ -330,7 +331,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderRecordingLabel()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             DeleteButton(RECORD_LABEL_ID);
             var left = (byte)Math.Max(0, (200 - RECORD_LABEL_W) / 2);
@@ -392,7 +393,7 @@ namespace AHPP_AI.UI
                 id++;
             }
 
-            if (uiInitialized)
+            if (uiInitialized && !uiHidden)
             {
                 RenderRecordingSelectors();
                 RenderRecordButton();
@@ -437,7 +438,7 @@ namespace AHPP_AI.UI
                 id++;
             }
 
-            if (uiInitialized)
+            if (uiInitialized && !uiHidden)
             {
                 RenderVisualizationRouteSelectors();
                 RenderVisualizationDetailControls();
@@ -521,11 +522,102 @@ namespace AHPP_AI.UI
         /// </summary>
         private void RenderLayoutSelectionStatus()
         {
-            if (!uiInitialized) return;
+            if (!uiInitialized || uiHidden) return;
 
             DeleteButton(LayoutSelectionLabelId);
             CreateButton(LayoutSelectionLabelId, layoutSelectionStatus, RIGHT_COL, LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
                 ROW_HEIGHT, false);
+        }
+
+        /// <summary>
+        /// Update the InSim connection status and host labels.
+        /// </summary>
+        public void UpdateInSimStatus(string status, string host)
+        {
+            insimStatus = string.IsNullOrWhiteSpace(status) ? "InSim: unknown" : status;
+            insimHost = string.IsNullOrWhiteSpace(host) ? "Host: unknown" : host;
+            RenderInSimStatus();
+        }
+
+        /// <summary>
+        /// Render the InSim connection status and host labels.
+        /// </summary>
+        private void RenderInSimStatus()
+        {
+            if (!uiInitialized || uiHidden) return;
+
+            DeleteButton(InSimStatusLabelId);
+            DeleteButton(InSimHostLabelId);
+
+            CreateButton(InSimStatusLabelId, insimStatus, LEFT_COL, INSIM_STATUS_ROW, LAYOUT_STATUS_W, ROW_HEIGHT, false);
+            CreateButton(InSimHostLabelId, insimHost, LEFT_COL, (byte)(INSIM_STATUS_ROW + ROW_HEIGHT), LAYOUT_STATUS_W,
+                ROW_HEIGHT, false);
+        }
+
+        /// <summary>
+        /// Hide all UI controls and leave a restore button in the top-left corner.
+        /// </summary>
+        public void HideUI()
+        {
+            uiHidden = true;
+            ClearAllButtons();
+            CreateButton(ShowUiButtonId, "Show UI", SHOW_BUTTON_LEFT, SHOW_BUTTON_TOP, SHOW_BUTTON_W);
+        }
+
+        /// <summary>
+        /// Restore all UI controls after they have been hidden.
+        /// </summary>
+        public void ShowUI()
+        {
+            uiHidden = false;
+            ClearAllButtons();
+            Show();
+        }
+
+        /// <summary>
+        /// Clear all buttons created by this InSim instance.
+        /// </summary>
+        private void ClearAllButtons()
+        {
+            var clear = new IS_BFN
+            {
+                ReqI = 1,
+                SubT = ButtonFunction.BFN_CLEAR,
+                UCID = 0,
+                ClickID = 0,
+                ClickMax = 0
+            };
+            insim.Send(clear);
+        }
+
+        /// <summary>
+        /// Render the AI list using the latest snapshot of AI ids and names.
+        /// </summary>
+        private void RenderAIList(IEnumerable<(byte id, string name)> ai)
+        {
+            if (!uiInitialized || uiHidden) return;
+
+            byte row = (byte)(5 + ROW_HEIGHT * 4);
+            foreach (var b in aiListButtons.Values) DeleteButton(b);
+            foreach (var b in aiRemoveButtons.Keys) DeleteButton(b);
+            aiListButtons.Clear();
+            aiRemoveButtons.Clear();
+
+            byte index = 0;
+            foreach (var (id, name) in ai)
+            {
+                var labelId = ButtonIds.Dynamic(index);
+                var removeId = ButtonIds.Remove(index);
+                var top = (byte)(row + ROW_HEIGHT * index);
+                var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
+
+                CreateButton(removeId, "X", removeLeft, top);
+                CreateButton(labelId, $"{name}", AI_LIST_COL, top);
+
+                aiListButtons[id] = labelId;
+                aiRemoveButtons[removeId] = id;
+                index++;
+            }
         }
 
         /// <summary>

@@ -1813,6 +1813,30 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Update the displayed InSim connection status and host.
+        /// </summary>
+        public void UpdateInSimStatus(string status, string host)
+        {
+            mainUI?.UpdateInSimStatus(status, host);
+        }
+
+        /// <summary>
+        /// Hide all debug UI buttons and leave a restore control in the top-left corner.
+        /// </summary>
+        public void HideUI()
+        {
+            mainUI?.HideUI();
+        }
+
+        /// <summary>
+        /// Restore all debug UI buttons after they were hidden.
+        /// </summary>
+        public void ShowUI()
+        {
+            mainUI?.ShowUI();
+        }
+
+        /// <summary>
         /// Visualize the currently selected recorded route with the configured detail level.
         /// </summary>
         public void VisualizeSelectedRoute(byte viewPlid)

@@ -1,5 +1,7 @@
 # Changelog
 
+- Added a hide/show toggle that clears the debug UI and leaves a top-left Show UI button to restore the controls.
+- Replaced InSim online/local reconnect buttons with read-only connection and host status labels in the AI debug UI.
 - Recorded route visualization now places chalk markers at the recorded Z height with rounded coordinates so 1x detail renders stop failing with “invalid position” errors.
 - Guard AI debug updates when car telemetry is missing so the debug UI stops throwing null reference errors.
 - Offloaded AI spawning and recorded-route visualization to background tasks so large batches or heavy layouts no longer block InSim commands.

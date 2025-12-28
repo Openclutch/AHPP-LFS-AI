@@ -350,11 +350,11 @@ namespace AHPP_AI
                 case MainUI.PitAllAisId:
                     aiController.PitAllAIs();
                     break;
-                case MainUI.ConnectOnlineId:
-                    ReconnectInSim(onlineHost);
+                case MainUI.HideUiButtonId:
+                    aiController.HideUI();
                     break;
-                case MainUI.ConnectLocalId:
-                    ReconnectInSim(localHost);
+                case MainUI.ShowUiButtonId:
+                    aiController.ShowUI();
                     break;
                 case MainUI.RefreshSelectionFeedId:
                     RequestLayoutSelectionFeed();
@@ -471,6 +471,7 @@ namespace AHPP_AI
         private static void InitializeInSim()
         {
             logger.Log($"Initializing InSim connection to {currentHost}:{port}");
+            UpdateInSimStatus("InSim: connecting");
 
             try
             {
@@ -503,6 +504,7 @@ namespace AHPP_AI
             catch (Exception ex)
             {
                 logger.LogException(ex, "Failed to initialize InSim");
+                UpdateInSimStatus("InSim: failed to connect");
                 throw; // Re-throw to stop program
             }
         }
@@ -664,6 +666,7 @@ namespace AHPP_AI
         private static void OnVersion(IS_VER ver)
         {
             logger.Log($"Connected to LFS {ver.Version} {ver.Product}, InSim version: {ver.InSimVer}");
+            UpdateInSimStatus($"InSim: connected (v{ver.InSimVer})");
         }
 
         /// <summary>
@@ -727,6 +730,14 @@ namespace AHPP_AI
             currentHost = targetHost;
             InitializeInSim();
             aiController.ConnectOutGauge(currentHost, outGaugePort);
+        }
+
+        /// <summary>
+        /// Update the main UI with the current InSim status text and host.
+        /// </summary>
+        private static void UpdateInSimStatus(string status)
+        {
+            aiController.UpdateInSimStatus(status, $"Host: {currentHost}:{port}");
         }
     }
 }
