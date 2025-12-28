@@ -25,9 +25,12 @@ namespace AHPP_AI.Debug
         // Button positioning
         private const byte LEFT_COLUMN = 5;
         private const byte RIGHT_COLUMN = 50;
+        private const byte STATE_COLUMN = 80;
         private const byte TOP_ROW = 5;
         private const byte ROW_HEIGHT = 4;
         private const byte BUTTON_WIDTH = 20;
+        private const byte STATE_BUTTON_WIDTH = 35;
+        private const byte STATE_BUTTON_HEIGHT = 8;
         private const double WAYPOINT_THRESHOLD = 1.5; // Same threshold as the AI uses
         private const int WAYPOINT_TIMEOUT_SECONDS = 600; // Same timeout as the AI uses
 
@@ -96,6 +99,7 @@ namespace AHPP_AI.Debug
         };
 
         private byte aiPLID;
+        private byte aiButtonsBaseRow;
 
         private bool debugUIInitialized;
         private DateTime lastDebugUpdate = DateTime.MinValue;
@@ -135,9 +139,18 @@ namespace AHPP_AI.Debug
             return;
         }
 
+        /// <summary>
+        /// Recreate the debug buttons after an external clear (e.g., HideUI).
+        /// </summary>
+        public void RestoreDebugButtons()
+        {
+            CreateAIDebugButtons();
+            ShowAIButtons(true);
+        }
+
         public void ShowAIButtons(bool show)
         {
-            var baseRow = (byte)(TOP_ROW + ROW_HEIGHT * aiButtonIds.Count);
+            var baseRow = aiButtonsBaseRow == 0 ? (byte)(TOP_ROW + ROW_HEIGHT * aiButtonIds.Count) : aiButtonsBaseRow;
             if (show)
             {
                 CreateDebugButton(SpawnButtonId, "SPAWN AI", RIGHT_COLUMN, baseRow, BUTTON_WIDTH, ROW_HEIGHT);
@@ -185,16 +198,9 @@ namespace AHPP_AI.Debug
             {
                 logger.Log("Initializing debug UI...");
 
-                // Create AI debug buttons on the right side
-                var row = TOP_ROW;
-                foreach (var entry in aiButtonIds)
-                {
-                    CreateDebugButton(entry.Value, $"AI_{entry.Key.Substring(0, Math.Min(4, entry.Key.Length))}: --",
-                        RIGHT_COLUMN, row, BUTTON_WIDTH, ROW_HEIGHT);
-                    debugButtonsActive[entry.Value] = 1;
-                    row += ROW_HEIGHT;
-                }
+                CreateAIDebugButtons();
 
+                // Position the spawn/control buttons below the tallest debug row.
                 insim.Send(new IS_MST { Msg = "Debug UI initialized - showing info for AI" });
                 debugUIInitialized = true;
                 logger.Log("Debug UI initialization complete");
@@ -591,6 +597,32 @@ namespace AHPP_AI.Debug
             var color = recording ? "^1" : "^2";
             var suffix = recording ? $": {count}" : string.Empty;
             return $"{color}REC {routeIdx}{suffix}";
+        }
+
+        /// <summary>
+        /// Create the AI debug buttons with layout and tracking flags.
+        /// </summary>
+        private void CreateAIDebugButtons()
+        {
+            var row = TOP_ROW;
+            byte maxBottom = TOP_ROW;
+
+            foreach (var entry in aiButtonIds)
+            {
+                var left = entry.Key.Equals("State", StringComparison.OrdinalIgnoreCase) ? STATE_COLUMN : RIGHT_COLUMN;
+                var width = entry.Key.Equals("State", StringComparison.OrdinalIgnoreCase) ? STATE_BUTTON_WIDTH : BUTTON_WIDTH;
+                var height =
+                    entry.Key.Equals("State", StringComparison.OrdinalIgnoreCase) ? STATE_BUTTON_HEIGHT : ROW_HEIGHT;
+
+                CreateDebugButton(entry.Value, $"AI_{entry.Key.Substring(0, Math.Min(4, entry.Key.Length))}: --",
+                    left, row, width, height);
+                debugButtonsActive[entry.Value] = 1;
+                var bottom = (byte)(row + height);
+                row += ROW_HEIGHT;
+                if (bottom > maxBottom) maxBottom = bottom;
+            }
+
+            aiButtonsBaseRow = (byte)(maxBottom + ROW_HEIGHT);
         }
 
         private void DeleteButton(byte id)

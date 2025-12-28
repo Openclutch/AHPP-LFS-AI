@@ -24,6 +24,8 @@ namespace AHPP_AI.Debug
 
         private const float WAYPOINT_RADIUS = 2.5f; // Radius of waypoint visualization in meters
         private const int CONES_PER_CIRCLE = 0; // Number of cones to place around each waypoint
+        private const int LFS_MIN_COORD = -16000; // Safe bounds for AXM coordinates (1/16th meters)
+        private const int LFS_MAX_COORD = 16000;
 
         public const int MaxVisibleWaypoints = 3600; // Maximum number of waypoints to visualize
 
@@ -368,8 +370,11 @@ namespace AHPP_AI.Debug
                 var roundedX = (int)Math.Round(xMeters * 16f);
                 var roundedY = (int)Math.Round(yMeters * 16f);
                 var roundedZ = (int)Math.Round(zMeters * 4f);
-                var objX = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, roundedX));
-                var objY = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, roundedY));
+                // Clamp to safe layout bounds to avoid invalid position errors.
+                var clampedX = Math.Max(LFS_MIN_COORD, Math.Min(LFS_MAX_COORD, roundedX));
+                var clampedY = Math.Max(LFS_MIN_COORD, Math.Min(LFS_MAX_COORD, roundedY));
+                var objX = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, clampedX));
+                var objY = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, clampedY));
                 var objZ = (byte)Math.Max(byte.MinValue, Math.Min(byte.MaxValue, roundedZ));
 
                 logger.Log($"Placing object: {ObjectHelper.GetObjName(objectType)} (Type={objectType}), " +

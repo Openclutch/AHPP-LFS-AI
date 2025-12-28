@@ -44,6 +44,7 @@ namespace AHPP_AI
         private static readonly int outGaugePort;
         private static byte currentViewPLID = 0;
         private static string currentRecordingRoute = "main_loop";
+        private static string pendingRouteName = "main_loop";
         private static readonly string spawnRouteName;
         private static readonly string mainRouteName;
         private static readonly string mainAlternateRouteName;
@@ -64,6 +65,19 @@ namespace AHPP_AI
         private static readonly double purePursuitWheelbaseMeters;
         private static readonly double purePursuitSteeringGain;
         private static readonly double purePursuitMaxSteerDegrees;
+        private static readonly int recoveryShortReverseMs;
+        private static readonly int recoveryLongReverseMs;
+        private static readonly int recoveryCooldownMs;
+        private static readonly int recoveryValidationWindowMs;
+        private static readonly double recoverySuccessDistanceMeters;
+        private static readonly double recoverySuccessSpeedKmh;
+        private static readonly double recoveryPositionChangeThreshold;
+        private static readonly double recoveryProgressStallThreshold;
+        private static readonly int recoveryStuckCheckIntervalMs;
+        private static readonly double recoveryLowSpeedThresholdKmh;
+        private static readonly int recoveryDetectionsBeforeAction;
+        private static readonly int recoveryMaxFailureCount;
+        private static readonly int recoveryStallReverseTrigger;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -93,6 +107,7 @@ namespace AHPP_AI
                 ? string.Empty
                 : routeLibrary.NormalizeRouteName(rawAlt);
             currentRecordingRoute = routeLibrary.NormalizeRouteName(mainRouteName);
+            pendingRouteName = currentRecordingRoute;
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
             spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
@@ -107,6 +122,19 @@ namespace AHPP_AI
             purePursuitWheelbaseMeters = appConfig.GetDouble("AI", "PurePursuitWheelbaseMeters", 2.5);
             purePursuitSteeringGain = appConfig.GetDouble("AI", "PurePursuitSteeringGain", 1.0);
             purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
+            recoveryShortReverseMs = appConfig.GetInt("AI", "RecoveryShortReverseMs", 1200);
+            recoveryLongReverseMs = appConfig.GetInt("AI", "RecoveryLongReverseMs", 2000);
+            recoveryCooldownMs = appConfig.GetInt("AI", "RecoveryCooldownMs", 750);
+            recoveryValidationWindowMs = appConfig.GetInt("AI", "RecoveryValidationWindowMs", 2000);
+            recoverySuccessDistanceMeters = appConfig.GetDouble("AI", "RecoverySuccessDistanceMeters", 3.0);
+            recoverySuccessSpeedKmh = appConfig.GetDouble("AI", "RecoverySuccessSpeedKmh", 8.0);
+            recoveryPositionChangeThreshold = appConfig.GetDouble("AI", "RecoveryPositionChangeThreshold", 2.0);
+            recoveryProgressStallThreshold = appConfig.GetDouble("AI", "RecoveryProgressStallThreshold", 0.2);
+            recoveryStuckCheckIntervalMs = appConfig.GetInt("AI", "RecoveryStuckCheckIntervalMs", 1000);
+            recoveryLowSpeedThresholdKmh = appConfig.GetDouble("AI", "RecoveryLowSpeedThresholdKmh", 5.0);
+            recoveryDetectionsBeforeAction = appConfig.GetInt("AI", "RecoveryDetectionsBeforeAction", 2);
+            recoveryMaxFailureCount = appConfig.GetInt("AI", "RecoveryMaxFailureCount", 3);
+            recoveryStallReverseTrigger = appConfig.GetInt("AI", "RecoveryStallReverseTrigger", 3);
             recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
 
             // Initialize components in the correct order
@@ -134,6 +162,20 @@ namespace AHPP_AI
                 purePursuitWheelbaseMeters,
                 purePursuitSteeringGain,
                 purePursuitMaxSteerDegrees);
+            aiController.ConfigureRecovery(
+                recoveryShortReverseMs,
+                recoveryLongReverseMs,
+                recoveryCooldownMs,
+                recoveryValidationWindowMs,
+                recoverySuccessDistanceMeters,
+                recoverySuccessSpeedKmh,
+                recoveryPositionChangeThreshold,
+                recoveryProgressStallThreshold,
+                recoveryStuckCheckIntervalMs,
+                recoveryLowSpeedThresholdKmh,
+                recoveryDetectionsBeforeAction,
+                recoveryMaxFailureCount,
+                recoveryStallReverseTrigger);
         }
 
         /// <summary>
@@ -316,12 +358,7 @@ namespace AHPP_AI
             if (aiController.TryGetRouteNameForButton(btc.ClickID, out var selectedRoute))
             {
                 SetRecordingRoute(selectedRoute);
-                return;
-            }
-
-            if (aiController.TryGetVisualizationRouteNameForButton(btc.ClickID, out var visualizationRoute))
-            {
-                aiController.SetVisualizationRouteSelection(visualizationRoute);
+                aiController.SetVisualizationRouteSelection(selectedRoute);
                 aiController.VisualizeSelectedRoute(currentViewPLID);
                 return;
             }
@@ -358,6 +395,11 @@ namespace AHPP_AI
                     break;
                 case MainUI.RefreshSelectionFeedId:
                     RequestLayoutSelectionFeed();
+                    break;
+                case MainUI.AddRouteButtonId:
+                    SetRecordingRoute(pendingRouteName);
+                    aiController.SetVisualizationRouteSelection(pendingRouteName);
+                    aiController.VisualizeSelectedRoute(currentViewPLID);
                     break;
                 case MainUI.LayoutAttachIndexId:
                     aiController.SetSelectedNodeAsAttachIndex();
@@ -447,7 +489,8 @@ namespace AHPP_AI
             if (btt.ClickID == MainUI.RouteNameInputId)
             {
                 var normalized = routeLibrary.NormalizeRouteName(btt.Text);
-                SetRecordingRoute(normalized);
+                pendingRouteName = normalized;
+                insim.Send(new IS_MST { Msg = $"Route name ready: {pendingRouteName}. Click Add Route to use it." });
                 return;
             }
 
@@ -599,6 +642,7 @@ namespace AHPP_AI
             var normalized = routeLibrary.NormalizeRouteName(
                 string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
             currentRecordingRoute = normalized;
+            pendingRouteName = normalized;
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
             aiController.RefreshRouteOptions(currentRecordingRoute);
             insim.Send(new IS_MST { Msg = $"Recording route set to {currentRecordingRoute}" });

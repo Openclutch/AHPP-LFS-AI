@@ -35,7 +35,6 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<byte, Queue<int>> headingErrorHistory = new Dictionary<byte, Queue<int>>();
         private readonly Dictionary<byte, bool> inRecoveryMode = new Dictionary<byte, bool>();
         private readonly Dictionary<byte, int> failedRecoveryCycles = new Dictionary<byte, int>();
-        private readonly Dictionary<byte, bool> reverseRecoveryRequested = new Dictionary<byte, bool>();
         private readonly Dictionary<byte, ProgressState> progressStates = new Dictionary<byte, ProgressState>();
 
         // Path entry handling
@@ -305,11 +304,31 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
-        ///     Check progress toward waypoint and handle recovery if needed.
-        ///     Returns true if recovery attempts exceeded and a reset is recommended.
+        ///     Result of a progress evaluation, used to drive unified recovery handling.
         /// </summary>
-        public bool CheckWaypointProgress(byte plid, double currentDistance)
+        public class ProgressEvaluationResult
         {
+            public bool ShouldReverse { get; set; }
+            public bool ShouldReset { get; set; }
+            public bool IsMovingAway { get; set; }
+            public bool IsSlowProgress { get; set; }
+            public double ProgressDelta { get; set; }
+        }
+
+        /// <summary>
+        ///     Check progress toward waypoint and surface recovery recommendations.
+        /// </summary>
+        public ProgressEvaluationResult EvaluateProgress(byte plid, double currentDistance)
+        {
+            var result = new ProgressEvaluationResult
+            {
+                ProgressDelta = 0,
+                ShouldReset = false,
+                ShouldReverse = false,
+                IsMovingAway = false,
+                IsSlowProgress = false
+            };
+
             // Ensure dictionaries have the necessary keys
             if (!lastDistanceToWaypoint.ContainsKey(plid))
                 lastDistanceToWaypoint[plid] = currentDistance;
@@ -331,6 +350,21 @@ namespace AHPP_AI.Waypoint
             {
                 var previousDistance = lastDistanceToWaypoint[plid];
                 var progress = previousDistance - currentDistance;
+                result.ProgressDelta = progress;
+
+                // If we just advanced a waypoint, distances can jump up; ignore negative progress within a small window.
+                if (progress < 0 &&
+                    previousDistance <= config.ProgressAdvanceResetDistanceMeters &&
+                    currentDistance <= config.ProgressAdvanceResetDistanceMeters * 2)
+                {
+                    recoveryAttempts[plid] = 0;
+                    failedRecoveryCycles[plid] = 0;
+                    progressStates[plid] = ProgressState.Progressing;
+
+                    lastDistanceToWaypoint[plid] = currentDistance;
+                    lastProgressCheckTimes[plid] = DateTime.Now;
+                    return result;
+                }
 
                 logger.Log(
                     $"PLID={plid} PROGRESS CHECK: Previous={previousDistance:F1}m, Current={currentDistance:F1}m, Progress={progress:F1}m");
@@ -340,7 +374,6 @@ namespace AHPP_AI.Waypoint
                 {
                     progressStates[plid] = ProgressState.ReverseRecoveryPending;
                     recoveryAttempts[plid] = 0;
-                    reverseRecoveryRequested[plid] = true;
                     failedRecoveryCycles[plid] = failedRecoveryCycles.TryGetValue(plid, out var cycles)
                         ? cycles + 1
                         : 1;
@@ -352,24 +385,30 @@ namespace AHPP_AI.Waypoint
                     {
                         logger.LogWarning(
                             $"PLID={plid} RECOVERY FAILED: Exceeded recovery cycles, requesting pit or spectate.");
-                        return true;
+                        result.ShouldReset = true;
+                    }
+                    else
+                    {
+                        result.ShouldReverse = true;
                     }
 
                     lastDistanceToWaypoint[plid] = currentDistance;
                     lastProgressCheckTimes[plid] = DateTime.Now;
-                    return false;
                 }
                 else if (progress < 0)
                 {
-                    // Moving away from waypoint, increment recovery attempt counter
+                    // Moving away from waypoint, increment recovery attempt counter and request immediate recovery
                     recoveryAttempts[plid]++;
                     progressStates[plid] = ProgressState.MovingAway;
+                    result.IsMovingAway = true;
+                    result.ShouldReverse = true;
                     logger.Log(
                         $"PLID={plid} MOVING AWAY: Recovery attempt {recoveryAttempts[plid]} of {config.MaxRecoveryAttempts}");
                 }
                 else if (progress < config.MinRequiredProgress)
                 {
                     progressStates[plid] = ProgressState.Slow;
+                    result.IsSlowProgress = true;
                 }
                 else if (progress > config.MinRequiredProgress)
                 {
@@ -384,22 +423,10 @@ namespace AHPP_AI.Waypoint
                 lastProgressCheckTimes[plid] = DateTime.Now;
             }
 
-            return false;
-        }
+            result.IsMovingAway |= progressStates[plid] == ProgressState.MovingAway;
+            result.IsSlowProgress |= progressStates[plid] == ProgressState.Slow;
 
-        /// <summary>
-        /// Whether a reverse/turn recovery was requested due to stalled progress.
-        /// This consumes the flag so it only triggers once per request.
-        /// </summary>
-        public bool ConsumeReverseRecoveryRequest(byte plid)
-        {
-            if (reverseRecoveryRequested.TryGetValue(plid, out var requested) && requested)
-            {
-                reverseRecoveryRequested[plid] = false;
-                return true;
-            }
-
-            return false;
+            return result;
         }
 
         /// <summary>

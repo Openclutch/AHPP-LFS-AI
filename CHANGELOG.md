@@ -1,6 +1,13 @@
 # Changelog
 
+- Unified AI recovery into a single driver-managed state machine (stall restart + short/long reverse with cooldown validation) with new tuning knobs in `config.ini` for timings, success thresholds, and escalation limits before forcing a pit/spectate reset.
+- Fixed AI reset flow to avoid invalid `/pit` command; we now spectate the AI before respawning.
+- Simplified AI debug buttons: `AI_CTL` now only shows control inputs, `AI_ST` shows state only, and the state button is larger in a third column for readability.
+- AI resets now spectate by AI name (e.g., "AI 23") and issue a /join to restart instead of using PLID.
+- Clamped waypoint/cone placement to safe layout bounds to reduce “invalid position” errors when visualizing routes.
 - Added a hide/show toggle that clears the debug UI and leaves a top-left Show UI button to restore the controls.
+- Combined recording/visualization route buttons into one list with an “Add Route” action so routes aren’t accidentally overwritten; record toggle stays centered.
+- Shifted visualization detail controls left to avoid overlapping the unified route buttons on the right column.
 - Replaced InSim online/local reconnect buttons with read-only connection and host status labels in the AI debug UI.
 - Recorded route visualization now places chalk markers at the recorded Z height with rounded coordinates so 1x detail renders stop failing with “invalid position” errors.
 - Guard AI debug updates when car telemetry is missing so the debug UI stops throwing null reference errors.

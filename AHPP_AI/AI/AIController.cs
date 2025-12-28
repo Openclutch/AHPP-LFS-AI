@@ -44,6 +44,7 @@ namespace AHPP_AI.AI
         private readonly MainUI mainUI;
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
+        private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
         private readonly Random branchRandom = new Random();
         private const double InnerBranchJoinChance = 0.25;
         private const double InnerBranchMaxDistanceMeters = 12.0;
@@ -113,6 +114,14 @@ namespace AHPP_AI.AI
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
             InitializeRoutePresets();
+        }
+
+        /// <summary>
+        /// Wrap AI names with quotes when needed for chat/admin commands.
+        /// </summary>
+        private static string FormatNameForCommand(string name)
+        {
+            return string.IsNullOrWhiteSpace(name) ? string.Empty : name;
         }
 
         /// <summary>
@@ -306,6 +315,8 @@ namespace AHPP_AI.AI
             recordingRouteName = routeLibrary.NormalizeRouteName(
                 string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
             mainUI?.UpdateRecordingRouteSelection(recordingRouteName);
+            visualizationRouteName = recordingRouteName;
+            mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
             RefreshRouteOptions(recordingRouteName);
         }
 
@@ -476,6 +487,39 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure unified recovery timings and success thresholds.
+        /// </summary>
+        public void ConfigureRecovery(
+            int shortReverseMs,
+            int longReverseMs,
+            int cooldownMs,
+            int validationWindowMs,
+            double successDistanceMeters,
+            double successSpeedKmh,
+            double positionChangeThreshold,
+            double progressStallThreshold,
+            int stuckCheckIntervalMs,
+            double lowSpeedThresholdKmh,
+            int detectionsBeforeAction,
+            int maxFailureCount,
+            int stallReverseTrigger)
+        {
+            config.RecoveryShortReverseMs = Math.Max(200, shortReverseMs);
+            config.RecoveryLongReverseMs = Math.Max(config.RecoveryShortReverseMs, longReverseMs);
+            config.RecoveryCooldownMs = Math.Max(100, cooldownMs);
+            config.RecoveryValidationWindowMs = Math.Max(200, validationWindowMs);
+            config.RecoverySuccessDistanceMeters = Math.Max(0.1, successDistanceMeters);
+            config.RecoverySuccessSpeedKmh = Math.Max(0.0, successSpeedKmh);
+            config.RecoveryPositionChangeThreshold = Math.Max(0.1, positionChangeThreshold);
+            config.RecoveryProgressStallThreshold = Math.Max(0.0, progressStallThreshold);
+            config.RecoveryStuckCheckIntervalMs = Math.Max(200, stuckCheckIntervalMs);
+            config.RecoveryLowSpeedThresholdKmh = Math.Max(0.1, lowSpeedThresholdKmh);
+            config.RecoveryDetectionsBeforeAction = Math.Max(1, detectionsBeforeAction);
+            config.RecoveryMaxFailureCount = Math.Max(1, maxFailureCount);
+            config.RecoveryStallReverseTrigger = Math.Max(1, stallReverseTrigger);
+        }
+
+        /// <summary>
         /// Manually set indicator state for an AI with optional auto-cancel.
         /// </summary>
         public void SetIndicators(byte plid, AILightController.IndicatorState state, TimeSpan? duration = null)
@@ -567,14 +611,19 @@ namespace AHPP_AI.AI
             if (!aiPLIDs.Contains(plid))
                 return;
 
-            insim.Send(new IS_MST { Msg = $"/pit {plid}" });
-            insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+            var name = aiNames.TryGetValue(plid, out var storedName) ? storedName : $"AI {plid}";
+            var nameForCmd = FormatNameForCommand(name);
+
+            // Spectate by name (PLID is not accepted), then rejoin.
+            insim.Send(new IS_MST { Msg = $"/spec {nameForCmd}" });
+            insim.Send(new IS_MST { Msg = $"/join {nameForCmd}" });
 
             aiPLIDs.Remove(plid);
             aiSpawnPositions.Remove(plid);
             engineStateMap.Remove(plid);
             currentRoute.Remove(plid);
             activeBranchSelections.Remove(plid);
+            aiNames.Remove(plid);
 
             insim.Send(new IS_MST { Msg = "/ai" });
             logger.Log($"Reset AI {plid} after failed recovery; sent to pits/spectate and spawned replacement");
@@ -1174,6 +1223,7 @@ namespace AHPP_AI.AI
                     aiPLIDs.Add(plid);
                     aiSpawnPositions[plid] = new Vec();
                     engineStateMap[plid] = true; // Assume engine starts running
+                    aiNames[plid] = npl.PName;
 
                     // Initialize the driver
                     driver.InitializeDriver(plid);
@@ -1474,7 +1524,8 @@ namespace AHPP_AI.AI
         {
             foreach (var plid in aiPLIDs)
             {
-                yield return (plid, $"AI {plid}");
+                var name = aiNames.TryGetValue(plid, out var stored) ? stored : $"AI {plid}";
+                yield return (plid, name);
             }
         }
 
@@ -1834,6 +1885,7 @@ namespace AHPP_AI.AI
         public void ShowUI()
         {
             mainUI?.ShowUI();
+            debugUI?.RestoreDebugButtons();
         }
 
         /// <summary>

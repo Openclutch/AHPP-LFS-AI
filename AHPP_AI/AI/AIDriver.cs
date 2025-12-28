@@ -25,16 +25,13 @@ namespace AHPP_AI.AI
             Recovery // Recovery completed, resume normal operation
         }
 
-        // Enumeration for wall recovery state machine
-        public enum WallRecoveryState
+        private enum RecoveryState
         {
-            Normal, // Normal operation
-            Detected, // Stuck against wall detected
-            Reversing, // Step 1: Reverse away from wall
-            Turning, // Step 2: Turn away from wall
-            Stopping, // Step 3: Come to a complete stop
-            MovingForward, // Step 4: Attempt to move forward
-            Complete // Recovery complete
+            Driving,
+            EngineRestart,
+            ReverseShort,
+            ReverseLong,
+            Cooldown
         }
 
         private enum MovementIssue
@@ -44,20 +41,28 @@ namespace AHPP_AI.AI
             StuckLowSpeed
         }
 
-        // Wall recovery configuration
-        private const int MAX_WALL_RECOVERY_ATTEMPTS = 2;
-        private const int STALL_REVERSE_TRIGGER = 3;
-        private const double REVERSE_TIME_MS = 2000;
-        private const double TURNING_TIME_MS = 3000;
-        private const double STOPPING_TIME_MS = 500;
-        private const double MOVING_FORWARD_TIME_MS = 500;
-        private const double POSITION_CHANGE_THRESHOLD = 2; // Smaller threshold for detecting stuck
-        private const double STUCK_CHECK_INTERVAL_MS = 1000; // Check progress every second
+        private class RecoveryContext
+        {
+            public RecoveryState State = RecoveryState.Driving;
+            public EngineStartState EngineState = EngineStartState.Normal;
+            public DateTime StateStarted = DateTime.Now;
+            public DateTime ActionEnds = DateTime.Now;
+            public int FailureCount;
+            public int AttemptCount;
+            public double BaselineDistance = double.MaxValue;
+            public double BaselineX;
+            public double BaselineY;
+            public int BaselineHeadingError;
+            public int SteerDirection = 1;
+            public string Reason = string.Empty;
+            public bool ValidationActive;
+        }
 
         private readonly AIConfig config;
 
         // Control state
-        private readonly Dictionary<byte, string> controlInfo = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, string> controlInputs = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, string> controlStatuses = new Dictionary<byte, string>();
 
         // Engine state tracking
         private readonly Dictionary<byte, bool> engineRunning = new Dictionary<byte, bool>();
@@ -77,19 +82,9 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
         private readonly Dictionary<byte, double> stuckPositionY = new Dictionary<byte, double>();
         private readonly Dictionary<byte, MovementIssue> movementIssues = new Dictionary<byte, MovementIssue>();
-        private readonly Dictionary<byte, int> wallRecoveryAttempts = new Dictionary<byte, int>();
         private readonly Dictionary<byte, int> consecutiveStalls = new Dictionary<byte, int>();
-
-        // Wall recovery state tracking
-        private readonly Dictionary<byte, WallRecoveryState> wallRecoveryStates =
-            new Dictionary<byte, WallRecoveryState>();
-
-        private readonly Dictionary<byte, int> wallRecoverySteeringDirection = new Dictionary<byte, int>();
-        private readonly Dictionary<byte, DateTime> wallRecoveryTimers = new Dictionary<byte, DateTime>();
-        private readonly Dictionary<byte, bool> reverseRecoveryActive = new Dictionary<byte, bool>();
-        private readonly Dictionary<byte, DateTime> reverseRecoveryTimers = new Dictionary<byte, DateTime>();
-        private readonly Dictionary<byte, int> reverseRecoverySteer = new Dictionary<byte, int>();
-        private readonly Random reverseRecoveryRandom = new Random();
+        private readonly Dictionary<byte, RecoveryContext> recoveryContexts = new Dictionary<byte, RecoveryContext>();
+        private readonly Dictionary<byte, int> movementIssueCounts = new Dictionary<byte, int>();
         private readonly WaypointFollower waypointFollower;
 
         public AIDriver(
@@ -119,7 +114,8 @@ namespace AHPP_AI.AI
         public void InitializeDriver(byte plid)
         {
             gearboxController.InitializeGearbox(plid);
-            controlInfo[plid] = "Initializing";
+            controlInputs[plid] = "T:0k B:0k G:0 C:0 S:0";
+            controlStatuses[plid] = "Initializing";
             engineRunning[plid] = false; // Always start with engine "not running" to trigger start procedure
             engineStartStates[plid] = EngineStartState.PressClutch; // Start in clutch pressed state
             engineStateTimers[plid] = DateTime.Now;
@@ -129,18 +125,15 @@ namespace AHPP_AI.AI
             lightController?.SetHeadlights(plid, AILightController.HeadlightMode.LowBeam);
             lightController?.CancelIndicators(plid);
 
-            // Initialize wall recovery state
-            wallRecoveryStates[plid] = WallRecoveryState.Normal;
-            wallRecoveryTimers[plid] = DateTime.Now;
-            wallRecoveryAttempts[plid] = 0;
+            // Initialize recovery tracking
+            recoveryContexts[plid] = new RecoveryContext();
             stuckPositionX[plid] = 0;
             stuckPositionY[plid] = 0;
-            wallRecoverySteeringDirection[plid] = 1; // Default to turning right in recovery
             lastStuckCheckTime[plid] = DateTime.Now;
             lastProgressDistance[plid] = 0;
             movementIssues[plid] = MovementIssue.None;
             consecutiveStalls[plid] = 0;
-            reverseRecoveryActive[plid] = false;
+            movementIssueCounts[plid] = 0;
 
             // Send initial controls to configure AI car
             SendAIControls(plid);
@@ -179,49 +172,34 @@ namespace AHPP_AI.AI
                 double currentHeading = car.Heading;
 
 
-                // Check if we're stuck against a wall
-                if (wallRecoveryStates[plid] != WallRecoveryState.Normal && config.WallRecoveryEnabled)
-                    // Handle wall recovery procedure
-                    if (HandleWallRecovery(plid, carX, carY, speedKmh, (int)currentHeading))
-                    {
-                        // Update control info for debug display to show wall recovery
-                        controlInfo[plid] = $"Wall Recovery: {wallRecoveryStates[plid]}";
-                        return; // Skip normal controls while handling wall recovery
-                    }
-
                 // Calculate distance and heading to target waypoint early for recovery steering.
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
 
-                // Trigger reverse recovery if requested due to repeated stalled progress.
-                if (waypointFollower.ConsumeReverseRecoveryRequest(plid))
-                {
-                    StartReverseRecovery(plid, headingError);
-                    controlInfo[plid] = "Reverse recovery: backing up";
-                }
+                var progressEvaluation = waypointFollower.EvaluateProgress(plid, distance);
+                var movementIssue = DetectMovementIssue(plid, carX, carY, (int)currentHeading, speedKmh, distance);
 
-                if (HandleReverseRecovery(plid)) return;
-
-                // Handle engine stall and restart if necessary
-                if (HandleEngineState(plid, speedKmh, headingError))
+                if (progressEvaluation.ShouldReset)
                 {
-                    // Update control info for debug display to show stall recovery
-                    controlInfo[plid] = $"Engine Restart: {engineStartStates[plid]}";
-                    return; // Skip normal controls while handling stall
-                }
-
-                // Check progress toward waypoint and also check if stuck
-                var recoveryFailed = waypointFollower.CheckWaypointProgress(plid, distance);
-                if (recoveryFailed)
-                {
-                    controlInfo[plid] = "Recovery failed - resetting";
+                    controlStatuses[plid] = "Recovery failed - resetting";
                     logger.LogWarning($"PLID={plid} RECOVERY FAILED: Pitting/spectating AI to clear track");
                     recoveryFailedHandler?.Invoke(plid);
                     return;
                 }
 
-                // Check if we're making progress at regular intervals
-                CheckIfStuck(plid, carX, carY, (int)currentHeading, speedKmh, distance);
+                // Evaluate unified recovery state machine; returns true when recovery handled control inputs.
+                if (HandleRecovery(
+                        plid,
+                        carX,
+                        carY,
+                        speedKmh,
+                        headingError,
+                        distance,
+                        progressEvaluation,
+                        movementIssue))
+                {
+                    return;
+                }
 
                 // Calculate steering, throttle and brake
                 var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
@@ -313,15 +291,13 @@ namespace AHPP_AI.AI
                     throttle = 0;
                     brake = 65535; // Full brake
                     clutchValue = 65535;
-
-                    // Update control info for debug display
-                    controlInfo[plid] = "COLLISION AVOIDANCE: Stopping";
+                    controlStatuses[plid] = "COLLISION AVOIDANCE: Stopping";
                 }
 
                 // Update control info for debug display
-                controlInfo[plid] =
-                    $"T:{throttle / 1000} B:{brake / 1000} G:{gear} C:{clutchValue / 1000} S:{clutchState} Eng:{(engineRunning[plid] ? "ON" : "OFF")}";
-                if (lowRpmClutchActive) controlInfo[plid] += " (Low RPM clutch)";
+                controlInputs[plid] =
+                    $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+                if (lowRpmClutchActive) controlStatuses[plid] = "Low RPM clutch";
 
                 // Send AI controls
                 SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
@@ -333,340 +309,299 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Check if the vehicle is stuck against a wall based on lack of movement
+        ///     Inspect recent movement to see if we are likely stuck or making no progress.
         /// </summary>
-        private void CheckIfStuck(byte plid, double carX, double carY, int currentHeading, double speedKmh,
+        private MovementIssue DetectMovementIssue(
+            byte plid,
+            double carX,
+            double carY,
+            int currentHeading,
+            double speedKmh,
             double currentDistance)
         {
-            // Only check if we're in normal operation (not already in recovery)
-            if (wallRecoveryStates[plid] != WallRecoveryState.Normal)
-                return;
-
-            // If wall recovery is disabled, keep state clean and skip detection
-            if (!config.WallRecoveryEnabled)
-            {
-                wallRecoveryAttempts[plid] = 0;
-                wallRecoveryStates[plid] = WallRecoveryState.Normal;
-                return;
-            }
-
             if (!movementIssues.ContainsKey(plid))
                 movementIssues[plid] = MovementIssue.None;
 
-            // Only check at regular intervals
-            if ((DateTime.Now - lastStuckCheckTime[plid]).TotalMilliseconds < STUCK_CHECK_INTERVAL_MS)
-                return;
+            if (!movementIssueCounts.ContainsKey(plid))
+                movementIssueCounts[plid] = 0;
+
+            if (!lastStuckCheckTime.ContainsKey(plid))
+                lastStuckCheckTime[plid] = DateTime.Now;
+
+            // Only check at configured intervals
+            if ((DateTime.Now - lastStuckCheckTime[plid]).TotalMilliseconds <
+                config.RecoveryStuckCheckIntervalMs)
+                return movementIssues[plid];
 
             lastStuckCheckTime[plid] = DateTime.Now;
 
-            // If this is the first check, initialize
-            if (stuckPositionX[plid] == 0 && stuckPositionY[plid] == 0)
+            // Initialize baseline if needed
+            stuckPositionX.TryGetValue(plid, out var previousX);
+            stuckPositionY.TryGetValue(plid, out var previousY);
+
+            if (Math.Abs(previousX) < double.Epsilon &&
+                Math.Abs(previousY) < double.Epsilon)
             {
                 stuckPositionX[plid] = carX;
                 stuckPositionY[plid] = carY;
                 lastProgressDistance[plid] = currentDistance;
-                if (!movementIssues.ContainsKey(plid))
-                    movementIssues[plid] = MovementIssue.None;
-                return;
+                movementIssues[plid] = MovementIssue.None;
+                return MovementIssue.None;
             }
 
-            // Calculate how far we've moved since last check
             var dx = carX - stuckPositionX[plid];
             var dy = carY - stuckPositionY[plid];
             var distanceMoved = Math.Sqrt(dx * dx + dy * dy);
-
-            // Calculate progress toward waypoint
             var distanceProgress = lastProgressDistance[plid] - currentDistance;
 
-            // Detect if we're making insufficient progress
-            var isStuck = false;
-            var movementIssue = MovementIssue.None;
+            var issue = MovementIssue.None;
 
-            // Option 1: We haven't moved enough physically
-            if (distanceMoved < POSITION_CHANGE_THRESHOLD && speedKmh < 5.0)
+            if (distanceMoved < config.RecoveryPositionChangeThreshold &&
+                speedKmh < config.RecoveryLowSpeedThresholdKmh)
             {
-                isStuck = true;
-                movementIssue = MovementIssue.StuckLowSpeed;
-                logger.Log($"PLID={plid} STUCK DETECTION: Moved only {distanceMoved:F2}m, speed={speedKmh:F1}km/h");
-            }
-
-            // Option 2: We're not reducing distance to the waypoint despite low speed
-            if (!isStuck && distanceProgress <= 0.1 && speedKmh < 10.0)
-            {
-                isStuck = true;
-                movementIssue = MovementIssue.SlowProgress;
-                logger.Log($"PLID={plid} PROGRESS STALL: Distance to target not improving (Δ={distanceProgress:F2}m)");
-            }
-
-            if (isStuck)
-            {
-                movementIssues[plid] = movementIssue;
-
-                // Increment wall recovery attempts 
-                wallRecoveryAttempts[plid]++;
-
+                issue = MovementIssue.StuckLowSpeed;
                 logger.Log(
-                    $"PLID={plid} POSSIBLE WALL STUCK: Attempt {wallRecoveryAttempts[plid]} of {MAX_WALL_RECOVERY_ATTEMPTS}");
+                    $"PLID={plid} STUCK DETECTION: Moved {distanceMoved:F2}m @ {speedKmh:F1}km/h (threshold {config.RecoveryPositionChangeThreshold:F1}m)");
+            }
+            else if (distanceProgress <= config.RecoveryProgressStallThreshold &&
+                     speedKmh < config.RecoveryLowSpeedThresholdKmh * 2)
+            {
+                issue = MovementIssue.SlowProgress;
+                logger.Log(
+                    $"PLID={plid} PROGRESS STALL: Distance to target not improving (Δ={distanceProgress:F2}m)");
+            }
 
-                // Check if we need to start wall recovery
-                if (wallRecoveryAttempts[plid] >= MAX_WALL_RECOVERY_ATTEMPTS)
+            if (issue != MovementIssue.None)
+            {
+                movementIssues[plid] = issue;
+                movementIssueCounts[plid] = movementIssueCounts.TryGetValue(plid, out var count) ? count + 1 : 1;
+                var steerDirection = waypointFollower.CalculateTargetData(plid, carX, carY, currentHeading).headingError;
+                logger.Log(
+                    $"PLID={plid} MOVEMENT ISSUE: {issue} (count {movementIssueCounts[plid]} of {config.RecoveryDetectionsBeforeAction}), steerDir={Math.Sign(steerDirection)}");
+                if (movementIssueCounts[plid] >= config.RecoveryDetectionsBeforeAction)
                 {
-                    // Start wall recovery procedure
-                    wallRecoveryStates[plid] = WallRecoveryState.Detected;
-                    wallRecoveryTimers[plid] = DateTime.Now;
-
-                    // Choose a recovery steering direction - opposite of current heading error
-                    var (_, _, headingError) = waypointFollower.CalculateTargetData(plid, carX, carY, currentHeading);
-                    wallRecoverySteeringDirection[plid] = Math.Sign(headingError) == 0 ? 1 : -Math.Sign(headingError);
-
-                    logger.Log(
-                        $"PLID={plid} WALL STUCK: Starting wall recovery procedure, turning direction: {wallRecoverySteeringDirection[plid]}");
+                    stuckPositionX[plid] = carX;
+                    stuckPositionY[plid] = carY;
+                    lastProgressDistance[plid] = currentDistance;
+                    return issue;
                 }
             }
             else
             {
-                // Making good progress, reset attempts
-                if (wallRecoveryAttempts[plid] > 0)
-                {
-                    logger.Log($"PLID={plid} PROGRESS OK: Resetting stuck detection, moved {distanceMoved:F2}m");
-                    wallRecoveryAttempts[plid] = 0;
-                }
-
-                if (movementIssues.ContainsKey(plid) && movementIssues[plid] != MovementIssue.None)
-                    movementIssues[plid] = MovementIssue.None;
+                movementIssueCounts[plid] = 0;
+                movementIssues[plid] = MovementIssue.None;
             }
 
-            // Update for next check
             stuckPositionX[plid] = carX;
             stuckPositionY[plid] = carY;
             lastProgressDistance[plid] = currentDistance;
+
+            return MovementIssue.None;
         }
 
+
         /// <summary>
-        ///     Handle wall recovery procedure with reversing and turning
+        ///     Main unified recovery handler. Returns true when recovery controls were sent and normal driving should pause.
         /// </summary>
-        private bool HandleWallRecovery(byte plid, double carX, double carY, double speedKmh, int currentHeading)
+        private bool HandleRecovery(
+            byte plid,
+            double carX,
+            double carY,
+            double speedKmh,
+            int headingError,
+            double distanceToWaypoint,
+            WaypointFollower.ProgressEvaluationResult progressEvaluation,
+            MovementIssue movementIssue)
         {
-            // Get elapsed time since last state change
-            var elapsed = DateTime.Now.Subtract(wallRecoveryTimers[plid]).TotalMilliseconds;
+            var context = GetRecoveryContext(plid);
 
-            // Get the turning direction
-            var turnDirection = wallRecoverySteeringDirection[plid];
-
-            // State machine for wall recovery
-            switch (wallRecoveryStates[plid])
+            var isEngineRunning = engineRunning.TryGetValue(plid, out var running) && running;
+            if (!isEngineRunning &&
+                context.State == RecoveryState.Driving)
             {
-                case WallRecoveryState.Detected:
-                    // Start the recovery procedure by reversing
-                    wallRecoveryStates[plid] = WallRecoveryState.Reversing;
-                    wallRecoveryTimers[plid] = DateTime.Now;
-                    logger.Log($"PLID={plid} WALL RECOVERY: Reversing");
-                    return true;
+                BeginEngineRecovery(plid, headingError, distanceToWaypoint, carX, carY, "Engine stalled");
+            }
 
-                case WallRecoveryState.Reversing:
-                    // Reverse away from wall - steer opposite to get away from wall
-                    // Center steering plus slight opposite turn
-                    var reverseSteeringValue = config.SteeringCenter + turnDirection * 15000;
+            if (context.State == RecoveryState.Driving)
+            {
+                if (progressEvaluation.ShouldReverse)
+                {
+                    BeginReverseRecovery(
+                        plid,
+                        headingError,
+                        distanceToWaypoint,
+                        carX,
+                        carY,
+                        context.AttemptCount > 0,
+                        progressEvaluation.IsMovingAway ? "Moving away from waypoint" : "Progress stalled");
+                }
+                else if (movementIssue != MovementIssue.None)
+                {
+                    BeginReverseRecovery(
+                        plid,
+                        headingError,
+                        distanceToWaypoint,
+                        carX,
+                        carY,
+                        context.AttemptCount > 0,
+                        $"Movement issue: {movementIssue}");
+                }
+            }
 
-                    // First fully press clutch, then apply reverse gear (0 in LFS), with moderate throttle
-                    SendControlInputs(plid, reverseSteeringValue, 50000, 0, 0,
-                        config.ClutchFullyPressed); // Press clutch + reverse gear
-
-                    if (elapsed >= 100)
-                        SendControlInputs(plid, reverseSteeringValue, 50000, 0, 0,
-                            config.ClutchReleased); // Press clutch + reverse gear
-
-                    // Check if we've reversed long enough
-                    if (elapsed >= REVERSE_TIME_MS)
-                    {
-                        wallRecoveryStates[plid] = WallRecoveryState.Turning;
-                        wallRecoveryTimers[plid] = DateTime.Now;
-                        logger.Log($"PLID={plid} WALL RECOVERY: Turning");
-                    }
-
-                    return true;
-
-                case WallRecoveryState.Turning:
-                    // Apply hard turn while still in reverse to get the car in a new direction
-                    // Turn aggressively in the chosen direction
-                    var turnSteeringValue = config.SteeringCenter + turnDirection * 30000;
-
-                    // Keep in reverse with throttle
-                    SendControlInputs(plid, turnSteeringValue, 40000, 0, 0,
-                        config.ClutchReleased); // 0 = reverse gear in LFS
-
-                    // Check if we've turned enough
-                    if (elapsed >= TURNING_TIME_MS)
-                    {
-                        wallRecoveryStates[plid] = WallRecoveryState.Stopping;
-                        wallRecoveryTimers[plid] = DateTime.Now;
-                        logger.Log($"PLID={plid} WALL RECOVERY: Stopping");
-                    }
-
-                    return true;
-
-                case WallRecoveryState.Stopping:
-                    // Come to a complete stop by applying brakes
-                    SendControlInputs(plid, config.SteeringCenter, 0, 65000, 2,
-                        config.ClutchFullyPressed); // 2 = 1st gear
-
-                    // Wait for car to stop
-                    if (elapsed >= STOPPING_TIME_MS)
-                    {
-                        wallRecoveryStates[plid] = WallRecoveryState.MovingForward;
-                        wallRecoveryTimers[plid] = DateTime.Now;
-                        logger.Log($"PLID={plid} WALL RECOVERY: Moving forward");
-                    }
-
-                    return true;
-
-                case WallRecoveryState.MovingForward:
-                    // Move forward with slight steering in recovery direction
-                    var forwardSteeringValue = config.SteeringCenter + turnDirection * 5000;
-
-                    // Apply forward with full throttle in 1st gear
-                    SendControlInputs(plid, forwardSteeringValue, 65000, 0, 2, 0); // 2 = 1st gear
-
-                    // Check if we've moved forward enough
-                    if (elapsed >= MOVING_FORWARD_TIME_MS)
-                    {
-                        // Reset recovery state
-                        wallRecoveryStates[plid] = WallRecoveryState.Complete;
-                        wallRecoveryTimers[plid] = DateTime.Now;
-                        logger.Log($"PLID={plid} WALL RECOVERY: Complete");
-                    }
-
-                    return true;
-
-                case WallRecoveryState.Complete:
-                    // Final cleanup and return to normal operation
-                    wallRecoveryStates[plid] = WallRecoveryState.Normal;
-                    wallRecoveryAttempts[plid] = 0;
-                    stuckPositionX[plid] = carX;
-                    stuckPositionY[plid] = carY;
-                    logger.Log($"PLID={plid} WALL RECOVERY: Returning to normal operation");
+            switch (context.State)
+            {
+                case RecoveryState.EngineRestart:
+                    return ExecuteEngineRestart(plid, headingError, distanceToWaypoint);
+                case RecoveryState.ReverseShort:
+                case RecoveryState.ReverseLong:
+                    return ExecuteReverseRecovery(plid);
+                case RecoveryState.Cooldown:
+                    EvaluateRecoveryCooldown(plid, distanceToWaypoint, speedKmh, headingError);
                     return false;
-
                 default:
                     return false;
             }
         }
 
         /// <summary>
-        /// Begin a short reverse-and-turn maneuver to free the car after stalled progress.
+        ///     Ensure a recovery context exists for the given PLID.
         /// </summary>
-        private void StartReverseRecovery(byte plid, int headingError)
+        private RecoveryContext GetRecoveryContext(byte plid)
         {
-            reverseRecoveryActive[plid] = true;
-            reverseRecoveryTimers[plid] = DateTime.Now;
+            if (!recoveryContexts.TryGetValue(plid, out var context))
+            {
+                context = new RecoveryContext();
+                recoveryContexts[plid] = context;
+            }
 
-            var steerDir = reverseRecoveryRandom.Next(0, 2) == 0 ? -1 : 1;
-            if (headingError != 0) steerDir = Math.Sign(headingError);
-            reverseRecoverySteer[plid] = steerDir;
-
-            logger.Log($"PLID={plid} REVERSE RECOVERY: starting with steer {(steerDir < 0 ? "left" : "right")}");
+            return context;
         }
 
         /// <summary>
-        /// Execute reverse-and-turn for a brief period; returns true while active.
+        ///     Start a reverse recovery maneuver.
         /// </summary>
-        private bool HandleReverseRecovery(byte plid)
+        private void BeginReverseRecovery(
+            byte plid,
+            int headingError,
+            double distanceToWaypoint,
+            double carX,
+            double carY,
+            bool longRecovery,
+            string reason)
         {
-            if (!reverseRecoveryActive.TryGetValue(plid, out var active) || !active)
-                return false;
+            var context = GetRecoveryContext(plid);
+            context.State = longRecovery ? RecoveryState.ReverseLong : RecoveryState.ReverseShort;
+            context.StateStarted = DateTime.Now;
+            context.ActionEnds = DateTime.Now.AddMilliseconds(
+                longRecovery ? config.RecoveryLongReverseMs : config.RecoveryShortReverseMs);
+            context.BaselineDistance = distanceToWaypoint;
+            context.BaselineX = carX;
+            context.BaselineY = carY;
+            context.BaselineHeadingError = headingError;
+            context.SteerDirection = Math.Sign(headingError);
+            if (context.SteerDirection == 0) context.SteerDirection = 1;
+            context.Reason = reason;
+            context.ValidationActive = false;
 
-            var elapsed = DateTime.Now - reverseRecoveryTimers[plid];
+            controlStatuses[plid] = $"Recovery: {(longRecovery ? "ReverseLong" : "ReverseShort")}";
+            logger.Log(
+                $"PLID={plid} RECOVERY START [{context.State}]: {reason}, steerDir={context.SteerDirection}, duration={(longRecovery ? config.RecoveryLongReverseMs : config.RecoveryShortReverseMs)}ms");
+        }
 
-            if (elapsed.TotalMilliseconds < 1200)
+        /// <summary>
+        ///     Execute the reverse maneuver until the configured duration completes.
+        /// </summary>
+        private bool ExecuteReverseRecovery(byte plid)
+        {
+            var context = GetRecoveryContext(plid);
+
+            if (DateTime.Now <= context.ActionEnds)
             {
-                var steer = reverseRecoverySteer.TryGetValue(plid, out var dir)
-                    ? config.SteeringCenter + dir * 12000
-                    : config.SteeringCenter;
+                var steerMagnitude = context.State == RecoveryState.ReverseLong ? 18000 : 12000;
+                var throttle = context.State == RecoveryState.ReverseLong ? 28000 : 20000;
 
-                var inputs = new List<AIInputVal>
-                {
-                    new AIInputVal { Input = AicInputType.CS_GEAR, Value = 0 }, // reverse gear
-                    new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = 20000 },
-                    new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 5000 },
-                    new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steer }
-                };
-
-                insim.Send(new IS_AIC(inputs) { PLID = plid });
-                controlInfo[plid] = "Reverse recovery";
+                var steer = config.SteeringCenter + context.SteerDirection * steerMagnitude;
+                SendControlInputs(plid, steer, throttle, 4000, 0, config.ClutchReleased);
+                controlStatuses[plid] = $"Recovery: {context.State}";
                 return true;
             }
 
-            reverseRecoveryActive[plid] = false;
-            controlInfo[plid] = "Recovery clear";
+            EnterRecoveryCooldown(plid, "Reverse maneuver complete");
             return false;
         }
 
         /// <summary>
-        ///     Update engine state from AI info packet
+        ///     Initialize the engine restart flow and baseline for validation.
         /// </summary>
-        public void UpdateEngineState(byte plid, bool isRunning)
+        private void BeginEngineRecovery(
+            byte plid,
+            int headingError,
+            double distanceToWaypoint,
+            double carX,
+            double carY,
+            string reason)
         {
-            // Only log if state changed
-            if (engineRunning.ContainsKey(plid) && engineRunning[plid] != isRunning)
-            {
-                logger.Log($"PLID={plid} ENGINE: {(isRunning ? "STARTED" : "STALLED")}");
+            var context = GetRecoveryContext(plid);
+            context.State = RecoveryState.EngineRestart;
+            context.StateStarted = DateTime.Now;
+            context.BaselineDistance = distanceToWaypoint;
+            context.BaselineX = carX;
+            context.BaselineY = carY;
+            context.BaselineHeadingError = headingError;
+            context.Reason = reason;
+            context.ValidationActive = false;
 
-                // If engine just stalled, initiate recovery sequence
-                if (!isRunning)
-                {
-                    engineStartStates[plid] = EngineStartState.StallDetected;
-                    engineStateTimers[plid] = DateTime.Now;
-                    consecutiveStalls[plid] = consecutiveStalls.TryGetValue(plid, out var stalls) ? stalls + 1 : 1;
-                    logger.Log($"PLID={plid} STALL: Starting engine recovery procedure");
-                }
-                else
-                {
-                    consecutiveStalls[plid] = 0;
-                }
-            }
+            engineStartStates[plid] = EngineStartState.StallDetected;
+            engineStateTimers[plid] = DateTime.Now;
 
-            engineRunning[plid] = isRunning;
+            controlStatuses[plid] = "Engine restart";
+            logger.Log($"PLID={plid} RECOVERY START [EngineRestart]: {reason}");
         }
 
         /// <summary>
-        ///     Handle engine stall and restart process
+        ///     Drive the engine restart state machine. Returns true while sending recovery controls.
         /// </summary>
-        private bool HandleEngineState(byte plid, double speedKmh, int headingError)
+        private bool ExecuteEngineRestart(byte plid, int headingError, double distanceToWaypoint)
         {
-            // If engine is running, no need for recovery
-            if (engineRunning[plid] && engineStartStates[plid] == EngineStartState.Normal)
+            var context = GetRecoveryContext(plid);
+
+            var isRunning = engineRunning.TryGetValue(plid, out var running) && running;
+            if (isRunning && engineStartStates[plid] == EngineStartState.Normal)
+            {
+                EnterRecoveryCooldown(plid, "Engine restarted");
                 return false;
+            }
 
             var steering = CalculateHeadingBasedSteering(headingError);
             var throttleBoost = CalculateStallRecoveryThrottleBoost(steering);
-
-            // Get elapsed time since last state change
             var elapsed = DateTime.Now.Subtract(engineStateTimers[plid]).TotalMilliseconds;
 
-            // State machine for engine restart procedure
             switch (engineStartStates[plid])
             {
                 case EngineStartState.StallDetected:
-                    if (consecutiveStalls.TryGetValue(plid, out var stalls) && stalls >= STALL_REVERSE_TRIGGER &&
-                        (!reverseRecoveryActive.TryGetValue(plid, out var reverseActive) || !reverseActive))
+                    if (consecutiveStalls.TryGetValue(plid, out var stalls) &&
+                        stalls >= config.RecoveryStallReverseTrigger)
                     {
                         consecutiveStalls[plid] = 0;
-                        StartReverseRecovery(plid, headingError);
-                        logger.Log($"PLID={plid} STALL: Triggering reverse recovery after repeated stalls");
+                        BeginReverseRecovery(
+                            plid,
+                            headingError,
+                            distanceToWaypoint,
+                            context.BaselineX,
+                            context.BaselineY,
+                            true,
+                            "Repeated stalls - reversing");
                         return true;
                     }
 
-                    // Initialize restart procedure
                     engineStartStates[plid] = EngineStartState.PressClutch;
                     engineStateTimers[plid] = DateTime.Now;
                     logger.Log($"PLID={plid} STALL: Pressing clutch");
                     return true;
 
                 case EngineStartState.PressClutch:
-                    // Press clutch fully and apply some throttle
                     SendControlInputs(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
 
-                    // Wait for clutch press delay
                     if (elapsed >= 500)
                     {
                         engineStartStates[plid] = EngineStartState.TurnIgnition;
@@ -677,20 +612,16 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.TurnIgnition:
-                    // Keep clutch pressed and apply significant throttle before ignition
                     SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
 
-                    // First turn ignition off, then back on to crank the engine
                     if (elapsed < 300)
                     {
-                        // Turn ignition off
                         insim.Send(new IS_AIC(new List<AIInputVal>
                                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 2 } })
                             { PLID = plid });
                     }
                     else if (elapsed >= 600)
                     {
-                        // Turn ignition on (crank the engine) while maintaining throttle
                         insim.Send(new IS_AIC(new List<AIInputVal>
                                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } })
                             { PLID = plid });
@@ -706,33 +637,21 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.ReleaseClutch:
-                    // Use config parameters for clutch values and timing but much slower release
                     var totalReleaseTime =
-                        config.ClutchReleaseSteps * config.ClutchReleaseIntervalMs * 5; // 5x normal time
+                        config.ClutchReleaseSteps * config.ClutchReleaseIntervalMs * 5;
                     var releaseProgress = Math.Min(1.0, elapsed / totalReleaseTime);
-
-                    // More gradual curve with longer initial period
                     var progressCurve = Math.Pow(releaseProgress, 3) * (3 - 2 * Math.Pow(releaseProgress, 1.5));
 
-                    // Calculate clutch value from fully pressed to released based on config values
                     var clutchValue = (int)(config.ClutchFullyPressed * (1 - progressCurve));
+                    var throttle = Math.Min(30000, 20000 + throttleBoost);
+                    byte gear = 2;
 
-                    // Apply much more throttle before and during clutch release
-                    // Start with high throttle and maintain it throughout
-                    var throttle = Math.Min(30000, 20000 + throttleBoost); // Much higher base throttle
-
-                    // Use lower gear for initial starts
-                    byte gear = 2; // 1st gear
-
-                    // Send controls with extremely gradual clutch release
                     SendControlInputs(plid, steering, throttle, 0, gear, clutchValue);
 
-                    // Log clutch release progress periodically
                     if ((int)(elapsed / 1000) != (int)((elapsed - 20) / 1000))
                         logger.Log(
                             $"PLID={plid} CLUTCH: Release={progressCurve:F2}, Value={clutchValue}, Throttle={throttle}");
 
-                    // Transition to recovery state when clutch is fully released
                     if (progressCurve >= 1.0)
                     {
                         engineStartStates[plid] = EngineStartState.Recovery;
@@ -743,22 +662,126 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.Recovery:
-                    // Much longer recovery period with maintained throttle
                     if (elapsed >= 100)
                     {
                         engineStartStates[plid] = EngineStartState.Normal;
-                        logger.Log($"PLID={plid} STALL: Returning to normal operation");
+                        EnterRecoveryCooldown(plid, "Engine restart sequence complete");
                         return false;
                     }
 
-                    // Hold high throttle to prevent immediate stall
                     SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, 0);
                     return true;
                 default:
-                    // Should not get here, but reset if it does
                     engineStartStates[plid] = EngineStartState.Normal;
+                    EnterRecoveryCooldown(plid, "Engine restart reset");
                     return false;
             }
+        }
+
+        /// <summary>
+        ///     Enter cooldown/validation after a recovery attempt.
+        /// </summary>
+        private void EnterRecoveryCooldown(byte plid, string reason)
+        {
+            var context = GetRecoveryContext(plid);
+            context.State = RecoveryState.Cooldown;
+            context.StateStarted = DateTime.Now;
+            context.ActionEnds = DateTime.Now.AddMilliseconds(config.RecoveryCooldownMs);
+            context.ValidationActive = true;
+            controlStatuses[plid] = $"Recovery cool: {reason}";
+            logger.Log($"PLID={plid} RECOVERY COOLING: {reason}");
+        }
+
+        /// <summary>
+        ///     Determine if the prior recovery produced enough improvement to reset failure counters.
+        /// </summary>
+        private void EvaluateRecoveryCooldown(byte plid, double currentDistance, double speedKmh, int headingError)
+        {
+            var context = GetRecoveryContext(plid);
+            if (!context.ValidationActive)
+                return;
+
+            var distanceImproved = context.BaselineDistance - currentDistance >= config.RecoverySuccessDistanceMeters;
+            var speedRecovered = speedKmh >= config.RecoverySuccessSpeedKmh;
+            var headingImproved = Math.Abs(context.BaselineHeadingError) - Math.Abs(headingError);
+
+            if (distanceImproved || speedRecovered || headingImproved > 2000)
+            {
+                MarkRecoverySuccess(plid,
+                    $"distance Δ={(context.BaselineDistance - currentDistance):F1}m, speed={speedKmh:F1}");
+                return;
+            }
+
+            var elapsed = DateTime.Now - context.StateStarted;
+            if (elapsed.TotalMilliseconds >= config.RecoveryValidationWindowMs)
+                MarkRecoveryFailure(plid, "No improvement after recovery window");
+        }
+
+        /// <summary>
+        ///     Reset to normal driving after a successful recovery.
+        /// </summary>
+        private void MarkRecoverySuccess(byte plid, string reason)
+        {
+            var context = GetRecoveryContext(plid);
+            context.State = RecoveryState.Driving;
+            context.ValidationActive = false;
+            context.AttemptCount = 0;
+            context.FailureCount = 0;
+            movementIssueCounts[plid] = 0;
+            movementIssues[plid] = MovementIssue.None;
+            controlStatuses[plid] = $"Recovery success: {reason}";
+            logger.Log($"PLID={plid} RECOVERY SUCCESS: {reason}");
+        }
+
+        /// <summary>
+        ///     Track a failed recovery attempt and escalate if needed.
+        /// </summary>
+        private void MarkRecoveryFailure(byte plid, string reason)
+        {
+            var context = GetRecoveryContext(plid);
+            context.ValidationActive = false;
+            context.State = RecoveryState.Driving;
+            context.FailureCount++;
+            context.AttemptCount++;
+            controlStatuses[plid] = $"Recovery failed ({context.FailureCount})";
+
+            logger.LogWarning(
+                $"PLID={plid} RECOVERY FAILURE {context.FailureCount}/{config.RecoveryMaxFailureCount}: {reason}");
+
+            if (context.FailureCount >= config.RecoveryMaxFailureCount)
+            {
+                logger.LogWarning($"PLID={plid} RECOVERY FAILURE: Escalating to pit/spectate");
+                recoveryFailedHandler?.Invoke(plid);
+            }
+        }
+
+        /// <summary>
+        ///     Update engine running state and trigger recovery on stall.
+        /// </summary>
+        public void UpdateEngineState(byte plid, bool isRunning)
+        {
+            if (!engineRunning.ContainsKey(plid))
+                engineRunning[plid] = isRunning;
+
+            if (engineRunning[plid] == isRunning)
+                return;
+
+            logger.Log($"PLID={plid} ENGINE: {(isRunning ? "STARTED" : "STALLED")}");
+
+            if (!isRunning)
+            {
+                engineStartStates[plid] = EngineStartState.StallDetected;
+                engineStateTimers[plid] = DateTime.Now;
+                consecutiveStalls[plid] = consecutiveStalls.TryGetValue(plid, out var stalls) ? stalls + 1 : 1;
+                BeginEngineRecovery(plid, 0, 0, 0, 0, "Engine stalled");
+            }
+            else
+            {
+                consecutiveStalls[plid] = 0;
+                engineStartStates[plid] = EngineStartState.Normal;
+            }
+
+            engineRunning[plid] = isRunning;
         }
 
         /// <summary>
@@ -778,7 +801,7 @@ namespace AHPP_AI.AI
         /// </summary>
         public string GetControlInfo(byte plid)
         {
-            return controlInfo.ContainsKey(plid) ? controlInfo[plid] : "Not initialized";
+            return controlInputs.ContainsKey(plid) ? controlInputs[plid] : "Not initialized";
         }
 
         /// <summary>
@@ -802,11 +825,13 @@ namespace AHPP_AI.AI
         /// </summary>
         public string GetStateDescription(byte plid)
         {
-            if (wallRecoveryStates.TryGetValue(plid, out var wallState) && wallState != WallRecoveryState.Normal)
-                return $"WallRec: {wallState}";
-
-            if (reverseRecoveryActive.TryGetValue(plid, out var reverseActive) && reverseActive)
-                return "ReverseRec";
+            var recoveryContext = GetRecoveryContext(plid);
+            if (recoveryContext.State == RecoveryState.EngineRestart)
+                return "Engine Restart";
+            if (recoveryContext.State == RecoveryState.ReverseShort || recoveryContext.State == RecoveryState.ReverseLong)
+                return "Recovery";
+            if (recoveryContext.State == RecoveryState.Cooldown)
+                return "Recovery Check";
 
             if (engineStartStates.TryGetValue(plid, out var engineState) &&
                 engineState != EngineStartState.Normal)
@@ -822,7 +847,7 @@ namespace AHPP_AI.AI
                 };
             }
 
-            if (controlInfo.TryGetValue(plid, out var info))
+            if (controlStatuses.TryGetValue(plid, out var info))
             {
                 if (info.StartsWith("COLLISION", StringComparison.OrdinalIgnoreCase))
                     return "Collision Stop";
@@ -1023,6 +1048,8 @@ namespace AHPP_AI.AI
         /// </summary>
         private void SendControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue)
         {
+            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+
             var inputs = new List<AIInputVal>
             {
                 new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steering },
@@ -1033,6 +1060,16 @@ namespace AHPP_AI.AI
             };
 
             insim.Send(new IS_AIC(inputs) { PLID = plid });
+        }
+
+        /// <summary>
+        /// Record the last control inputs we sent for UI display.
+        /// </summary>
+        private void RecordControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue)
+        {
+            var steerOffset = steering - config.SteeringCenter;
+            controlInputs[plid] =
+                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{steerOffset}";
         }
 
         public void StopCar(byte plid)
