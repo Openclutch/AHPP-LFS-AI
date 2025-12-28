@@ -25,6 +25,8 @@ namespace AHPP_AI.AI
 
         private readonly AIConfig config;
         private readonly Dictionary<byte, int> currentClutchValues = new Dictionary<byte, int>();
+        private readonly Dictionary<byte, bool> lowRpmClutchActive = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, DateTime> lowRpmClutchTimers = new Dictionary<byte, DateTime>();
 
         // State tracking per car
         private readonly Dictionary<byte, byte> currentGears = new Dictionary<byte, byte>();
@@ -45,6 +47,8 @@ namespace AHPP_AI.AI
             currentGears[plid] = 1; // Neutral
             clutchStates[plid] = ClutchState.Released;
             currentClutchValues[plid] = config.ClutchReleased;
+            lowRpmClutchActive[plid] = false;
+            lowRpmClutchTimers[plid] = DateTime.MinValue;
             clutchTimers[plid] = DateTime.MinValue;
             lastShiftTimes[plid] = DateTime.MinValue;
         }
@@ -52,10 +56,20 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Update gearbox state including gear selection and clutch operation
         /// </summary>
-        public void UpdateGearbox(byte plid, double speedKmh)
+        public void UpdateGearbox(byte plid, double speedKmh, float engineRpm = 0)
         {
+            if (HandleLowRpmClutch(plid, engineRpm)) return;
+
             var desiredGear = config.CalculateDesiredGear(speedKmh);
             UpdateGearWithClutch(plid, desiredGear, speedKmh);
+        }
+
+        /// <summary>
+        ///     Check if the clutch is currently being held in to prevent a stall at low RPM.
+        /// </summary>
+        public bool IsLowRpmClutchActive(byte plid)
+        {
+            return lowRpmClutchActive.ContainsKey(plid) && lowRpmClutchActive[plid];
         }
 
         /// <summary>
@@ -187,11 +201,56 @@ namespace AHPP_AI.AI
         /// </summary>
         public bool ShouldApplyThrottle(byte plid, double speedKmh)
         {
+            if (IsLowRpmClutchActive(plid)) return true;
+
             var isLowSpeedFirstGear = currentGears[plid] == 2 && speedKmh < 5;
             var isClutchEngaged = currentClutchValues[plid] > config.ClutchFullyPressed / 2;
 
             // Only allow throttle when clutch is in if we're in 1st gear at low speed (taking off)
             return !isClutchEngaged || isLowSpeedFirstGear;
+        }
+
+        /// <summary>
+        ///     Engage and hold the clutch if RPM dips too low to prevent stalling, releasing once recovered.
+        /// </summary>
+        private bool HandleLowRpmClutch(byte plid, float engineRpm)
+        {
+            if (!lowRpmClutchActive.ContainsKey(plid))
+            {
+                lowRpmClutchActive[plid] = false;
+                lowRpmClutchTimers[plid] = DateTime.MinValue;
+            }
+
+            var protectionActive = lowRpmClutchActive[plid];
+
+            if (engineRpm > 0 && engineRpm < config.StallPreventionRpm)
+            {
+                lowRpmClutchActive[plid] = true;
+                lowRpmClutchTimers[plid] = DateTime.Now;
+                currentClutchValues[plid] = config.ClutchFullyPressed;
+                clutchStates[plid] = ClutchState.Pressed;
+                return true;
+            }
+
+            if (protectionActive)
+            {
+                var holdElapsed = DateTime.Now - lowRpmClutchTimers[plid];
+                var recoveredRpm = engineRpm >= config.StallPreventionReleaseRpm;
+                var heldLongEnough = holdElapsed.TotalMilliseconds >= config.StallPreventionHoldMs;
+
+                if (!recoveredRpm && !heldLongEnough)
+                {
+                    currentClutchValues[plid] = config.ClutchFullyPressed;
+                    clutchStates[plid] = ClutchState.Pressed;
+                    return true;
+                }
+
+                lowRpmClutchActive[plid] = false;
+                clutchStates[plid] = ClutchState.Releasing;
+                clutchTimers[plid] = DateTime.Now;
+            }
+
+            return false;
         }
     }
 }

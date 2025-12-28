@@ -1,5 +1,16 @@
 # Changelog
 
+- Guard AI debug updates when car telemetry is missing so the debug UI stops throwing null reference errors.
+- Offloaded AI spawning and recorded-route visualization to background tasks so large batches or heavy layouts no longer block InSim commands.
+- Added low-RPM clutch protection so AIs press the clutch when RPM dips under ~500, let the engine recover, and then resume their previous action without stalling.
+- While on the inner highway lane, AI now occasionally merges to the main (left) lane with heading/speed limits, distance checks, and cooldowns for a smooth random lane change.
+- Fixed alternate-lane rejoin logic variable clash so the build succeeds while keeping smooth lane swaps.
+- Added an official alternate main lane: configure `Routes.MainAlt` (e.g., the inner highway lane) to load alongside the main loop for smoother lane weaving.
+- Inner highway branch changes are now opportunistic lane changes with a cooldown and random chance instead of firing immediately when the branch starts.
+- Inner lane changes are blocked at higher speeds, use a tighter heading filter, and temporarily cap target speed on entry to stop the hard snap that caused stalls.
+- Branch handoffs pick a heading-aligned entry waypoint so steering corrections stay smooth when swapping onto alternate routes.
+- Introduced pure pursuit steering for AI with configurable lookahead, wheelbase, gain, and steering limits in `config.ini` to smooth waypoint following.
+- Centralized InSim button ID ranges for the AI tools (using a shared ButtonIds registry) to mirror the Touge layout and avoid clashes with LFS/native buttons or debug overlays.
 - Added configurable steering deadzone (`AI.SteeringDeadzoneDegrees`) alongside damping so small heading errors can be ignored to calm straight-line oscillations.
 - Added configurable steering damping (`AI.SteeringDamping`) so heading corrections can be softened to reduce fishtailing on straights.
 - AI now sends unrecoverable cars to the pits/spectate after failed recovery cycles so they don't block the track.
@@ -220,3 +231,5 @@
 - now clear drift and speed score when starting any battle to prevent stale points giving lots of money
 - Missions now will be worth less if you continue grinding the same one within an hour. Encouraging a variety of activities.
 - Added real brand names for the brand deals!
+- Routes: Branch/detour names are now discovered from recorded route files only; detour entries no longer come from config defaults to avoid duplicate-name warnings.
+- Routes: Configured branch route names are ignored so only JSON files drive branch detection during route reloads.

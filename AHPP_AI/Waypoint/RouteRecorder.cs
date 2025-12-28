@@ -53,7 +53,8 @@ namespace AHPP_AI.Waypoint
 
             if (currentRoute.Metadata.Type == RouteType.Unknown)
                 currentRoute.Metadata.Type = routeLibrary.GuessRouteType(currentRoute.Metadata.Name);
-            if (currentRoute.Metadata.Type == RouteType.MainLoop) currentRoute.Metadata.IsLoop = true;
+            if (currentRoute.Metadata.Type == RouteType.MainLoop || currentRoute.Metadata.Type == RouteType.AlternateMain)
+                currentRoute.Metadata.IsLoop = true;
             if (!currentRoute.Metadata.DefaultSpeedLimit.HasValue) currentRoute.Metadata.DefaultSpeedLimit = 60;
 
             lastPos = null;

@@ -148,6 +148,7 @@ namespace AHPP_AI.Waypoint
         public RouteType GuessRouteType(string name)
         {
             var lower = (name ?? string.Empty).ToLowerInvariant();
+            if (lower.Contains("alt") || lower.Contains("inner")) return RouteType.AlternateMain;
             if (lower.Contains("main")) return RouteType.MainLoop;
             if (lower.Contains("pit") || lower.Contains("spawn")) return RouteType.PitEntry;
             if (lower.Contains("detour") || lower.Contains("branch")) return RouteType.Detour;
@@ -222,6 +223,11 @@ namespace AHPP_AI.Waypoint
                 case "main":
                 case "loop":
                     return RouteType.MainLoop;
+                case "alt":
+                case "alternate":
+                case "alternatemain":
+                case "inner":
+                    return RouteType.AlternateMain;
                 case "pit":
                 case "spawn":
                     return RouteType.PitEntry;
@@ -249,7 +255,9 @@ namespace AHPP_AI.Waypoint
             if (route.Metadata.Type == RouteType.Unknown)
                 route.Metadata.Type = GuessRouteType(route.Metadata.Name);
 
-            route.Metadata.IsLoop = route.Metadata.Type == RouteType.MainLoop || route.Metadata.IsLoop;
+            route.Metadata.IsLoop = route.Metadata.Type == RouteType.MainLoop ||
+                                    route.Metadata.Type == RouteType.AlternateMain ||
+                                    route.Metadata.IsLoop;
 
             if (route.Nodes == null) route.Nodes = new List<RoutePoint>();
 
@@ -274,7 +282,7 @@ namespace AHPP_AI.Waypoint
             {
                 Name = NormalizeRouteName(string.IsNullOrWhiteSpace(name) ? "route" : name),
                 Type = type == RouteType.Unknown ? GuessRouteType(name) : type,
-                IsLoop = type == RouteType.MainLoop,
+                IsLoop = type == RouteType.MainLoop || type == RouteType.AlternateMain,
                 DefaultSpeedLimit = 60,
                 Track = trackCode,
                 Layout = layoutName

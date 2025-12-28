@@ -10,6 +10,7 @@ namespace AHPP_AI.Waypoint
     {
         Unknown = 0,
         MainLoop,
+        AlternateMain,
         PitEntry,
         Detour
     }

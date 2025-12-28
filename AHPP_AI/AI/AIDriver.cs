@@ -155,7 +155,8 @@ namespace AHPP_AI.AI
             CompCar[] allCars,
             WaypointManager waypointManager,
             AIConfig config,
-            List<ObjectInfo> layoutObjects)
+            List<ObjectInfo> layoutObjects,
+            float currentRpm)
         {
             try
             {
@@ -223,7 +224,7 @@ namespace AHPP_AI.AI
                 CheckIfStuck(plid, carX, carY, (int)currentHeading, speedKmh, distance);
 
                 // Calculate steering, throttle and brake
-                var steering = CalculateSteering(headingError);
+                var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
 
                 // Log debugging info periodically
                 if (DateTime.Now.Millisecond < 50 && DateTime.Now.Second % 2 == 0)
@@ -294,11 +295,12 @@ namespace AHPP_AI.AI
                 waypointFollower.CheckWaypointReached(plid, distance, speedKmh);
 
                 // Update gearbox (gears and clutch)
-                gearboxController.UpdateGearbox(plid, speedKmh);
+                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
                 gearboxController.ApplyBrakingClutch(plid, brake);
 
                 // Get current gearbox state
                 var (gear, clutchValue, clutchState) = gearboxController.GetGearboxInfo(plid);
+                var lowRpmClutchActive = gearboxController.IsLowRpmClutchActive(plid);
 
                 // Check if we should apply throttle based on clutch state
                 if (!gearboxController.ShouldApplyThrottle(plid, speedKmh)) throttle = 0;
@@ -319,6 +321,7 @@ namespace AHPP_AI.AI
                 // Update control info for debug display
                 controlInfo[plid] =
                     $"T:{throttle / 1000} B:{brake / 1000} G:{gear} C:{clutchValue / 1000} S:{clutchState} Eng:{(engineRunning[plid] ? "ON" : "OFF")}";
+                if (lowRpmClutchActive) controlInfo[plid] += " (Low RPM clutch)";
 
                 // Send AI controls
                 SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
@@ -634,7 +637,7 @@ namespace AHPP_AI.AI
             if (engineRunning[plid] && engineStartStates[plid] == EngineStartState.Normal)
                 return false;
 
-            var steering = CalculateSteering(headingError);
+            var steering = CalculateHeadingBasedSteering(headingError);
             var throttleBoost = CalculateStallRecoveryThrottleBoost(steering);
 
             // Get elapsed time since last state change
@@ -840,24 +843,87 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Calculate steering value based on heading error
+        ///     Calculate steering using pure pursuit when enabled, falling back to heading error control.
         /// </summary>
-        private int CalculateSteering(int headingError)
+        private int CalculateSteering(
+            byte plid,
+            double carX,
+            double carY,
+            double currentHeading,
+            double speedKmh,
+            int headingError)
         {
-            const int STEERING_CENTER = 32768;
+            if (config.UsePurePursuitSteering)
+            {
+                var (targetX, targetY, lookaheadDistance) =
+                    waypointFollower.CalculatePurePursuitTarget(plid, carX, carY, speedKmh);
+
+                if (lookaheadDistance > 0.01)
+                {
+                    var desiredHeading =
+                        CoordinateUtils.CalculateHeadingToTarget(targetX - carX, targetY - carY);
+                    var pursuitError = CoordinateUtils.CalculateHeadingError(
+                        CoordinateUtils.NormalizeHeading((int)currentHeading), desiredHeading);
+
+                    var purePursuitSteering = CalculatePurePursuitSteeringValue(pursuitError, lookaheadDistance);
+                    if (purePursuitSteering.HasValue)
+                        return purePursuitSteering.Value;
+                }
+            }
+
+            return CalculateHeadingBasedSteering(headingError);
+        }
+
+        /// <summary>
+        ///     Convert pure pursuit curvature into a steering command for LFS.
+        /// </summary>
+        private int? CalculatePurePursuitSteeringValue(int headingError, double lookaheadDistance)
+        {
+            if (lookaheadDistance <= 0.01)
+                return null;
+
+            var deadzoneDeg = Math.Max(0.0, config.SteeringDeadzoneDegrees);
+            var headingErrorDegrees = Math.Abs(headingError) * 360.0 / CoordinateUtils.FULL_CIRCLE;
+            if (headingErrorDegrees < deadzoneDeg) return config.SteeringCenter;
+
+            var alpha = headingError * (2 * Math.PI / CoordinateUtils.FULL_CIRCLE);
+            var curvature = (2 * Math.Sin(alpha)) / Math.Max(0.1, lookaheadDistance);
+            curvature *= Math.Max(0.01, config.PurePursuitSteeringGain);
+
+            var wheelAngle = Math.Atan(curvature * Math.Max(0.5, config.PurePursuitWheelbaseMeters));
+            var maxSteerRadians = Math.Max(0.017, config.PurePursuitMaxSteerDegrees * Math.PI / 180.0);
+            var normalized = wheelAngle / maxSteerRadians;
+
+            normalized *= Math.Max(0.1, config.SteeringResponseDamping);
+            var clamped = Math.Max(-1.0, Math.Min(1.0, normalized));
+
+            var steeringRange = config.SteeringCenter - 1;
+            var steeringValue = config.SteeringCenter - (int)(clamped * steeringRange);
+            steeringValue = Math.Max(config.MinSteering, Math.Min(config.MaxSteering, steeringValue));
+
+            return steeringValue;
+        }
+
+        /// <summary>
+        ///     Fallback steering controller based purely on heading error.
+        /// </summary>
+        private int CalculateHeadingBasedSteering(int headingError)
+        {
+            var steeringCenter = config.SteeringCenter;
 
             var damping = Math.Max(0.1, config.SteeringResponseDamping);
             var deadzoneDeg = Math.Max(0.0, config.SteeringDeadzoneDegrees);
             var deadzoneUnits = deadzoneDeg * 65536.0 / 360.0;
 
             var adjustedError = Math.Max(0.0, Math.Abs(headingError) - deadzoneUnits);
-            if (adjustedError <= 0.0) return STEERING_CENTER;
+            if (adjustedError <= 0.0) return steeringCenter;
 
             var response = Math.Min(1.0, adjustedError / 16384.0 * damping);
 
-            // Basic proportional steering - invert the sign to correct direction
-            return STEERING_CENTER -
-                   (int)(Math.Sign(headingError) * response * (STEERING_CENTER - 100));
+            var steeringRange = steeringCenter - 100;
+
+            var steering = steeringCenter - (int)(Math.Sign(headingError) * response * steeringRange);
+            return Math.Max(config.MinSteering, Math.Min(config.MaxSteering, steering));
         }
 
         /// <summary>

@@ -34,37 +34,44 @@ namespace AHPP_AI.UI
         private const byte RECORD_ROW = 180;
         private const byte ROUTE_NAME_ROW = 160;
         private const byte REMOVE_BTN_W = 6;
-        private const byte RECORD_LABEL_ID = 210;
         private const byte RECORD_LABEL_ROW = (byte)(SELECT_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = 42;
-        private const byte VISUALIZER_LABEL_ID = 211;
         private const byte VISUALIZER_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte LAYOUT_EDIT_ROW = 190;
         private const byte LAYOUT_STATUS_ROW = 195;
         private const byte LAYOUT_STATUS_W = 30;
 
-        public const byte AddAiDialogId = 150;
-        public const byte SpeedInputId = 151;
-        public const byte RecordingIntervalId = 152;
-        public const byte RouteNameInputId = 153;
-        public const byte NodeSpeedInputId = 154;
-        public const byte VisualizationDetailMinusId = 90;
-        public const byte VisualizationDetailPlusId = 91;
-        public const byte VisualizationDetailLabelId = 92;
-        public const byte LayoutSelectionLabelId = 93;
-        public const byte LayoutAttachIndexId = 106;
-        public const byte LayoutRejoinIndexId = 107;
-        public const byte ConnectOnlineId = 108;
-        public const byte ConnectLocalId = 109;
-        public const byte RefreshSelectionFeedId = 110;
+        public const byte RecordToggleId = (byte)(ButtonIds.MainStart + 0);
+        public const byte ReloadRoutesId = (byte)(ButtonIds.MainStart + 1);
+        public const byte ToggleLayoutId = (byte)(ButtonIds.MainStart + 2);
+        public const byte ResetLayoutId = (byte)(ButtonIds.MainStart + 3);
+        public const byte ConnectOnlineId = (byte)(ButtonIds.MainStart + 4);
+        public const byte ConnectLocalId = (byte)(ButtonIds.MainStart + 5);
+        public const byte RefreshSelectionFeedId = (byte)(ButtonIds.MainStart + 6);
+        public const byte StartAllAisId = (byte)(ButtonIds.MainStart + 7);
+        public const byte StopAllAisId = (byte)(ButtonIds.MainStart + 8);
+        public const byte PitAllAisId = (byte)(ButtonIds.MainStart + 9);
+        public const byte AddAiDialogId = (byte)(ButtonIds.MainStart + 10);
+        public const byte SpeedInputId = (byte)(ButtonIds.MainStart + 11);
+        public const byte RecordingIntervalId = (byte)(ButtonIds.MainStart + 12);
+        public const byte RouteNameInputId = (byte)(ButtonIds.MainStart + 13);
+        public const byte NodeSpeedInputId = (byte)(ButtonIds.MainStart + 14);
+        public const byte LayoutAttachIndexId = (byte)(ButtonIds.MainStart + 15);
+        public const byte LayoutRejoinIndexId = (byte)(ButtonIds.MainStart + 16);
+        public const byte LayoutSelectionLabelId = (byte)(ButtonIds.MainStart + 17);
+        private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 18);
+        private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
+        public const byte VisualizationDetailMinusId = (byte)(ButtonIds.MainStart + 60);
+        public const byte VisualizationDetailPlusId = (byte)(ButtonIds.MainStart + 61);
+        public const byte VisualizationDetailLabelId = (byte)(ButtonIds.MainStart + 62);
 
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly List<(byte id, string name)> routeButtons = new List<(byte id, string name)>();
         private readonly List<(byte id, string name)> visualizationRouteButtons = new List<(byte id, string name)>();
-        private const byte ROUTE_BUTTON_START_ID = 11;
+        private const byte ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 20);
         private const byte ROUTE_BUTTON_MAX_COUNT = 8;
-        private const byte VISUAL_ROUTE_BUTTON_START_ID = 30;
+        private const byte VISUAL_ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 40);
 
         private string selectedRoute = "main_loop";
         private string selectedVisualizationRoute = "main_loop";
@@ -88,9 +95,9 @@ namespace AHPP_AI.UI
             uiInitialized = true;
 
             byte row = 70;
-            CreateButton(2, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
-            CreateButton(5, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
-            CreateButton(6, "Reset Layout", LEFT_COL, row);
+            CreateButton(ReloadRoutesId, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
+            CreateButton(ToggleLayoutId, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
+            CreateButton(ResetLayoutId, "Reset Layout", LEFT_COL, row);
             CreateButton(ConnectOnlineId, "InSim Online", LEFT_COL, (byte)(row + ROW_HEIGHT));
             CreateButton(ConnectLocalId, "InSim Local", LEFT_COL, (byte)(row + ROW_HEIGHT * 2));
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
@@ -100,9 +107,9 @@ namespace AHPP_AI.UI
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
             CreateInputButton(RouteNameInputId, RIGHT_COL, ROUTE_NAME_ROW, "Route Name", 24);
-            CreateButton(105, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
-            CreateButton(103, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
-            CreateButton(104, "Pit All AI", RIGHT_COL, row);
+            CreateButton(StartAllAisId, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
+            CreateButton(StopAllAisId, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
+            CreateButton(PitAllAisId, "Pit All AI", RIGHT_COL, row);
             var layoutButtonGroupWidth = (byte)(BTN_W * 3 + SELECT_BTN_SPACING * 2);
             var layoutButtonLeft = (byte)Math.Max(0, (SCREEN_WIDTH - layoutButtonGroupWidth) / 2);
             var nodeSpeedLeft = (byte)(layoutButtonLeft + BTN_W + SELECT_BTN_SPACING);
@@ -132,8 +139,8 @@ namespace AHPP_AI.UI
             byte index = 0;
             foreach (var (id, name) in ai)
             {
-                var labelId = (byte)(120 + index);
-                var removeId = (byte)(180 + index);
+                var labelId = ButtonIds.Dynamic(index);
+                var removeId = ButtonIds.Remove(index);
                 var top = (byte)(row + ROW_HEIGHT * index);
                 var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
 
@@ -311,11 +318,11 @@ namespace AHPP_AI.UI
             if (!uiInitialized) return;
 
             var left = (byte)Math.Max(0, (200 - BTN_W) / 2);
-            DeleteButton(1);
+            DeleteButton(RecordToggleId);
             var label = isRecording
                 ? $"^2Rec {selectedRoute} ({recordedPoints})"
                 : $"Record {selectedRoute}";
-            CreateButton(1, label, left, RECORD_ROW);
+            CreateButton(RecordToggleId, label, left, RECORD_ROW);
         }
 
         /// <summary>

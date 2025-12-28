@@ -46,6 +46,7 @@ namespace AHPP_AI
         private static string currentRecordingRoute = "main_loop";
         private static readonly string spawnRouteName;
         private static readonly string mainRouteName;
+        private static readonly string mainAlternateRouteName;
         private static readonly List<string> branchRouteNames = new List<string>();
         private static string currentTrackCode = "UnknownTrack";
         private static string currentLayoutName = "DefaultLayout";
@@ -56,6 +57,13 @@ namespace AHPP_AI
         private static readonly double waypointProximityMultiplier;
         private static readonly double steeringResponseDamping;
         private static readonly double steeringDeadzoneDegrees;
+        private static readonly bool purePursuitEnabled;
+        private static readonly double purePursuitLookaheadMinMeters;
+        private static readonly double purePursuitLookaheadMaxMeters;
+        private static readonly double purePursuitLookaheadSpeedFactor;
+        private static readonly double purePursuitWheelbaseMeters;
+        private static readonly double purePursuitSteeringGain;
+        private static readonly double purePursuitMaxSteerDegrees;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -80,10 +88,10 @@ namespace AHPP_AI
             routeLibrary = new RouteLibrary(logger);
             mainRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Main", "main_loop"));
             spawnRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Spawn", "pit_entry"));
-            var detour1 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour1", "detour1"));
-            var detour2 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour2", "detour2"));
-            var detour3 = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Detour3", "detour3"));
-            branchRouteNames.AddRange(new[] { detour1, detour2, detour3 }.Where(n => !string.IsNullOrWhiteSpace(n)));
+            var rawAlt = appConfig.GetString("Routes", "MainAlt", string.Empty);
+            mainAlternateRouteName = string.IsNullOrWhiteSpace(rawAlt)
+                ? string.Empty
+                : routeLibrary.NormalizeRouteName(rawAlt);
             currentRecordingRoute = routeLibrary.NormalizeRouteName(mainRouteName);
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
@@ -92,6 +100,13 @@ namespace AHPP_AI
             waypointProximityMultiplier = appConfig.GetDouble("AI", "WaypointProximityMultiplier", 1.0);
             steeringResponseDamping = appConfig.GetDouble("AI", "SteeringDamping", 1.0);
             steeringDeadzoneDegrees = appConfig.GetDouble("AI", "SteeringDeadzoneDegrees", 0.0);
+            purePursuitEnabled = appConfig.GetBool("AI", "PurePursuitEnabled", true);
+            purePursuitLookaheadMinMeters = appConfig.GetDouble("AI", "PurePursuitLookaheadMinMeters", 6.0);
+            purePursuitLookaheadMaxMeters = appConfig.GetDouble("AI", "PurePursuitLookaheadMaxMeters", 25.0);
+            purePursuitLookaheadSpeedFactor = appConfig.GetDouble("AI", "PurePursuitLookaheadSpeedFactor", 0.35);
+            purePursuitWheelbaseMeters = appConfig.GetDouble("AI", "PurePursuitWheelbaseMeters", 2.5);
+            purePursuitSteeringGain = appConfig.GetDouble("AI", "PurePursuitSteeringGain", 1.0);
+            purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
             recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
 
             // Initialize components in the correct order
@@ -102,7 +117,7 @@ namespace AHPP_AI
             aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
             visualizer.LayoutSelectionChanged += aiController.OnLayoutSelectionChanged;
             visualizer.LayoutObjectMoved += aiController.OnLayoutObjectMoved;
-            aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, branchRouteNames);
+            aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, mainAlternateRouteName, branchRouteNames);
             aiController.SetNumberOfAIs(initialAiCount);
             aiController.SetSpawnDelayMs(spawnDelayMs);
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
@@ -111,6 +126,14 @@ namespace AHPP_AI
             aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
             aiController.SetSteeringResponseDamping(steeringResponseDamping);
             aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
+            aiController.ConfigurePurePursuit(
+                purePursuitEnabled,
+                purePursuitLookaheadMinMeters,
+                purePursuitLookaheadMaxMeters,
+                purePursuitLookaheadSpeedFactor,
+                purePursuitWheelbaseMeters,
+                purePursuitSteeringGain,
+                purePursuitMaxSteerDegrees);
         }
 
         /// <summary>
@@ -305,26 +328,26 @@ namespace AHPP_AI
 
             switch (btc.ClickID)
             {
-                case 1:
+                case MainUI.RecordToggleId:
                     if (aiController.IsRecording) aiController.StopRecording();
                     else aiController.StartRecording(currentRecordingRoute, GetRouteTypeFromName(currentRecordingRoute));
                     break;
-                case 2:
+                case MainUI.ReloadRoutesId:
                     aiController.ReloadRoutes();
                     break;
-                case 6:
+                case MainUI.ResetLayoutId:
                     aiController.ResetLayout();
                     break;
-                case 5:
+                case MainUI.ToggleLayoutId:
                     aiController.ToggleRouteVisualization(currentViewPLID);
                     break;
-                case 103:
+                case MainUI.StopAllAisId:
                     aiController.StopAllAIs();
                     break;
-                case 105:
+                case MainUI.StartAllAisId:
                     aiController.StartAllAIs();
                     break;
-                case 104:
+                case MainUI.PitAllAisId:
                     aiController.PitAllAIs();
                     break;
                 case MainUI.ConnectOnlineId:
@@ -342,37 +365,22 @@ namespace AHPP_AI
                 case MainUI.LayoutRejoinIndexId:
                     aiController.SetSelectedNodeAsRejoinIndex();
                     break;
-                case 239:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording(mainRouteName, GetRouteTypeFromName(mainRouteName));
-                    break;
-                case 238:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else aiController.StartRecording(spawnRouteName, GetRouteTypeFromName(spawnRouteName));
-                    break;
-                case 237:
-                    if (aiController.IsRecording) aiController.StopRecording();
-                    else
-                        aiController.StartRecording(
-                            GetBranchRoute(0, "detour1"),
-                            GetRouteTypeFromName(GetBranchRoute(0, "detour1")));
-                    break;
-                case 212:
+                case DebugUI.SpawnButtonId:
                     aiController.SpawnAICars();
                     break;
-                case 211:
+                case DebugUI.RemoveButtonId:
                     aiController.RemoveLastAICar();
                     break;
-                case 210:
+                case DebugUI.RemoveAllButtonId:
                     aiController.RemoveAllAICars();
                     break;
-                case 209:
+                case DebugUI.StopAllButtonId:
                     aiController.StopAllAIs();
                     break;
-                case 208:
+                case DebugUI.SpecAllButtonId:
                     aiController.PitAllAIs();
                     break;
-                case 207:
+                case DebugUI.SetSpeedButtonId:
                     aiController.SetTargetSpeedForAll(50);
                     break;
                 case MainUI.VisualizationDetailMinusId:
@@ -600,6 +608,7 @@ namespace AHPP_AI
         private static RouteType GetRouteTypeFromName(string routeName)
         {
             var name = (routeName ?? string.Empty).ToLowerInvariant();
+            if (name.Contains("alt") || name.Contains("inner")) return RouteType.AlternateMain;
             if (name.Contains("pit")) return RouteType.PitEntry;
             if (name.Contains("detour")) return RouteType.Detour;
             if (name.Contains("main")) return RouteType.MainLoop;
@@ -611,6 +620,7 @@ namespace AHPP_AI
             var names = new List<string>();
             if (!string.IsNullOrWhiteSpace(spawnRouteName)) names.Add(spawnRouteName);
             if (!string.IsNullOrWhiteSpace(mainRouteName)) names.Add(mainRouteName);
+            if (!string.IsNullOrWhiteSpace(mainAlternateRouteName)) names.Add(mainAlternateRouteName);
             names.AddRange(branchRouteNames);
             return names.Distinct(StringComparer.OrdinalIgnoreCase);
         }

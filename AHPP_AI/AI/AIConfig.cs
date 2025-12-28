@@ -25,7 +25,8 @@ namespace AHPP_AI.AI
         // Advanced route settings
         public string SpawnRouteName { get; set; } = "pit_entry";
         public string MainRouteName { get; set; } = "main_loop";
-        public List<string> BranchRouteNames { get; set; } = new List<string> { "detour1", "detour2", "detour3" };
+        public string MainAlternateRouteName { get; set; } = string.Empty;
+        public List<string> BranchRouteNames { get; set; } = new List<string>();
 
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;
@@ -37,6 +38,13 @@ namespace AHPP_AI.AI
         public int SteeringCenter { get; set; } = 32768;
         public double SteeringResponseDamping { get; set; } = 1.0;
         public double SteeringDeadzoneDegrees { get; set; } = 0.0;
+        public bool UsePurePursuitSteering { get; set; } = true;
+        public double PurePursuitLookaheadMinMeters { get; set; } = 6.0;
+        public double PurePursuitLookaheadMaxMeters { get; set; } = 25.0;
+        public double PurePursuitLookaheadSpeedFactor { get; set; } = 0.35;
+        public double PurePursuitWheelbaseMeters { get; set; } = 2.5;
+        public double PurePursuitSteeringGain { get; set; } = 1.0;
+        public double PurePursuitMaxSteerDegrees { get; set; } = 25.0;
 
         // Gearbox settings
         public int ShiftDelayMs { get; set; } = 500;
@@ -47,6 +55,9 @@ namespace AHPP_AI.AI
         public int ClutchPressDelayMs { get; set; } = 100;
         public int ClutchReleaseSteps { get; set; } = 5;
         public int ClutchReleaseIntervalMs { get; set; } = 100;
+        public int StallPreventionRpm { get; set; } = 500;
+        public int StallPreventionReleaseRpm { get; set; } = 900;
+        public int StallPreventionHoldMs { get; set; } = 750;
 
         // Waypoint and recovery settings
         public bool WallRecoveryEnabled { get; set; } = true;

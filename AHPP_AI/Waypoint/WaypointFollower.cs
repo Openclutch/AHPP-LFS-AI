@@ -661,6 +661,67 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        ///     Calculate a lookahead point for pure pursuit steering based on speed and route geometry.
+        /// </summary>
+        public (double targetX, double targetY, double lookaheadDistanceMeters) CalculatePurePursuitTarget(
+            byte plid, double carX, double carY, double speedKmh)
+        {
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0)
+                return (carX, carY, 0);
+
+            if (!targetWaypointIndices.ContainsKey(plid))
+                targetWaypointIndices[plid] = 0;
+
+            var lookaheadDistance = CalculateLookaheadDistance(speedKmh);
+            var path = aiPaths[plid];
+            var startIndex = targetWaypointIndices[plid] % path.Count;
+            var remaining = lookaheadDistance;
+
+            var previousX = carX;
+            var previousY = carY;
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                var idx = (startIndex + i) % path.Count;
+                var waypoint = path[idx];
+                var wpX = waypoint.Position.X / 65536.0;
+                var wpY = waypoint.Position.Y / 65536.0;
+
+                var dx = wpX - previousX;
+                var dy = wpY - previousY;
+                var segmentLength = Math.Sqrt(dx * dx + dy * dy);
+
+                if (segmentLength >= remaining && segmentLength > 0.001)
+                {
+                    var t = remaining / segmentLength;
+                    var targetX = previousX + dx * t;
+                    var targetY = previousY + dy * t;
+
+                    return (targetX, targetY, lookaheadDistance);
+                }
+
+                remaining -= segmentLength;
+                previousX = wpX;
+                previousY = wpY;
+            }
+
+            return (previousX, previousY, lookaheadDistance);
+        }
+
+        /// <summary>
+        ///     Calculate a clamped lookahead distance using speed-based scaling.
+        /// </summary>
+        private double CalculateLookaheadDistance(double speedKmh)
+        {
+            var baseDistance = config.PurePursuitLookaheadMinMeters +
+                               speedKmh * config.PurePursuitLookaheadSpeedFactor;
+
+            return Math.Max(
+                config.PurePursuitLookaheadMinMeters,
+                Math.Min(config.PurePursuitLookaheadMaxMeters, baseDistance));
+        }
+
+        /// <summary>
         ///     Calculate heading and distance to current target waypoint or approach curve point
         /// </summary>
         public (double distance, int desiredHeading, int headingError) CalculateTargetData(byte plid, double carX,

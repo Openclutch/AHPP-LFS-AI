@@ -45,6 +45,19 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Random branchRandom = new Random();
+        private const double InnerBranchJoinChance = 0.25;
+        private const double InnerBranchMaxDistanceMeters = 12.0;
+        private const double InnerBranchMaxHeadingDegrees = 60.0;
+        private const double InnerBranchMaxSpeedKmh = 55.0;
+        private const double InnerBranchTargetSpeedKmh = 45.0;
+        private static readonly TimeSpan InnerBranchCheckCooldown = TimeSpan.FromSeconds(12);
+        private const double InnerLaneSwapChance = 0.35;
+        private static readonly TimeSpan InnerLaneSwapCooldown = TimeSpan.FromSeconds(8);
+        private readonly Dictionary<byte, DateTime> innerBranchLastCheck = new Dictionary<byte, DateTime>();
+        private readonly HashSet<byte> innerBranchSpeedHold = new HashSet<byte>();
+        private readonly Dictionary<byte, DateTime> innerLaneSwapLast = new Dictionary<byte, DateTime>();
+        private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
         private string recordingRouteName = "main_loop";
         private string visualizationRouteName = "main_loop";
@@ -123,6 +136,15 @@ namespace AHPP_AI.AI
                 Description = "Route from pits or spawn to the main loop entry point.",
                 AttachMainIndex = 0,
                 DefaultSpeedLimit = 50
+            };
+
+            routePresets["main_alt"] = new RouteMetadata
+            {
+                Name = "main_alt",
+                Type = RouteType.AlternateMain,
+                Description = "Alternate lane for the main loop (e.g., highway inner lane).",
+                IsLoop = true,
+                DefaultSpeedLimit = 60
             };
 
             routePresets["detour1"] = new RouteMetadata
@@ -432,6 +454,28 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure pure pursuit steering to smooth path following while keeping it tunable.
+        /// </summary>
+        public void ConfigurePurePursuit(
+            bool enabled,
+            double minLookahead,
+            double maxLookahead,
+            double speedFactor,
+            double wheelbaseMeters,
+            double steeringGain,
+            double maxSteerDegrees)
+        {
+            config.UsePurePursuitSteering = enabled;
+            config.PurePursuitLookaheadMinMeters = Math.Max(1.0, minLookahead);
+            config.PurePursuitLookaheadMaxMeters =
+                Math.Max(config.PurePursuitLookaheadMinMeters, maxLookahead);
+            config.PurePursuitLookaheadSpeedFactor = Math.Max(0.0, speedFactor);
+            config.PurePursuitWheelbaseMeters = Math.Max(0.5, wheelbaseMeters);
+            config.PurePursuitSteeringGain = Math.Max(0.01, steeringGain);
+            config.PurePursuitMaxSteerDegrees = Math.Max(1.0, maxSteerDegrees);
+        }
+
+        /// <summary>
         /// Manually set indicator state for an AI with optional auto-cancel.
         /// </summary>
         public void SetIndicators(byte plid, AILightController.IndicatorState state, TimeSpan? duration = null)
@@ -482,10 +526,15 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Apply route names from configuration and reload path data.
         /// </summary>
-        public void ApplyRouteConfig(string spawnRoute, string mainRoute, IEnumerable<string> branches)
+        /// <summary>
+        /// Apply route names from configuration and reload path data.
+        /// </summary>
+        public void ApplyRouteConfig(string spawnRoute, string mainRoute, string alternateMainRoute,
+            IEnumerable<string> branches)
         {
             if (!string.IsNullOrWhiteSpace(spawnRoute)) config.SpawnRouteName = spawnRoute;
             if (!string.IsNullOrWhiteSpace(mainRoute)) config.MainRouteName = mainRoute;
+            if (!string.IsNullOrWhiteSpace(alternateMainRoute)) config.MainAlternateRouteName = alternateMainRoute;
 
             if (branches != null)
                 config.BranchRouteNames = branches
@@ -610,6 +659,184 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Check if a branch represents an inner-lane route based on its name.
+        /// </summary>
+        private static bool IsInnerBranch(BranchRouteInfo branchInfo)
+        {
+            var name = branchInfo?.Name ?? string.Empty;
+            if (branchInfo?.Metadata?.Type == RouteType.AlternateMain) return true;
+            return name.IndexOf("inner", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("alt", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Pick a waypoint index that is near the car and roughly aligned with its heading.
+        /// </summary>
+        private (int index, double distance, double headingErrorDeg) FindAlignedWaypointIndex(
+            List<Util.Waypoint> path,
+            CompCar car,
+            int preferredIndex,
+            int searchRadius = 5)
+        {
+            if (path == null || path.Count == 0 || car.PLID == 0) return (0, double.MaxValue, 180);
+
+            var carX = car.X / 65536.0;
+            var carY = car.Y / 65536.0;
+            var carHeading = CoordinateUtils.NormalizeHeading((int)car.Heading);
+
+            var maxOffset = Math.Min(searchRadius, path.Count - 1);
+            var startIndex = Math.Max(0, preferredIndex - maxOffset);
+            var endIndex = Math.Min(path.Count - 1, preferredIndex + maxOffset);
+
+            if (startIndex > endIndex)
+            {
+                startIndex = 0;
+                endIndex = path.Count - 1;
+            }
+
+            var bestScore = double.MaxValue;
+            var bestIndex = preferredIndex;
+            var bestDistance = double.MaxValue;
+            var bestHeadingError = 180.0;
+
+            for (var i = startIndex; i <= endIndex; i++)
+            {
+                var wpX = path[i].Position.X / 65536.0;
+                var wpY = path[i].Position.Y / 65536.0;
+                var dx = wpX - carX;
+                var dy = wpY - carY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+                var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
+                var headingError = Math.Abs(CoordinateUtils.CalculateHeadingError(carHeading, desiredHeading));
+                var headingErrorDeg = Math.Abs(CoordinateUtils.HeadingToDegrees(headingError));
+                if (headingErrorDeg > 180) headingErrorDeg = 360 - headingErrorDeg;
+
+                var distanceScore = distance;
+                var headingScore = headingErrorDeg * 0.1;
+                var backwardPenalty = headingErrorDeg > 135 ? 50.0 : 0.0;
+                var indexPenalty = Math.Abs(i - preferredIndex) * 0.5;
+                var score = distanceScore + headingScore + backwardPenalty + indexPenalty;
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestIndex = i;
+                    bestDistance = distance;
+                    bestHeadingError = headingErrorDeg;
+                }
+            }
+
+            return (bestIndex, bestDistance, bestHeadingError);
+        }
+
+        /// <summary>
+        /// Opportunistically merge onto an inner-lane branch when nearby instead of forcing the switch at the branch start.
+        /// </summary>
+        private bool TryJoinInnerBranchLaneChange(byte plid, CompCar car, int mainRouteIndex)
+        {
+            if (!currentRoute.TryGetValue(plid, out var routeName) || routeName != "main")
+                return false;
+
+            if (innerBranchLastCheck.TryGetValue(plid, out var lastCheck) &&
+                DateTime.Now - lastCheck < InnerBranchCheckCooldown)
+                return false;
+
+            var innerBranch = pathManager.GetAlternateMainRoute() ??
+                              pathManager.GetBranches().FirstOrDefault(IsInnerBranch);
+            innerBranchLastCheck[plid] = DateTime.Now;
+
+            if (innerBranch == null || innerBranch.Path == null || innerBranch.Path.Count == 0)
+                return false;
+
+            var speedKmh = 360.0 * car.Speed / 32768.0;
+            if (speedKmh > InnerBranchMaxSpeedKmh)
+                return false;
+
+            var preferredIndex = FindClosestIndex(innerBranch.Path, car);
+            var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
+                innerBranch.Path,
+                car,
+                preferredIndex,
+                Math.Max(innerBranch.Path.Count - 1, 10));
+
+            if (distance > InnerBranchMaxDistanceMeters || headingError > InnerBranchMaxHeadingDegrees)
+                return false;
+
+            if (branchRandom.NextDouble() > InnerBranchJoinChance)
+                return false;
+
+            SignalLaneChange(
+                plid,
+                pathManager.MainRoute,
+                mainRouteIndex,
+                innerBranch.Path,
+                entryIndex,
+                $"Taking branch {innerBranch.Name}");
+
+            waypointFollower.SetPath(plid, innerBranch.Path, entryIndex);
+            waypointFollower.SetManualTargetSpeed(plid, InnerBranchTargetSpeedKmh);
+            innerBranchSpeedHold.Add(plid);
+            currentRoute[plid] = "branch";
+            activeBranchSelections[plid] = innerBranch;
+            return true;
+        }
+
+        /// <summary>
+        /// Attempt a lane change from the inner (right) branch back to the main (left) lane with cooldowns.
+        /// </summary>
+        private bool TrySwapInnerToMainLane(byte plid, CompCar car, int branchTargetIndex, List<Util.Waypoint> branchPath)
+        {
+            if (branchPath == null || branchPath.Count == 0) return false;
+
+            if (!activeBranchSelections.TryGetValue(plid, out var branchInfo) || !IsInnerBranch(branchInfo))
+                return false;
+
+            if (branchTargetIndex >= branchPath.Count - 3)
+                return false; // Skip swaps near the natural rejoin
+
+            if (innerLaneSwapLast.TryGetValue(plid, out var lastSwap) &&
+                DateTime.Now - lastSwap < InnerLaneSwapCooldown)
+                return false;
+
+            var speedKmh = 360.0 * car.Speed / 32768.0;
+            if (speedKmh > InnerBranchMaxSpeedKmh)
+                return false;
+
+            var preferredIndex = FindClosestIndex(pathManager.MainRoute, car);
+            var (mainIndex, distance, headingError) = FindAlignedWaypointIndex(
+                pathManager.MainRoute,
+                car,
+                preferredIndex,
+                8);
+
+            if (distance > InnerBranchMaxDistanceMeters || headingError > InnerBranchMaxHeadingDegrees)
+                return false;
+
+            if (branchRandom.NextDouble() > InnerLaneSwapChance)
+                return false;
+
+            SignalLaneChange(
+                plid,
+                branchPath,
+                branchTargetIndex,
+                pathManager.MainRoute,
+                mainIndex,
+                "Inner lane change to main");
+
+            waypointFollower.SetPath(plid, pathManager.MainRoute, mainIndex);
+            if (innerBranchSpeedHold.Contains(plid))
+            {
+                waypointFollower.ClearManualTargetSpeed(plid);
+                innerBranchSpeedHold.Remove(plid);
+            }
+            activeBranchSelections.Remove(plid);
+            currentRoute[plid] = "main";
+            innerLaneSwapLast[plid] = DateTime.Now;
+            innerBranchLastCheck[plid] = DateTime.Now;
+            return true;
+        }
+
+        /// <summary>
         /// Determine indicator direction for a lane/route change by comparing path vectors.
         /// </summary>
         private AILightController.IndicatorState DetermineIndicatorDirection(
@@ -702,12 +929,40 @@ namespace AHPP_AI.AI
         /// </summary>
         public void SpawnAICars()
         {
+            if (!spawnSemaphore.Wait(0))
+            {
+                logger.LogWarning("AI spawn already in progress; ignoring duplicate request.");
+                return;
+            }
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await SpawnAICarsAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogException(ex, "Error while spawning AI cars asynchronously");
+                }
+                finally
+                {
+                    spawnSemaphore.Release();
+                }
+            });
+        }
+
+        /// <summary>
+        /// Spawn AI cars without blocking the calling thread so InSim events keep flowing.
+        /// </summary>
+        private async Task SpawnAICarsAsync()
+        {
             for (var i = 0; i < config.NumberOfAIs; i++)
             {
                 insim.Send(new IS_MST { Msg = "/ai" });
                 logger.Log($"Spawned AI {i + 1} of {config.NumberOfAIs}");
                 if (i < config.NumberOfAIs - 1)
-                    Thread.Sleep(config.WaitTimeToSpawn);
+                    await Task.Delay(config.WaitTimeToSpawn).ConfigureAwait(false);
             }
         }
 
@@ -836,7 +1091,7 @@ namespace AHPP_AI.AI
                 0,
                 $"Manual lane change to {branchName}");
 
-            var bestIndex = FindClosestIndex(branchInfo.Path, car);
+            var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
             waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
             currentRoute[plid] = "branch";
             activeBranchSelections[plid] = branchInfo;
@@ -1106,7 +1361,7 @@ namespace AHPP_AI.AI
             }
 
             // Update AI controls based on current state
-            driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects);
+            driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects, aii.RPM);
 
             // Route management
             var (targetIndex, count, _, _) = waypointFollower.GetFollowerInfo(plid);
@@ -1120,20 +1375,29 @@ namespace AHPP_AI.AI
                 }
                 else if (routeName == "main")
                 {
-                    if (pathManager.TryGetBranch(targetIndex, out var branchInfo) && branchRandom.NextDouble() < 0.5)
-                    {
-                        SignalLaneChange(
-                            plid,
-                            pathManager.MainRoute,
-                            targetIndex,
-                            branchInfo.Path,
-                            0,
-                            $"Taking branch {branchInfo.Name}");
+                    var switchedInner = TryJoinInnerBranchLaneChange(plid, car, targetIndex);
 
-                        var bestIndex = FindClosestIndex(branchInfo.Path, car);
-                        waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
-                        currentRoute[plid] = "branch";
-                        activeBranchSelections[plid] = branchInfo;
+                    if (!switchedInner && pathManager.TryGetBranch(targetIndex, out var branchInfo))
+                    {
+                        if (IsInnerBranch(branchInfo))
+                        {
+                            // Skip start-based switching for inner branches; handled opportunistically elsewhere.
+                        }
+                        else if (branchRandom.NextDouble() < 0.5)
+                        {
+                            SignalLaneChange(
+                                plid,
+                                pathManager.MainRoute,
+                                targetIndex,
+                                branchInfo.Path,
+                                0,
+                                $"Taking branch {branchInfo.Name}");
+
+                            var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
+                            waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+                            currentRoute[plid] = "branch";
+                            activeBranchSelections[plid] = branchInfo;
+                        }
                     }
                 }
                 else if (routeName == "branch")
@@ -1144,21 +1408,32 @@ namespace AHPP_AI.AI
                         logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
                         waypointFollower.SetPath(plid, pathManager.MainRoute);
                         activeBranchSelections.Remove(plid);
+                        if (innerBranchSpeedHold.Contains(plid))
+                        {
+                            waypointFollower.ClearManualTargetSpeed(plid);
+                            innerBranchSpeedHold.Remove(plid);
+                        }
                         currentRoute[plid] = "main";
                         return;
+                    }
+
+                    if (activeBranchSelections.TryGetValue(plid, out var branchInfo) && IsInnerBranch(branchInfo))
+                    {
+                        if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
+                            return;
                     }
 
                     if (targetIndex >= path.Count - 1)
                     {
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
 
-                        if (activeBranchSelections.TryGetValue(plid, out var branchInfo))
+                        if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit))
                         {
                             var hintedIndex = pathManager.MainRoute.Count == 0
                                 ? 0
                                 : Math.Max(
                                     0,
-                                    Math.Min(pathManager.MainRoute.Count - 1, branchInfo.RejoinIndex));
+                                    Math.Min(pathManager.MainRoute.Count - 1, branchInfoExit.RejoinIndex));
                             bestIndex = hintedIndex;
 
                             var approachIndex = Math.Max(0, path.Count - 2);
@@ -1168,12 +1443,18 @@ namespace AHPP_AI.AI
                                 approachIndex,
                                 pathManager.MainRoute,
                                 bestIndex,
-                                $"Rejoining main from {branchInfo.Name}");
+                                $"Rejoining main from {branchInfoExit.Name}");
 
                             activeBranchSelections.Remove(plid);
                         }
 
                         waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+                        if (innerBranchSpeedHold.Contains(plid))
+                        {
+                            waypointFollower.ClearManualTargetSpeed(plid);
+                            innerBranchSpeedHold.Remove(plid);
+                        }
+                        innerBranchLastCheck[plid] = DateTime.Now;
                         currentRoute[plid] = "main";
                     }
                 }
@@ -1280,9 +1561,40 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Queue a visualization job so layout work runs off the InSim event thread.
+        /// </summary>
+        private void EnqueueVisualization(Action work)
+        {
+            Task.Run(async () =>
+            {
+                await visualizationSemaphore.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    work();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogException(ex, "Visualization task failed");
+                }
+                finally
+                {
+                    visualizationSemaphore.Release();
+                }
+            });
+        }
+
+        /// <summary>
         /// Visualize a recorded route in the layout so it can be edited in LFS.
         /// </summary>
         public void VisualizeRouteForEditing(string routeName, byte plid)
+        {
+            EnqueueVisualization(() => VisualizeRouteForEditingInternal(routeName, plid));
+        }
+
+        /// <summary>
+        /// Render the requested route for editing after acquiring the visualization lock.
+        /// </summary>
+        private void VisualizeRouteForEditingInternal(string routeName, byte plid)
         {
             var recorded = waypointManager.GetRecordedRoute(routeName);
             if (recorded == null)
@@ -1504,6 +1816,14 @@ namespace AHPP_AI.AI
         /// Visualize the currently selected recorded route with the configured detail level.
         /// </summary>
         public void VisualizeSelectedRoute(byte viewPlid)
+        {
+            EnqueueVisualization(() => VisualizeSelectedRouteInternal(viewPlid));
+        }
+
+        /// <summary>
+        /// Run the recorded route visualization without blocking the calling thread.
+        /// </summary>
+        private void VisualizeSelectedRouteInternal(byte viewPlid)
         {
             var effectivePlid = viewPlid == 0 ? GetDefaultVisualizationPlid() : viewPlid;
             if (effectivePlid == 0)

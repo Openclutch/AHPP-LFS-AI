@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AHPP_AI.UI;
 using AHPP_AI.Util;
 using InSimDotNet.Packets;
 using InSimClient = InSimDotNet.InSimClient;
@@ -35,20 +36,19 @@ namespace AHPP_AI.Debug
         // official InSim specification.
         private readonly Dictionary<string, byte> aiButtonIds = new Dictionary<string, byte>
         {
-            { "Position", 224 },
-            { "Speed", 223 },
-            { "Heading", 222 },
-            { "Direction", 221 },
-            { "Angle", 220 },
-            { "Steering", 219 },
-            { "Waypoint", 218 },
-            { "Distance", 217 },
-            { "HeadingError", 216 },
-            { "TargetSpeed", 215 },
-            { "ControlInfo", 214 },
-            { "RouteInfo", 213 },
-            { "State", 205 },
-            { "StartAll", 206 }
+            { "Position", ButtonIds.Debug(0) },
+            { "Speed", ButtonIds.Debug(1) },
+            { "Heading", ButtonIds.Debug(2) },
+            { "Direction", ButtonIds.Debug(3) },
+            { "Angle", ButtonIds.Debug(4) },
+            { "Steering", ButtonIds.Debug(5) },
+            { "Waypoint", ButtonIds.Debug(6) },
+            { "Distance", ButtonIds.Debug(7) },
+            { "HeadingError", ButtonIds.Debug(8) },
+            { "TargetSpeed", ButtonIds.Debug(9) },
+            { "ControlInfo", ButtonIds.Debug(10) },
+            { "RouteInfo", ButtonIds.Debug(11) },
+            { "State", ButtonIds.Debug(12) }
         };
 
         // Track button states and update timing
@@ -56,6 +56,14 @@ namespace AHPP_AI.Debug
 
         private readonly InSimClient insim;
         private readonly Logger logger;
+
+        public const byte SpawnButtonId =  (byte)(ButtonIds.DebugStart + 13);
+        public const byte RemoveButtonId = (byte)(ButtonIds.DebugStart + 14);
+        public const byte RemoveAllButtonId = (byte)(ButtonIds.DebugStart + 15);
+        public const byte StopAllButtonId = (byte)(ButtonIds.DebugStart + 16);
+        public const byte StartAllButtonId = (byte)(ButtonIds.DebugStart + 17);
+        public const byte SpecAllButtonId = (byte)(ButtonIds.DebugStart + 18);
+        public const byte SetSpeedButtonId = (byte)(ButtonIds.DebugStart + 19);
 
         // Button IDs by category and type
         private readonly Dictionary<string, byte> playerButtonIds = new Dictionary<string, byte>
@@ -130,47 +138,39 @@ namespace AHPP_AI.Debug
         public void ShowAIButtons(bool show)
         {
             var baseRow = (byte)(TOP_ROW + ROW_HEIGHT * aiButtonIds.Count);
-            byte spawnId = 212;
-            byte removeId = 211;
-            byte removeAllId = 210;
-            byte stopAllId = 209;
-            byte startAllId = 206;
-            byte specAllId = 208;
-            byte speedId = 207;
-
             if (show)
             {
-                CreateDebugButton(spawnId, "SPAWN AI", RIGHT_COLUMN, baseRow, BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(removeId, "REMOVE AI", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(removeAllId, "REMOVE ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(stopAllId, "STOP ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 3), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(startAllId, "START ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 4), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(specAllId, "SPEC ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 5), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(speedId, "SET SPEED", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 6), BUTTON_WIDTH, ROW_HEIGHT);
-                debugButtonsActive[spawnId] = 1;
-                debugButtonsActive[removeId] = 1;
-                debugButtonsActive[removeAllId] = 1;
-                debugButtonsActive[stopAllId] = 1;
-                debugButtonsActive[startAllId] = 1;
-                debugButtonsActive[specAllId] = 1;
-                debugButtonsActive[speedId] = 1;
+                CreateDebugButton(SpawnButtonId, "SPAWN AI", RIGHT_COLUMN, baseRow, BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(RemoveButtonId, "REMOVE AI", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(RemoveAllButtonId, "REMOVE ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(StopAllButtonId, "STOP ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 3), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(StartAllButtonId, "START ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 4), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(SpecAllButtonId, "SPEC ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 5), BUTTON_WIDTH, ROW_HEIGHT);
+                CreateDebugButton(SetSpeedButtonId, "SET SPEED", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 6), BUTTON_WIDTH, ROW_HEIGHT);
+                debugButtonsActive[SpawnButtonId] = 1;
+                debugButtonsActive[RemoveButtonId] = 1;
+                debugButtonsActive[RemoveAllButtonId] = 1;
+                debugButtonsActive[StopAllButtonId] = 1;
+                debugButtonsActive[StartAllButtonId] = 1;
+                debugButtonsActive[SpecAllButtonId] = 1;
+                debugButtonsActive[SetSpeedButtonId] = 1;
             }
             else
             {
-                DeleteButton(spawnId);
-                DeleteButton(removeId);
-                DeleteButton(removeAllId);
-                DeleteButton(stopAllId);
-                DeleteButton(startAllId);
-                DeleteButton(specAllId);
-                DeleteButton(speedId);
-                debugButtonsActive[spawnId] = 0;
-                debugButtonsActive[removeId] = 0;
-                debugButtonsActive[removeAllId] = 0;
-                debugButtonsActive[stopAllId] = 0;
-                debugButtonsActive[startAllId] = 0;
-                debugButtonsActive[specAllId] = 0;
-                debugButtonsActive[speedId] = 0;
+                DeleteButton(SpawnButtonId);
+                DeleteButton(RemoveButtonId);
+                DeleteButton(RemoveAllButtonId);
+                DeleteButton(StopAllButtonId);
+                DeleteButton(StartAllButtonId);
+                DeleteButton(SpecAllButtonId);
+                DeleteButton(SetSpeedButtonId);
+                debugButtonsActive[SpawnButtonId] = 0;
+                debugButtonsActive[RemoveButtonId] = 0;
+                debugButtonsActive[RemoveAllButtonId] = 0;
+                debugButtonsActive[StopAllButtonId] = 0;
+                debugButtonsActive[StartAllButtonId] = 0;
+                debugButtonsActive[SpecAllButtonId] = 0;
+                debugButtonsActive[SetSpeedButtonId] = 0;
             }
         }
 
@@ -257,6 +257,7 @@ namespace AHPP_AI.Debug
             lastDebugUpdate = DateTime.Now;
 
             if (!debugUIInitialized) return;
+            if (allCars == null || allCars.Length == 0) return;
 
             try
             {
@@ -443,6 +444,9 @@ namespace AHPP_AI.Debug
             Dictionary<byte, string> aiControlInfo = null,
             Dictionary<byte, string> aiStates = null)
         {
+            if (allCars == null || allCars.Length == 0)
+                return;
+
             // Get AI car data
             var car = Array.Find(allCars, c => c.PLID == aiPLID);
             if (car.PLID == 0) // No MCI data yet for AI PLID
