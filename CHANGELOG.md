@@ -1,5 +1,11 @@
 # Changelog
 
+- Switched AI tool status messages to private host-only sends (or direct button responder UCIDs) so chat updates no longer broadcast under the admin name.
+- Added an `AutoManagePopulation` switch (defaulted off in `config.ini`) so AI population management stays paused on startup until manually enabled.
+- Added a "Start Auto AI" button in the main debug UI to enable population management and trigger the first reconcile when you're ready.
+- Widened layout visualization coordinate bounds so recorded routes render fully without clipping long paths.
+- Added an AI population manager that tracks human joins/leaves, keeps reserved slots free, and balances AI spawns/removals across routes using new metadata targets/weights with deterministic rounding.
+- Extended route metadata defaults and config (`MaxPlayers`, `ReservedSlots`, `AiFillRatio`, `MinAIs`, `MaxAIs`, `AdjustIntervalMs`, spawn/remove batch sizes) so per-route AI targets are loaded from JSON and populated automatically from `config.ini`.
 - Unified AI recovery into a single driver-managed state machine (stall restart + short/long reverse with cooldown validation) with new tuning knobs in `config.ini` for timings, success thresholds, and escalation limits before forcing a pit/spectate reset.
 - Fixed AI reset flow to avoid invalid `/pit` command; we now spectate the AI before respawning.
 - Simplified AI debug buttons: `AI_CTL` now only shows control inputs, `AI_ST` shows state only, and the state button is larger in a third column for readability.

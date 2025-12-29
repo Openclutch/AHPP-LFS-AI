@@ -78,6 +78,15 @@ namespace AHPP_AI
         private static readonly int recoveryDetectionsBeforeAction;
         private static readonly int recoveryMaxFailureCount;
         private static readonly int recoveryStallReverseTrigger;
+        private static readonly int maxPlayers;
+        private static readonly int reservedSlots;
+        private static readonly double aiFillRatio;
+        private static readonly int minAis;
+        private static readonly int maxAis;
+        private static readonly int adjustIntervalMs;
+        private static readonly int spawnBatchSize;
+        private static readonly int removeBatchSize;
+        private static readonly bool autoManagePopulation;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -136,6 +145,15 @@ namespace AHPP_AI
             recoveryMaxFailureCount = appConfig.GetInt("AI", "RecoveryMaxFailureCount", 3);
             recoveryStallReverseTrigger = appConfig.GetInt("AI", "RecoveryStallReverseTrigger", 3);
             recordingIntervalMeters = appConfig.GetDouble("Recording", "IntervalMeters", 5.0);
+            maxPlayers = GetAiManagerInt("MaxPlayers", 48);
+            reservedSlots = GetAiManagerInt("ReservedSlots", 10);
+            aiFillRatio = GetAiManagerDouble("AiFillRatio", 0.80);
+            minAis = GetAiManagerInt("MinAIs", 0);
+            maxAis = GetAiManagerInt("MaxAIs", 38);
+            adjustIntervalMs = GetAiManagerInt("AdjustIntervalMs", 10000);
+            spawnBatchSize = GetAiManagerInt("SpawnBatchSize", 1);
+            removeBatchSize = GetAiManagerInt("RemoveBatchSize", 1);
+            autoManagePopulation = appConfig.GetBool("AI", "AutoManagePopulation", true);
 
             // Initialize components in the correct order
             waypointManager = new WaypointManager(logger, routeLibrary);
@@ -176,6 +194,16 @@ namespace AHPP_AI
                 recoveryDetectionsBeforeAction,
                 recoveryMaxFailureCount,
                 recoveryStallReverseTrigger);
+            aiController.ConfigurePopulationManager(
+                maxPlayers,
+                reservedSlots,
+                aiFillRatio,
+                minAis,
+                maxAis,
+                adjustIntervalMs,
+                spawnBatchSize,
+                removeBatchSize);
+            aiController.SetAutoPopulationEnabled(autoManagePopulation, false);
         }
 
         /// <summary>
@@ -217,11 +245,11 @@ namespace AHPP_AI
                 aiController.NotifyRouteValidationIssues();
 
                 // Spawn AI cars automatically if debug is enabled
-                if (autoSpawnAI)
+                if (autoSpawnAI && aiController.IsAutoPopulationEnabled)
                 {
                     Thread.Sleep(250); // Wait for connection to stabilize
-                    aiController.SpawnAICars();
-                    logger.Log("Auto-spawned AI cars for debugging");
+                    aiController.RecalculatePopulationTargets();
+                    logger.Log("Auto-adjusted AI population for debugging");
                 }
 
                 // Auto-visualize coordinate system in debug mode
@@ -330,6 +358,9 @@ namespace AHPP_AI
             logger.Log("Registering event handlers");
 
             insim.IS_NPL += (_, e) => OnNewPlayer(e.Packet);
+            insim.IS_PLL += (_, e) => aiController.OnPlayerLeave(e.Packet);
+            insim.IS_CNL += (_, e) => aiController.OnConnectionLeave(e.Packet);
+            insim.IS_NCN += (_, e) => aiController.OnNewConnection(e.Packet);
 
             // Car telemetry
             insim.IS_AII += (_, e) => aiController.OnAII(e.Packet);
@@ -383,6 +414,9 @@ namespace AHPP_AI
                     break;
                 case MainUI.StartAllAisId:
                     aiController.StartAllAIs();
+                    break;
+                case MainUI.StartAutoAisId:
+                    aiController.EnableAutoPopulation();
                     break;
                 case MainUI.PitAllAisId:
                     aiController.PitAllAIs();
@@ -448,11 +482,11 @@ namespace AHPP_AI
                 {
                     aiController.SetNumberOfAIs(Math.Max(0, count));
                     aiController.SpawnAICars();
-                    insim.Send(new IS_MST { Msg = $"Spawning {Math.Max(0, count)} AI(s)" });
+                    insim.SendPrivateMessage(btt.UCID, $"Spawning {Math.Max(0, count)} AI(s)");
                 }
                 else
                 {
-                    insim.Send(new IS_MST { Msg = "Enter a valid number of AIs." });
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid number of AIs.");
                 }
                 aiController.HideAddAIDialog();
                 return;
@@ -464,11 +498,11 @@ namespace AHPP_AI
                 {
                     var clampedSpeed = Math.Max(0, speed);
                     aiController.SetTargetSpeedForAll(clampedSpeed);
-                    insim.Send(new IS_MST { Msg = $"Set AI speed to {clampedSpeed:F0} km/h" });
+                    insim.SendPrivateMessage(btt.UCID, $"Set AI speed to {clampedSpeed:F0} km/h");
                 }
                 else
                 {
-                    insim.Send(new IS_MST { Msg = "Enter a valid AI speed." });
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid AI speed.");
                 }
             }
 
@@ -478,11 +512,11 @@ namespace AHPP_AI
                 {
                     var interval = Math.Max(0.1, meters);
                     aiController.SetRecordingInterval(interval);
-                    insim.Send(new IS_MST { Msg = $"Recording every {interval:F1} m" });
+                    insim.SendPrivateMessage(btt.UCID, $"Recording every {interval:F1} m");
                 }
                 else
                 {
-                    insim.Send(new IS_MST { Msg = "Enter a valid recording interval in meters." });
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid recording interval in meters.");
                 }
             }
 
@@ -490,7 +524,8 @@ namespace AHPP_AI
             {
                 var normalized = routeLibrary.NormalizeRouteName(btt.Text);
                 pendingRouteName = normalized;
-                insim.Send(new IS_MST { Msg = $"Route name ready: {pendingRouteName}. Click Add Route to use it." });
+                insim.SendPrivateMessage(btt.UCID,
+                    $"Route name ready: {pendingRouteName}. Click Add Route to use it.");
                 return;
             }
 
@@ -502,7 +537,7 @@ namespace AHPP_AI
                 }
                 else
                 {
-                    insim.Send(new IS_MST { Msg = "Enter a valid node speed." });
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid node speed.");
                 }
             }
         }
@@ -540,7 +575,7 @@ namespace AHPP_AI
                 RequestLayoutSelectionFeed();
 
                 // Send welcome message
-                insim.Send(new IS_MST { Msg = "AI Car Control initialized" });
+                insim.SendPrivateMessage("AI Car Control initialized");
 
                 logger.Log("InSim initialized");
             }
@@ -607,7 +642,7 @@ namespace AHPP_AI
                 }
 
                 // Send goodbye message
-                insim.Send(new IS_MST { Msg = "AI Control Program shutting down. Press any key to restart." });
+                insim.SendPrivateMessage("AI Control Program shutting down. Press any key to restart.");
 
                 // Close InSim connection gracefully
                 insim.DisconnectSafe();
@@ -645,7 +680,7 @@ namespace AHPP_AI
             pendingRouteName = normalized;
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
             aiController.RefreshRouteOptions(currentRecordingRoute);
-            insim.Send(new IS_MST { Msg = $"Recording route set to {currentRecordingRoute}" });
+            insim.SendPrivateMessage($"Recording route set to {currentRecordingRoute}");
         }
 
         /// <summary>
@@ -676,6 +711,16 @@ namespace AHPP_AI
             if (index >= 0 && index < branchRouteNames.Count)
                 return branchRouteNames[index];
             return fallback;
+        }
+
+        private static int GetAiManagerInt(string key, int defaultValue)
+        {
+            return appConfig.GetInt("AIManager", key, appConfig.GetInt("AI", key, defaultValue));
+        }
+
+        private static double GetAiManagerDouble(string key, double defaultValue)
+        {
+            return appConfig.GetDouble("AIManager", key, appConfig.GetDouble("AI", key, defaultValue));
         }
 
         /// <summary>

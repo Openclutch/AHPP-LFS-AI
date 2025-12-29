@@ -42,6 +42,12 @@ namespace AHPP_AI.AI
         private readonly AILightController lightController;
         private readonly Dictionary<string, RouteMetadata> routePresets = new Dictionary<string, RouteMetadata>(StringComparer.OrdinalIgnoreCase);
         private readonly MainUI mainUI;
+        private readonly AIPopulationManager populationManager;
+        private readonly Dictionary<byte, string> aiAssignedRoutes = new Dictionary<byte, string>();
+        private readonly object assignmentLock = new object();
+        private readonly Queue<string> plannedSpawnRoutes = new Queue<string>();
+        private readonly object plannedSpawnLock = new object();
+        private readonly object aiPlidLock = new object();
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
@@ -114,6 +120,7 @@ namespace AHPP_AI.AI
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
             InitializeRoutePresets();
+            populationManager = new AIPopulationManager(this, pathManager, routeLibrary, config, logger);
         }
 
         /// <summary>
@@ -202,7 +209,11 @@ namespace AHPP_AI.AI
                 IsLoop = metadata.IsLoop,
                 AttachMainIndex = metadata.AttachMainIndex,
                 RejoinMainIndex = metadata.RejoinMainIndex,
-                DefaultSpeedLimit = metadata.DefaultSpeedLimit
+                DefaultSpeedLimit = metadata.DefaultSpeedLimit,
+                AiTargetCount = metadata.AiTargetCount,
+                AiTargetPercent = metadata.AiTargetPercent,
+                AiWeight = metadata.AiWeight,
+                AiEnabled = metadata.AiEnabled
             };
         }
 
@@ -238,6 +249,9 @@ namespace AHPP_AI.AI
             if (!metadata.DefaultSpeedLimit.HasValue) metadata.DefaultSpeedLimit = 60;
             if (string.IsNullOrWhiteSpace(metadata.Track)) metadata.Track = routeLibrary.TrackCode;
             if (string.IsNullOrWhiteSpace(metadata.Layout)) metadata.Layout = routeLibrary.LayoutName;
+            if (!metadata.AiWeight.HasValue || metadata.AiWeight <= 0) metadata.AiWeight = 1.0;
+            if (metadata.AiTargetPercent.HasValue)
+                metadata.AiTargetPercent = Math.Max(0, Math.Min(1.0, metadata.AiTargetPercent.Value));
 
             return metadata;
         }
@@ -296,14 +310,17 @@ namespace AHPP_AI.AI
         {
             if (!config.DebugEnabled || debugUI == null) return;
 
-            if (aiPLIDs.Contains(viewPlid))
+            lock (aiPlidLock)
             {
-                debugUI.SetAIPLID(viewPlid);
-                debugUI.ShowAIButtons(true);
-            }
-            else
-            {
-                debugUI.ShowAIButtons(false);
+                if (aiPLIDs.Contains(viewPlid))
+                {
+                    debugUI.SetAIPLID(viewPlid);
+                    debugUI.ShowAIButtons(true);
+                }
+                else
+                {
+                    debugUI.ShowAIButtons(false);
+                }
             }
         }
 
@@ -586,6 +603,7 @@ namespace AHPP_AI.AI
                     .ToList();
 
             pathManager.LoadRoutes(config);
+            populationManager?.RequestReconcile("route config");
         }
 
         public void StopRecording()
@@ -600,7 +618,7 @@ namespace AHPP_AI.AI
         {
             lfsLayout.ClearAllVisualizations();
             lfsLayout.WaypointsVisualized = false;
-            insim.Send(new IS_MST { Msg = "Layout cleared." });
+            insim.SendPrivateMessage("Layout cleared.");
         }
 
         /// <summary>
@@ -608,8 +626,11 @@ namespace AHPP_AI.AI
         /// </summary>
         private void ResetAI(byte plid)
         {
-            if (!aiPLIDs.Contains(plid))
-                return;
+            lock (aiPlidLock)
+            {
+                if (!aiPLIDs.Contains(plid))
+                    return;
+            }
 
             var name = aiNames.TryGetValue(plid, out var storedName) ? storedName : $"AI {plid}";
             var nameForCmd = FormatNameForCommand(name);
@@ -618,16 +639,9 @@ namespace AHPP_AI.AI
             insim.Send(new IS_MST { Msg = $"/spec {nameForCmd}" });
             insim.Send(new IS_MST { Msg = $"/join {nameForCmd}" });
 
-            aiPLIDs.Remove(plid);
-            aiSpawnPositions.Remove(plid);
-            engineStateMap.Remove(plid);
-            currentRoute.Remove(plid);
-            activeBranchSelections.Remove(plid);
-            aiNames.Remove(plid);
-
+            ForgetAi(plid);
             insim.Send(new IS_MST { Msg = "/ai" });
             logger.Log($"Reset AI {plid} after failed recovery; sent to pits/spectate and spawned replacement");
-            mainUI.UpdateAIList(GetAiTuples());
         }
 
         /// <summary>
@@ -642,7 +656,7 @@ namespace AHPP_AI.AI
             if (effectivePlid == 0)
             {
                 logger.LogWarning("Cannot visualize routes: no player in view");
-                insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
+                insim.SendPrivateMessage("Select a car/view to place layout objects.");
                 return;
             }
 
@@ -650,7 +664,7 @@ namespace AHPP_AI.AI
             {
                 lfsLayout.ClearAllVisualizations();
                 lfsLayout.WaypointsVisualized = false;
-                insim.Send(new IS_MST { Msg = "Layout visualization hidden." });
+                insim.SendPrivateMessage("Layout visualization hidden.");
                 return;
             }
 
@@ -659,12 +673,17 @@ namespace AHPP_AI.AI
 
         public bool IsRecording => routeRecorder.IsRecording;
 
+        public string MainRouteName => config.MainRouteName;
+
         /// <summary>
         ///     Get the first AI car's player ID
         /// </summary>
         public byte GetFirstAICarID()
         {
-            return aiPLIDs.Count > 0 ? aiPLIDs[0] : (byte)0;
+            lock (aiPlidLock)
+            {
+                return aiPLIDs.Count > 0 ? aiPLIDs[0] : (byte)0;
+            }
         }
 
         /// <summary>
@@ -963,6 +982,62 @@ namespace AHPP_AI.AI
             config.NumberOfAIs = Math.Max(0, count);
         }
 
+        /// <summary>
+        /// Apply population manager configuration values from app settings.
+        /// </summary>
+        public void ConfigurePopulationManager(
+            int maxPlayers,
+            int reservedSlots,
+            double aiFillRatio,
+            int minAis,
+            int maxAis,
+            int adjustIntervalMs,
+            int spawnBatchSize,
+            int removeBatchSize)
+        {
+            config.MaxPlayers = maxPlayers;
+            config.ReservedSlots = reservedSlots;
+            config.AiFillRatio = aiFillRatio;
+            config.MinAIs = minAis;
+            config.MaxAIs = maxAis;
+            config.AdjustIntervalMs = adjustIntervalMs;
+            config.SpawnBatchSize = spawnBatchSize;
+            config.RemoveBatchSize = removeBatchSize;
+            populationManager?.RefreshSettings();
+        }
+
+        /// <summary>
+        /// Enable or disable automatic AI population adjustments.
+        /// </summary>
+        public void SetAutoPopulationEnabled(bool enabled, bool reconcileNow = false)
+        {
+            config.AutoManagePopulation = enabled;
+            populationManager?.SetAutoAdjustEnabled(enabled, reconcileNow);
+            mainUI.SetAutoPopulationState(enabled);
+            logger.Log(enabled ? "Auto AI population management enabled." : "Auto AI population management paused.");
+        }
+
+        /// <summary>
+        /// Enable automatic AI population adjustments and reconcile immediately.
+        /// </summary>
+        public void EnableAutoPopulation()
+        {
+            SetAutoPopulationEnabled(true, true);
+        }
+
+        /// <summary>
+        /// Report whether automatic AI population adjustments are active.
+        /// </summary>
+        public bool IsAutoPopulationEnabled => populationManager?.AutoAdjustEnabled ?? false;
+
+        /// <summary>
+        /// Request an immediate population reconciliation.
+        /// </summary>
+        public void RecalculatePopulationTargets()
+        {
+            populationManager?.RequestReconcile("manual");
+        }
+
         public void ShowAddAIDialog()
         {
             // Input field is now always visible; no-op to keep call sites safe.
@@ -978,6 +1053,38 @@ namespace AHPP_AI.AI
         /// </summary>
         public void SpawnAICars()
         {
+            SpawnAICarsInternal(config.NumberOfAIs, true);
+        }
+
+        /// <summary>
+        /// Spawn AI cars according to a planned route list for population balancing.
+        /// </summary>
+        public void SpawnPlannedAICars(List<string> routes, bool useConfiguredDelay)
+        {
+            if (routes == null || routes.Count == 0) return;
+
+            lock (plannedSpawnLock)
+            {
+                foreach (var route in routes)
+                {
+                    var normalized = routeLibrary.NormalizeRouteName(
+                        string.IsNullOrWhiteSpace(route) ? config.MainRouteName : route);
+                    plannedSpawnRoutes.Enqueue(normalized);
+                }
+            }
+
+            SpawnAICarsInternal(routes.Count, useConfiguredDelay);
+        }
+
+        private void SpawnAICarsInternal(int count, bool useConfiguredDelay)
+        {
+            if (count <= 0) return;
+            if (!insim.IsConnected)
+            {
+                logger.LogWarning("Cannot spawn AI cars: InSim is not connected.");
+                return;
+            }
+
             if (!spawnSemaphore.Wait(0))
             {
                 logger.LogWarning("AI spawn already in progress; ignoring duplicate request.");
@@ -988,7 +1095,7 @@ namespace AHPP_AI.AI
             {
                 try
                 {
-                    await SpawnAICarsAsync().ConfigureAwait(false);
+                    await SpawnAICarsAsync(count, useConfiguredDelay).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -1004,40 +1111,58 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Spawn AI cars without blocking the calling thread so InSim events keep flowing.
         /// </summary>
-        private async Task SpawnAICarsAsync()
+        private async Task SpawnAICarsAsync(int count, bool useConfiguredDelay)
         {
-            for (var i = 0; i < config.NumberOfAIs; i++)
+            var delayMs = useConfiguredDelay ? config.WaitTimeToSpawn : Math.Min(1000, config.WaitTimeToSpawn);
+            delayMs = Math.Max(100, delayMs);
+
+            for (var i = 0; i < count; i++)
             {
+                if (!insim.IsConnected)
+                {
+                    logger.LogWarning("Stopped spawning AI cars: InSim connection lost.");
+                    return;
+                }
                 insim.Send(new IS_MST { Msg = "/ai" });
-                logger.Log($"Spawned AI {i + 1} of {config.NumberOfAIs}");
-                if (i < config.NumberOfAIs - 1)
-                    await Task.Delay(config.WaitTimeToSpawn).ConfigureAwait(false);
+                logger.Log($"Spawned AI {i + 1} of {count}");
+                if (i < count - 1)
+                    await Task.Delay(delayMs).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Get the next planned route for a freshly spawned AI or default to the main route.
+        /// </summary>
+        private string DequeuePlannedRouteOrDefault()
+        {
+            lock (plannedSpawnLock)
+            {
+                if (plannedSpawnRoutes.Count > 0)
+                    return plannedSpawnRoutes.Dequeue();
+
+                return config.MainRouteName;
             }
         }
 
         public void RemoveLastAICar()
         {
-            if (aiPLIDs.Count == 0) return;
-            var plid = aiPLIDs[aiPLIDs.Count - 1];
-            insim.Send(new IS_MST { Msg = $"/spec {plid}" });
-            aiPLIDs.Remove(plid);
-            aiSpawnPositions.Remove(plid);
-            engineStateMap.Remove(plid);
-            currentRoute.Remove(plid);
-            activeBranchSelections.Remove(plid);
-            mainUI.UpdateAIList(GetAiTuples());
+            byte plid;
+            lock (aiPlidLock)
+            {
+                if (aiPLIDs.Count == 0) return;
+                plid = aiPLIDs[aiPLIDs.Count - 1];
+            }
+            RemoveAICar(plid);
         }
 
-        public void RemoveAICar(byte plid)
+        public void RemoveAICar(byte plid, bool notifyPopulationManager = true)
         {
-            if (!aiPLIDs.Contains(plid) || plid == 0) return;
+            lock (aiPlidLock)
+            {
+                if (!aiPLIDs.Contains(plid) || plid == 0) return;
+            }
             insim.Send(new IS_MST { Msg = $"/spec {plid}" });
-            aiPLIDs.Remove(plid);
-            aiSpawnPositions.Remove(plid);
-            engineStateMap.Remove(plid);
-            currentRoute.Remove(plid);
-            activeBranchSelections.Remove(plid);
-            mainUI.UpdateAIList(GetAiTuples());
+            ForgetAi(plid, notifyPopulationManager);
         }
 
         /// <summary>
@@ -1056,21 +1181,41 @@ namespace AHPP_AI.AI
 
         public void RemoveAllAICars()
         {
-            foreach (var plid in aiPLIDs.Where(p => p > 0))
+            foreach (var plid in GetActiveAiPlids())
             {
-                insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+                RemoveAICar(plid);
             }
-            aiPLIDs.Clear();
-            aiSpawnPositions.Clear();
-            engineStateMap.Clear();
-            currentRoute.Clear();
-            activeBranchSelections.Clear();
+        }
+
+        /// <summary>
+        /// Clear local tracking for an AI and optionally notify the population manager.
+        /// </summary>
+        private void ForgetAi(byte plid, bool notifyPopulationManager = true)
+        {
+            lock (aiPlidLock)
+            {
+                aiPLIDs.Remove(plid);
+            }
+            aiSpawnPositions.Remove(plid);
+            engineStateMap.Remove(plid);
+            currentRoute.Remove(plid);
+            activeBranchSelections.Remove(plid);
+            aiNames.Remove(plid);
+            lock (assignmentLock)
+            {
+                aiAssignedRoutes.Remove(plid);
+            }
+            innerBranchSpeedHold.Remove(plid);
+            innerBranchLastCheck.Remove(plid);
+            innerLaneSwapLast.Remove(plid);
             mainUI.UpdateAIList(GetAiTuples());
+            if (notifyPopulationManager)
+                populationManager?.OnAiLeft(plid);
         }
 
         public void StopAllAIs()
         {
-            foreach (var plid in aiPLIDs.Where(p => p > 0))
+            foreach (var plid in GetActiveAiPlids())
             {
                 waypointFollower.SetManualTargetSpeed(plid, 0);
                 driver.ParkCar(plid);
@@ -1082,7 +1227,7 @@ namespace AHPP_AI.AI
         /// </summary>
         public void StartAllAIs()
         {
-            foreach (var plid in aiPLIDs.Where(p => p > 0))
+            foreach (var plid in GetActiveAiPlids())
             {
                 waypointFollower.ClearManualTargetSpeed(plid);
                 driver.StartCar(plid);
@@ -1091,7 +1236,7 @@ namespace AHPP_AI.AI
 
         public void SpectateAllAIs()
         {
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in GetActiveAiPlids())
             {
                 insim.Send(new IS_MST { Msg = $"/spec {plid}" });
             }
@@ -1107,7 +1252,7 @@ namespace AHPP_AI.AI
 
         public void SetTargetSpeedForAll(double speed)
         {
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in GetActiveAiPlids())
             {
                 waypointFollower.SetManualTargetSpeed(plid, speed);
             }
@@ -1118,7 +1263,10 @@ namespace AHPP_AI.AI
         /// </summary>
         public bool TrySwitchToBranch(byte plid, string branchName)
         {
-            if (!aiPLIDs.Contains(plid)) return false;
+            lock (aiPlidLock)
+            {
+                if (!aiPLIDs.Contains(plid)) return false;
+            }
             if (!pathManager.TryGetBranchByName(branchName, out var branchInfo))
             {
                 logger.LogWarning($"No branch named {branchName} available for lane change.");
@@ -1216,14 +1364,24 @@ namespace AHPP_AI.AI
                 !npl.PName.Contains("Track")) // and not tracks
             {
                 var plid = npl.PLID;
+                var isNewAi = false;
 
-                if (!aiPLIDs.Contains(plid))
+                lock (aiPlidLock)
+                {
+                    if (!aiPLIDs.Contains(plid))
+                    {
+                        aiPLIDs.Add(plid);
+                        isNewAi = true;
+                    }
+                }
+
+                if (isNewAi)
                 {
                     // Add to our list of AIs
-                    aiPLIDs.Add(plid);
                     aiSpawnPositions[plid] = new Vec();
                     engineStateMap[plid] = true; // Assume engine starts running
                     aiNames[plid] = npl.PName;
+                    var assignedRoute = DequeuePlannedRouteOrDefault();
 
                     // Initialize the driver
                     driver.InitializeDriver(plid);
@@ -1240,6 +1398,9 @@ namespace AHPP_AI.AI
                     // Assign spawn path (start at closest point once MCI data is available)
                     waypointFollower.SetPath(plid, pathManager.SpawnRoute);
                     currentRoute[plid] = "spawn";
+                    SetAssignedRoute(plid, assignedRoute);
+                    populationManager?.UnregisterHuman(0, npl.UCID);
+                    populationManager?.OnAiJoined(plid);
 
                     // Set debug UI to track this AI if enabled
                     if (config.DebugEnabled && debugUI != null && debugUIInitialized)
@@ -1248,13 +1409,58 @@ namespace AHPP_AI.AI
                     mainUI.UpdateAIList(GetAiTuples());
                 }
             }
-            else if (config.DebugEnabled && debugUI != null && debugUIInitialized)
+            else
             {
-                // Track human player in debug UI
-                debugUI.SetPlayerPLID(npl.PLID);
-                playerPLID = npl.PLID;
-                logger.Log($"Human player detected: PLID={npl.PLID}, Name={npl.PName}");
+                populationManager?.RegisterHuman(npl.UCID, npl.PLID);
+                if (config.DebugEnabled && debugUI != null && debugUIInitialized)
+                {
+                    // Track human player in debug UI
+                    debugUI.SetPlayerPLID(npl.PLID);
+                    playerPLID = npl.PLID;
+                    logger.Log($"Human player detected: PLID={npl.PLID}, Name={npl.PName}");
+                }
             }
+        }
+
+        /// <summary>
+        /// Track player leave events for humans and AIs.
+        /// </summary>
+        public void OnPlayerLeave(IS_PLL pll)
+        {
+            if (pll == null) return;
+
+            bool isAi;
+            lock (aiPlidLock)
+            {
+                isAi = aiPLIDs.Contains(pll.PLID);
+            }
+
+            if (isAi)
+            {
+                ForgetAi(pll.PLID);
+            }
+            else
+            {
+                populationManager?.UnregisterHuman(pll.PLID);
+            }
+        }
+
+        /// <summary>
+        /// Track new connections so idle humans are counted even without a car on track.
+        /// </summary>
+        public void OnNewConnection(IS_NCN ncn)
+        {
+            if (ncn == null) return;
+            populationManager?.RegisterConnection(ncn.UCID);
+        }
+
+        /// <summary>
+        /// Remove connection tracking when a user disconnects.
+        /// </summary>
+        public void OnConnectionLeave(IS_CNL cnl)
+        {
+            if (cnl == null) return;
+            populationManager?.OnConnectionClosed(cnl.UCID);
         }
 
         /// <summary>
@@ -1275,7 +1481,10 @@ namespace AHPP_AI.AI
         /// </summary>
         public void OnMCI(IS_MCI mci)
         {
+            if (mci?.Info == null) return;
+
             allCars = mci.Info.ToArray();
+            ApplyPendingRouteAssignments();
 
             // Record player route if active
             if (playerPLID != 0)
@@ -1298,8 +1507,9 @@ namespace AHPP_AI.AI
                 var targetSpeeds = new Dictionary<byte, double>();
                 var controlInfo = new Dictionary<byte, string>();
                 var aiStates = new Dictionary<byte, string>();
+                var aiSnapshot = GetActiveAiPlids();
 
-                foreach (var plid in aiPLIDs)
+                foreach (var plid in aiSnapshot)
                 {
                     var (targetIndex, _, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
                     waypointIndices[plid] = targetIndex;
@@ -1310,13 +1520,12 @@ namespace AHPP_AI.AI
 
                     // Place active waypoint marker
                     var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
-                    if (activeWaypoint.Position != null)
-                        lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
+                    lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
                 }
 
                 // Get paths for all AIs
                 var paths = new Dictionary<byte, List<Util.Waypoint>>();
-                foreach (var plid in aiPLIDs) paths[plid] = waypointFollower.GetPath(plid);
+                foreach (var plid in aiSnapshot) paths[plid] = waypointFollower.GetPath(plid);
 
                 debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo, aiStates);
             }
@@ -1370,6 +1579,109 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Assign an AI to a target recorded route for population balancing.
+        /// </summary>
+        public void SetAssignedRoute(byte plid, string routeName)
+        {
+            if (plid == 0) return;
+
+            var normalized = routeLibrary.NormalizeRouteName(
+                string.IsNullOrWhiteSpace(routeName) ? config.MainRouteName : routeName);
+
+            lock (assignmentLock)
+            {
+                aiAssignedRoutes[plid] = normalized;
+            }
+
+            if (normalized.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
+            {
+                TryReturnToMainRoute(plid);
+                return;
+            }
+
+            TryAssignBranchIfNeeded(plid, normalized);
+        }
+
+        /// <summary>
+        /// Attempt to switch an AI onto a target branch when it has been assigned one.
+        /// </summary>
+        private void TryAssignBranchIfNeeded(byte plid, string routeName)
+        {
+            if (string.IsNullOrWhiteSpace(routeName)) return;
+            if (!pathManager.TryGetBranchByName(routeName, out var branchInfo)) return;
+            if (branchInfo == null) return;
+            if (currentRoute.TryGetValue(plid, out var routeLabel) && routeLabel == "spawn") return;
+            if (branchInfo.Path == null || branchInfo.Path.Count == 0) return;
+
+            var car = Array.Find(allCars, c => c.PLID == plid);
+            if (car.PLID == 0) return;
+
+            if (activeBranchSelections.TryGetValue(plid, out var activeBranch) &&
+                activeBranch?.Name != null &&
+                activeBranch.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (TrySwitchToBranch(plid, routeName))
+                return;
+
+            if (pathManager.MainRoute == null || pathManager.MainRoute.Count == 0) return;
+
+            var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+            if (targetIndex >= 0 && targetIndex <= pathManager.MainRoute.Count &&
+                branchInfo.StartIndex == targetIndex)
+            {
+                var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
+                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+                currentRoute[plid] = "branch";
+                activeBranchSelections[plid] = branchInfo;
+            }
+        }
+
+        /// <summary>
+        /// Bring an AI back to the main route when its assignment no longer requires a branch.
+        /// </summary>
+        private void TryReturnToMainRoute(byte plid)
+        {
+            if (pathManager.MainRoute == null || pathManager.MainRoute.Count == 0) return;
+            if (!currentRoute.TryGetValue(plid, out var routeLabel) || routeLabel != "branch") return;
+
+            var car = Array.Find(allCars, c => c.PLID == plid);
+            if (car.PLID == 0) return;
+
+            var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+            activeBranchSelections.Remove(plid);
+            if (innerBranchSpeedHold.Contains(plid))
+            {
+                waypointFollower.ClearManualTargetSpeed(plid);
+                innerBranchSpeedHold.Remove(plid);
+            }
+            currentRoute[plid] = "main";
+        }
+
+        /// <summary>
+        /// Enforce assigned routes when new telemetry arrives.
+        /// </summary>
+        private void ApplyPendingRouteAssignments()
+        {
+            foreach (var plid in GetActiveAiPlids())
+            {
+                if (!TryGetAssignedRoute(plid, out var targetRoute) ||
+                    string.IsNullOrWhiteSpace(targetRoute))
+                    continue;
+
+                if (targetRoute.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
+                {
+                    TryReturnToMainRoute(plid);
+                }
+                else
+                {
+                    TryAssignBranchIfNeeded(plid, targetRoute);
+                }
+            }
+        }
+
+        /// <summary>
         ///     Get the paths for all active AI cars
         /// </summary>
         /// <returns>Dictionary of paths by PLID</returns>
@@ -1377,7 +1689,7 @@ namespace AHPP_AI.AI
         {
             var result = new Dictionary<byte, List<Util.Waypoint>>();
 
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in GetActiveAiPlids())
             {
                 var path = waypointFollower.GetPath(plid);
                 if (path != null && path.Count > 0) result[plid] = path;
@@ -1387,12 +1699,58 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Get a snapshot of AI route assignments keyed by PLID.
+        /// </summary>
+        public Dictionary<byte, string> GetAssignedRoutesSnapshot()
+        {
+            lock (assignmentLock)
+            {
+                return new Dictionary<byte, string>(aiAssignedRoutes);
+            }
+        }
+
+        /// <summary>
+        /// Try to resolve the assigned route for a specific AI.
+        /// </summary>
+        private bool TryGetAssignedRoute(byte plid, out string routeName)
+        {
+            lock (assignmentLock)
+            {
+                if (aiAssignedRoutes.TryGetValue(plid, out var stored) && !string.IsNullOrWhiteSpace(stored))
+                {
+                    routeName = stored;
+                    return true;
+                }
+
+                routeName = string.Empty;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Get the list of active AI PLIDs in the order they spawned.
+        /// </summary>
+        public List<byte> GetActiveAiPlids()
+        {
+            lock (aiPlidLock)
+            {
+                return aiPLIDs.Where(p => p > 0).ToList();
+            }
+        }
+
+        /// <summary>
         ///     Handle AII packet (AI info)
         /// </summary>
         public void OnAII(IS_AII aii)
         {
             var plid = aii.PLID;
-            if (!aiPLIDs.Contains(plid)) return;
+            bool knownAi;
+            lock (aiPlidLock)
+            {
+                knownAi = aiPLIDs.Contains(plid);
+            }
+            if (!knownAi) return;
+            if (allCars == null) return;
 
             // Check engine state - stalled if ignition is on but RPM is near zero
             var ignitionOn = (aii.Flags & AIFlags.AIFLAGS_IGNITION) != 0;
@@ -1425,15 +1783,30 @@ namespace AHPP_AI.AI
                 }
                 else if (routeName == "main")
                 {
-                    var switchedInner = TryJoinInnerBranchLaneChange(plid, car, targetIndex);
+                    TryGetAssignedRoute(plid, out var assignedRoute);
+                    var hasAssignment = !string.IsNullOrWhiteSpace(assignedRoute);
+                    var assignedIsMain = !hasAssignment ||
+                                         assignedRoute.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase);
 
-                    if (!switchedInner && pathManager.TryGetBranch(targetIndex, out var branchInfo))
+                    var allowInnerBranch = !hasAssignment ||
+                                           (pathManager.MainAlternateRoute != null &&
+                                            assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
+                                                StringComparison.OrdinalIgnoreCase));
+                    var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
+
+                    if (pathManager.TryGetBranch(targetIndex, out var branchInfo))
                     {
-                        if (IsInnerBranch(branchInfo))
-                        {
-                            // Skip start-based switching for inner branches; handled opportunistically elsewhere.
-                        }
-                        else if (branchRandom.NextDouble() < 0.5)
+                        var innerBlocked = IsInnerBranch(branchInfo) &&
+                                           (!hasAssignment ||
+                                            !assignedRoute.Equals(branchInfo.Name, StringComparison.OrdinalIgnoreCase));
+                        var assignmentMismatch = hasAssignment &&
+                                                 !assignedRoute.Equals(branchInfo.Name,
+                                                     StringComparison.OrdinalIgnoreCase);
+                        var randomSkip = !hasAssignment && branchRandom.NextDouble() >= 0.5;
+
+                        var shouldSwitch = !switchedInner && !innerBlocked && !assignmentMismatch && !randomSkip;
+
+                        if (shouldSwitch)
                         {
                             SignalLaneChange(
                                 plid,
@@ -1448,6 +1821,10 @@ namespace AHPP_AI.AI
                             currentRoute[plid] = "branch";
                             activeBranchSelections[plid] = branchInfo;
                         }
+                    }
+                    else if (!assignedIsMain)
+                    {
+                        TryAssignBranchIfNeeded(plid, assignedRoute);
                     }
                 }
                 else if (routeName == "branch")
@@ -1477,7 +1854,7 @@ namespace AHPP_AI.AI
                     {
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
 
-                        if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit))
+                        if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit) && branchInfoExit != null)
                         {
                             var hintedIndex = pathManager.MainRoute.Count == 0
                                 ? 0
@@ -1522,10 +1899,13 @@ namespace AHPP_AI.AI
 
         private IEnumerable<(byte id, string name)> GetAiTuples()
         {
-            foreach (var plid in aiPLIDs)
+            lock (aiPlidLock)
             {
-                var name = aiNames.TryGetValue(plid, out var stored) ? stored : $"AI {plid}";
-                yield return (plid, name);
+                foreach (var plid in aiPLIDs)
+                {
+                    var name = aiNames.TryGetValue(plid, out var stored) ? stored : $"AI {plid}";
+                    yield return (plid, name);
+                }
             }
         }
 
@@ -1537,7 +1917,7 @@ namespace AHPP_AI.AI
             waypointManager.ClearRoutes();
             pathManager.LoadRoutes(config);
 
-            foreach (var plid in aiPLIDs)
+            foreach (var plid in GetActiveAiPlids())
             {
                 if (!currentRoute.TryGetValue(plid, out var routeName))
                     continue;
@@ -1563,12 +1943,13 @@ namespace AHPP_AI.AI
 
             if (!silent)
             {
-                insim.Send(new IS_MST { Msg = "Routes reloaded from disk" });
+                insim.SendPrivateMessage("Routes reloaded from disk");
             }
 
             RefreshRouteOptions(recordingRouteName);
             NotifyRouteValidationIssues();
             logger.Log("Routes reloaded and reapplied to active AIs");
+            populationManager?.RequestReconcile("routes reloaded");
         }
 
         /// <summary>
@@ -1593,7 +1974,7 @@ namespace AHPP_AI.AI
             if (filtered.Count == 0) return;
 
             var summary = BuildIssueSummary(filtered);
-            insim.Send(new IS_MST { Msg = $"{label}: {summary}" });
+            insim.SendPrivateMessage($"{label}: {summary}");
         }
 
         /// <summary>
@@ -1684,7 +2065,7 @@ namespace AHPP_AI.AI
             if (route == null || route.Nodes == null || route.Nodes.Count == 0)
             {
                 ClearLayoutSelection();
-                insim.Send(new IS_MST { Msg = "No recorded route loaded for layout selection." });
+                insim.SendPrivateMessage("No recorded route loaded for layout selection.");
                 return;
             }
 
@@ -1695,10 +2076,7 @@ namespace AHPP_AI.AI
             var speed = node.SpeedLimit ?? node.Speed;
             var status = $"Node {index} @ {speed:F0} km/h";
             mainUI?.UpdateLayoutSelectionStatus(status);
-            insim.Send(new IS_MST
-            {
-                Msg = $"Selected node {index} ({distanceMeters:F1}m) on {route.Metadata.Name}."
-            });
+            insim.SendPrivateMessage($"Selected node {index} ({distanceMeters:F1}m) on {route.Metadata.Name}.");
         }
 
         /// <summary>
@@ -1718,10 +2096,7 @@ namespace AHPP_AI.AI
 
             var status = $"Node {index} moved to ({route.Nodes[index].X:F1}, {route.Nodes[index].Y:F1})";
             mainUI?.UpdateLayoutSelectionStatus(status);
-            insim.Send(new IS_MST
-            {
-                Msg = $"{route.Metadata.Name}: saved moved node {index}."
-            });
+            insim.SendPrivateMessage($"{route.Metadata.Name}: saved moved node {index}.");
         }
 
         /// <summary>
@@ -1737,7 +2112,7 @@ namespace AHPP_AI.AI
             routeLibrary.Save(route);
 
             mainUI?.UpdateLayoutSelectionStatus($"Node {index} @ {clamped:F0} km/h");
-            insim.Send(new IS_MST { Msg = $"Set node {index} speed to {clamped:F0} km/h." });
+            insim.SendPrivateMessage($"Set node {index} speed to {clamped:F0} km/h.");
         }
 
         /// <summary>
@@ -1775,7 +2150,7 @@ namespace AHPP_AI.AI
 
             updater(route, index);
             routeLibrary.Save(route);
-            insim.Send(new IS_MST { Msg = $"Set {label} node to {index} for {route.Metadata.Name}." });
+            insim.SendPrivateMessage($"Set {label} node to {index} for {route.Metadata.Name}.");
         }
 
         /// <summary>
@@ -1798,20 +2173,20 @@ namespace AHPP_AI.AI
             index = 0;
             if (route == null || route.Nodes == null || route.Nodes.Count == 0)
             {
-                insim.Send(new IS_MST { Msg = "No recorded route data available." });
+                insim.SendPrivateMessage("No recorded route data available.");
                 return false;
             }
 
             if (!selectedRouteNodeIndex.HasValue)
             {
-                insim.Send(new IS_MST { Msg = "Select a node in the layout editor first." });
+                insim.SendPrivateMessage("Select a node in the layout editor first.");
                 return false;
             }
 
             index = selectedRouteNodeIndex.Value;
             if (index < 0 || index >= route.Nodes.Count)
             {
-                insim.Send(new IS_MST { Msg = "Selected node index is out of range." });
+                insim.SendPrivateMessage("Selected node index is out of range.");
                 return false;
             }
 
@@ -1905,7 +2280,7 @@ namespace AHPP_AI.AI
             if (effectivePlid == 0)
             {
                 logger.LogWarning("Cannot visualize routes: no player in view");
-                insim.Send(new IS_MST { Msg = "Select a car/view to place layout objects." });
+                insim.SendPrivateMessage("Select a car/view to place layout objects.");
                 return;
             }
 
@@ -1914,7 +2289,7 @@ namespace AHPP_AI.AI
             if (recorded == null)
             {
                 logger.LogWarning($"No recorded route found for visualization: {visualizationRouteName}");
-                insim.Send(new IS_MST { Msg = $"No recorded route found for {visualizationRouteName}." });
+                insim.SendPrivateMessage($"No recorded route found for {visualizationRouteName}.");
                 return;
             }
 
@@ -1924,14 +2299,12 @@ namespace AHPP_AI.AI
 
             if (clamped)
             {
-                insim.Send(new IS_MST
-                {
-                    Msg = $"Detail clamped to every {detailStep} node(s) to stay under {LFSLayout.MaxVisibleWaypoints} objects."
-                });
+                insim.SendPrivateMessage(
+                    $"Detail clamped to every {detailStep} node(s) to stay under {LFSLayout.MaxVisibleWaypoints} objects.");
             }
             else
             {
-                insim.Send(new IS_MST { Msg = $"Visualized {visualizationRouteName} (x{detailStep})." });
+                insim.SendPrivateMessage($"Visualized {visualizationRouteName} (x{detailStep}).");
             }
         }
 

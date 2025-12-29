@@ -37,6 +37,9 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<string, BranchRouteInfo> branches =
             new Dictionary<string, BranchRouteInfo>(StringComparer.OrdinalIgnoreCase);
 
+        public RouteMetadata SpawnRouteMetadata { get; private set; }
+        public RouteMetadata MainRouteMetadata { get; private set; }
+
         public PathManager(WaypointManager waypointManager, Logger logger, RouteLibrary routeLibrary)
         {
             this.waypointManager = waypointManager;
@@ -62,6 +65,19 @@ namespace AHPP_AI.Waypoint
             SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
             var spawnMeta = waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
             if (spawnMeta != null && spawnMeta.Type == RouteType.Unknown) spawnMeta.Type = RouteType.PitEntry;
+            if (spawnMeta != null && (!spawnMeta.AiWeight.HasValue || spawnMeta.AiWeight < 0))
+                spawnMeta.AiWeight = 0;
+            if (spawnMeta == null)
+            {
+                spawnMeta = new RouteMetadata
+                {
+                    Name = config.SpawnRouteName,
+                    Type = RouteType.PitEntry,
+                    AiWeight = 0,
+                    AiEnabled = false
+                };
+            }
+            SpawnRouteMetadata = spawnMeta;
             logger.Log(
                 $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta?.Type ?? RouteType.PitEntry}) with {SpawnRoute.Count} points");
 
@@ -69,6 +85,19 @@ namespace AHPP_AI.Waypoint
             MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
             var mainMeta = waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
             if (mainMeta != null && mainMeta.Type == RouteType.Unknown) mainMeta.Type = RouteType.MainLoop;
+            if (mainMeta != null && (!mainMeta.AiWeight.HasValue || mainMeta.AiWeight <= 0))
+                mainMeta.AiWeight = 1.0;
+            if (mainMeta == null)
+            {
+                mainMeta = new RouteMetadata
+                {
+                    Name = config.MainRouteName,
+                    Type = RouteType.MainLoop,
+                    AiWeight = 1.0,
+                    AiEnabled = true
+                };
+            }
+            MainRouteMetadata = mainMeta;
             logger.Log(
                 $"Loaded main route {config.MainRouteName} ({mainMeta?.Type ?? RouteType.MainLoop}) with {MainRoute.Count} points");
 
@@ -79,6 +108,20 @@ namespace AHPP_AI.Waypoint
                 var altPath = waypointManager.GetTrafficRoute(config.MainAlternateRouteName);
                 var altMeta = waypointManager.GetRecordedRoute(config.MainAlternateRouteName)?.Metadata;
                 if (altMeta != null && altMeta.Type == RouteType.Unknown) altMeta.Type = RouteType.AlternateMain;
+                if (altMeta == null)
+                {
+                    altMeta = new RouteMetadata
+                    {
+                        Name = config.MainAlternateRouteName,
+                        Type = RouteType.AlternateMain,
+                        AiWeight = 1.0,
+                        AiEnabled = true
+                    };
+                }
+                else if (!altMeta.AiWeight.HasValue || altMeta.AiWeight <= 0)
+                {
+                    altMeta.AiWeight = 1.0;
+                }
 
                 if (altPath.Count == 0)
                 {
@@ -134,6 +177,20 @@ namespace AHPP_AI.Waypoint
                     continue;
                 }
                 var metadata = waypointManager.GetRecordedRoute(name)?.Metadata;
+                if (metadata == null)
+                {
+                    metadata = new RouteMetadata
+                    {
+                        Name = name,
+                        Type = RouteType.Detour,
+                        AiWeight = 1.0,
+                        AiEnabled = true
+                    };
+                }
+                else if (!metadata.AiWeight.HasValue || metadata.AiWeight <= 0)
+                {
+                    metadata.AiWeight = 1.0;
+                }
                 var nearestStart = FindNearestIndex(MainRoute, path[0]);
                 var nearestRejoin = FindNearestIndex(MainRoute, path[path.Count - 1]);
                 var startIndex = metadata?.AttachMainIndex ?? nearestStart;

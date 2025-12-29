@@ -201,7 +201,7 @@ namespace AHPP_AI.Debug
                 CreateAIDebugButtons();
 
                 // Position the spawn/control buttons below the tallest debug row.
-                insim.Send(new IS_MST { Msg = "Debug UI initialized - showing info for AI" });
+                insim.SendPrivateMessage("Debug UI initialized - showing info for AI");
                 debugUIInitialized = true;
                 logger.Log("Debug UI initialization complete");
             }
@@ -220,7 +220,7 @@ namespace AHPP_AI.Debug
             if (plid != playerPLID)
             {
                 playerPLID = plid;
-                insim.Send(new IS_MST { Msg = $"Debug tracking Player PLID: {plid}" });
+                insim.SendPrivateMessage($"Debug tracking Player PLID: {plid}");
                 logger.Log($"Set debug tracking for player PLID: {plid}");
             }
         }
@@ -234,7 +234,7 @@ namespace AHPP_AI.Debug
             if (plid != aiPLID)
             {
                 aiPLID = plid;
-                insim.Send(new IS_MST { Msg = $"Debug tracking AI PLID: {plid}" });
+                insim.SendPrivateMessage($"Debug tracking AI PLID: {plid}");
                 logger.Log($"Set debug tracking for AI PLID: {plid}");
             }
         }
@@ -273,7 +273,7 @@ namespace AHPP_AI.Debug
                         if (kvp.Key > 0 && Array.Exists(allCars, c => c.PLID == kvp.Key))
                         {
                             aiPLID = kvp.Key;
-                            insim.Send(new IS_MST { Msg = $"Auto-detected AI PLID: {aiPLID}" });
+                            insim.SendPrivateMessage($"Auto-detected AI PLID: {aiPLID}");
                             break;
                         }
 
@@ -450,6 +450,10 @@ namespace AHPP_AI.Debug
             Dictionary<byte, string> aiControlInfo = null,
             Dictionary<byte, string> aiStates = null)
         {
+            if (aiPLID == 0)
+                return;
+            if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null)
+                return;
             if (allCars == null || allCars.Length == 0)
                 return;
 
@@ -461,7 +465,7 @@ namespace AHPP_AI.Debug
             // Check if we have path data for this AI
             if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out var targetIndex) ||
                 !aiPaths.TryGetValue(aiPLID, out var path) ||
-                path == null || targetIndex >= path.Count)
+                path == null || targetIndex < 0 || targetIndex >= path.Count)
                 return;
 
             // Calculate current values

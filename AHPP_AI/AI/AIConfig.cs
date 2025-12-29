@@ -18,6 +18,17 @@ namespace AHPP_AI.AI
 
         public int WaitTimeToSpawn { get; set; } = 10000;
 
+        // Population manager settings
+        public int MaxPlayers { get; set; } = 48;
+        public int ReservedSlots { get; set; } = 10;
+        public double AiFillRatio { get; set; } = 0.80;
+        public int MinAIs { get; set; } = 0;
+        public int MaxAIs { get; set; } = 38;
+        public int AdjustIntervalMs { get; set; } = 10000;
+        public int SpawnBatchSize { get; set; } = 1;
+        public int RemoveBatchSize { get; set; } = 1;
+        public bool AutoManagePopulation { get; set; } = true;
+
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
         public string TrafficRouteName { get; set; } = "main_loop";

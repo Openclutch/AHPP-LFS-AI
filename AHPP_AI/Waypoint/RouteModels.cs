@@ -29,6 +29,10 @@ namespace AHPP_AI.Waypoint
         public int? AttachMainIndex { get; set; }
         public int? RejoinMainIndex { get; set; }
         public double? DefaultSpeedLimit { get; set; }
+        public int? AiTargetCount { get; set; }
+        public double? AiTargetPercent { get; set; }
+        public double? AiWeight { get; set; }
+        public bool AiEnabled { get; set; } = true;
     }
 
     /// <summary>

@@ -56,6 +56,7 @@ namespace AHPP_AI.UI
         public const byte StartAllAisId = (byte)(ButtonIds.MainStart + 7);
         public const byte StopAllAisId = (byte)(ButtonIds.MainStart + 8);
         public const byte PitAllAisId = (byte)(ButtonIds.MainStart + 9);
+        public const byte StartAutoAisId = (byte)(ButtonIds.MainStart + 65);
         public const byte AddAiDialogId = (byte)(ButtonIds.MainStart + 10);
         public const byte SpeedInputId = (byte)(ButtonIds.MainStart + 11);
         public const byte RecordingIntervalId = (byte)(ButtonIds.MainStart + 12);
@@ -91,6 +92,8 @@ namespace AHPP_AI.UI
         private string layoutSelectionStatus = "No node selected";
         private string insimStatus = "InSim: not connected";
         private string insimHost = "Host: pending";
+        private bool autoPopulationEnabled = true;
+        private byte autoAiButtonRow;
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -118,6 +121,8 @@ namespace AHPP_AI.UI
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
+            autoAiButtonRow = row;
+            CreateButton(StartAutoAisId, GetAutoAiButtonText(), RIGHT_COL, row); row += ROW_HEIGHT;
             CreateInputButton(RouteNameInputId, RIGHT_COL, ROUTE_NAME_ROW, "Route Name", 24);
             CreateButton(StartAllAisId, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(StopAllAisId, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
@@ -151,6 +156,24 @@ namespace AHPP_AI.UI
             if (!uiInitialized || uiHidden) return;
 
             RenderAIList(lastAiSnapshot);
+        }
+
+        /// <summary>
+        /// Reflect auto-population state in the UI button.
+        /// </summary>
+        public void SetAutoPopulationState(bool enabled)
+        {
+            autoPopulationEnabled = enabled;
+            if (!uiInitialized || uiHidden || autoAiButtonRow == 0) return;
+            CreateButton(StartAutoAisId, GetAutoAiButtonText(), RIGHT_COL, autoAiButtonRow);
+        }
+
+        /// <summary>
+        /// Build the auto-population button label based on current state.
+        /// </summary>
+        private string GetAutoAiButtonText()
+        {
+            return autoPopulationEnabled ? "Auto AI: On" : "Start Auto AI";
         }
 
         /// <summary>

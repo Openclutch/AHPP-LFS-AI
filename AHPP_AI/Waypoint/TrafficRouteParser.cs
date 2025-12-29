@@ -918,7 +918,6 @@ namespace AHPP_AI.Waypoint
             var pointDistance = totalLength / numPoints;
 
             // Add evenly spaced points
-            double distanceCovered = 0;
             var currentSegment = 0;
             double currentSegmentStart = 0;
 

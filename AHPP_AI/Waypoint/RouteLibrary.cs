@@ -259,6 +259,18 @@ namespace AHPP_AI.Waypoint
                                     route.Metadata.Type == RouteType.AlternateMain ||
                                     route.Metadata.IsLoop;
 
+            if (!route.Metadata.AiWeight.HasValue || route.Metadata.AiWeight <= 0)
+                route.Metadata.AiWeight = 1.0;
+
+            if (route.Metadata.AiTargetPercent.HasValue)
+            {
+                var clamped = Math.Max(0, Math.Min(1.0, route.Metadata.AiTargetPercent.Value));
+                route.Metadata.AiTargetPercent = clamped;
+            }
+
+            if (route.Metadata.AiTargetCount.HasValue && route.Metadata.AiTargetCount.Value < 0)
+                route.Metadata.AiTargetCount = 0;
+
             if (route.Nodes == null) route.Nodes = new List<RoutePoint>();
 
             foreach (var node in route.Nodes)
@@ -285,7 +297,9 @@ namespace AHPP_AI.Waypoint
                 IsLoop = type == RouteType.MainLoop || type == RouteType.AlternateMain,
                 DefaultSpeedLimit = 60,
                 Track = trackCode,
-                Layout = layoutName
+                Layout = layoutName,
+                AiWeight = 1.0,
+                AiEnabled = true
             };
         }
 

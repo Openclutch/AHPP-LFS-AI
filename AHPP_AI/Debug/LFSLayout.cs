@@ -24,8 +24,9 @@ namespace AHPP_AI.Debug
 
         private const float WAYPOINT_RADIUS = 2.5f; // Radius of waypoint visualization in meters
         private const int CONES_PER_CIRCLE = 0; // Number of cones to place around each waypoint
-        private const int LFS_MIN_COORD = -16000; // Safe bounds for AXM coordinates (1/16th meters)
-        private const int LFS_MAX_COORD = 16000;
+        // Safe bounds for AXM coordinates (1/16th meters) — keep within short range but wide enough for full layouts.
+        private const int LFS_MIN_COORD = -32000;
+        private const int LFS_MAX_COORD = 32000;
 
         public const int MaxVisibleWaypoints = 3600; // Maximum number of waypoints to visualize
 
@@ -203,7 +204,7 @@ namespace AHPP_AI.Debug
             }
 
             WaypointsVisualized = true;
-            insim.Send(new IS_MST { Msg = $"Visualized {placedCount} waypoints with cones" });
+            insim.SendPrivateMessage($"Visualized {placedCount} waypoints with cones");
         }
 
         /// <summary>
@@ -244,7 +245,7 @@ namespace AHPP_AI.Debug
             }
 
             WaypointsVisualized = true;
-            insim.Send(new IS_MST { Msg = $"Visualized {count} nodes for {route.Metadata.Name}" });
+            insim.SendPrivateMessage($"Visualized {count} nodes for {route.Metadata.Name}");
         }
 
         /// <summary>
