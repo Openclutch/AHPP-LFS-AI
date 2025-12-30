@@ -38,7 +38,7 @@ namespace AHPP_AI.UI
         private const byte ROUTE_NAME_ROW = 160;
         private const byte HIDE_BUTTON_ROW = 60;
         private const byte INSIM_STATUS_ROW = 85;
-        private const byte REMOVE_BTN_W = 6;
+        private const byte REMOVE_BTN_W = 3;
         private const byte RECORD_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = BTN_W;
         private const byte VISUALIZER_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);

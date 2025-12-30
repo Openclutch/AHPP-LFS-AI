@@ -961,6 +961,11 @@ namespace AHPP_AI.AI
             var carY = car.Y / 65536.0;
             var carHeading = car.Heading;
 
+            var headingRadians =
+                (carHeading + CoordinateUtils.QUARTER_CIRCLE) * 2 * Math.PI / CoordinateUtils.FULL_CIRCLE;
+            var forwardX = Math.Cos(headingRadians);
+            var forwardY = Math.Sin(headingRadians);
+
             foreach (var otherCar in allCars)
             {
                 // Skip if same car or invalid car
@@ -972,6 +977,15 @@ namespace AHPP_AI.AI
                 var otherY = otherCar.Y / 65536.0;
                 var relativeX = otherX - carX;
                 var relativeY = otherY - carY;
+
+                // Project into car's forward frame to find lateral offset
+                var forwardDistance = relativeX * forwardX + relativeY * forwardY;
+                if (forwardDistance < 0)
+                    continue; // Behind the car
+
+                var lateralOffset = Math.Abs(-forwardY * relativeX + forwardX * relativeY);
+                if (lateralOffset > config.CollisionDetectionHalfWidthM)
+                    continue; // Outside detection corridor
 
                 // Distance to other car
                 var distance = Math.Sqrt(relativeX * relativeX + relativeY * relativeY);

@@ -65,6 +65,10 @@ namespace AHPP_AI
         private static readonly double purePursuitWheelbaseMeters;
         private static readonly double purePursuitSteeringGain;
         private static readonly double purePursuitMaxSteerDegrees;
+        private static readonly double collisionDetectionRangeMeters;
+        private static readonly double collisionDetectionAngleDegrees;
+        private static readonly double minimumSafetyDistanceMeters;
+        private static readonly double collisionDetectionHalfWidthMeters;
         private static readonly int recoveryShortReverseMs;
         private static readonly int recoveryLongReverseMs;
         private static readonly int recoveryCooldownMs;
@@ -131,6 +135,10 @@ namespace AHPP_AI
             purePursuitWheelbaseMeters = appConfig.GetDouble("AI", "PurePursuitWheelbaseMeters", 2.5);
             purePursuitSteeringGain = appConfig.GetDouble("AI", "PurePursuitSteeringGain", 1.0);
             purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
+            collisionDetectionRangeMeters = appConfig.GetDouble("AI", "CollisionDetectionRangeM", 30.0);
+            collisionDetectionAngleDegrees = appConfig.GetDouble("AI", "CollisionDetectionAngle", 45.0);
+            minimumSafetyDistanceMeters = appConfig.GetDouble("AI", "MinimumSafetyDistanceM", 10.0);
+            collisionDetectionHalfWidthMeters = appConfig.GetDouble("AI", "CollisionDetectionHalfWidthM", 2.5);
             recoveryShortReverseMs = appConfig.GetInt("AI", "RecoveryShortReverseMs", 1200);
             recoveryLongReverseMs = appConfig.GetInt("AI", "RecoveryLongReverseMs", 2000);
             recoveryCooldownMs = appConfig.GetInt("AI", "RecoveryCooldownMs", 750);
@@ -172,6 +180,11 @@ namespace AHPP_AI
             aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
             aiController.SetSteeringResponseDamping(steeringResponseDamping);
             aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
+            aiController.ConfigureCollisionDetection(
+                collisionDetectionRangeMeters,
+                collisionDetectionAngleDegrees,
+                minimumSafetyDistanceMeters,
+                collisionDetectionHalfWidthMeters);
             aiController.ConfigurePurePursuit(
                 purePursuitEnabled,
                 purePursuitLookaheadMinMeters,
@@ -628,8 +641,12 @@ namespace AHPP_AI
                 // Send command to spectate the AI car
                 if (aiPlid > 0)
                 {
-                    insim.Send(new IS_MST { Msg = $"/spec {aiPlid}" });
-                    logger.Log($"Sent command to spectate AI car PLID={aiPlid}");
+                    var aiNameForCmd = aiController.GetAINameForCommand(aiPlid);
+                    if (!string.IsNullOrWhiteSpace(aiNameForCmd))
+                    {
+                        insim.Send(new IS_MST { Msg = $"/spec {aiNameForCmd}" });
+                        logger.Log($"Sent command to spectate AI car named {aiNameForCmd}");
+                    }
                 }
 
                 // Send command to reset AI controls to stop the car

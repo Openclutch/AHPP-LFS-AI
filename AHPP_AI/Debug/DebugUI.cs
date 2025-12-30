@@ -450,86 +450,132 @@ namespace AHPP_AI.Debug
             Dictionary<byte, string> aiControlInfo = null,
             Dictionary<byte, string> aiStates = null)
         {
-            if (aiPLID == 0)
+            if (!TryGetTrackedAiData(allCars, aiTargetWaypointIndices, aiPaths, aiTargetSpeeds,
+                    out var car, out var path, out var targetIndex))
+            {
                 return;
-            if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null)
-                return;
-            if (allCars == null || allCars.Length == 0)
-                return;
+            }
 
-            // Get AI car data
-            var car = Array.Find(allCars, c => c.PLID == aiPLID);
-            if (car.PLID == 0) // No MCI data yet for AI PLID
-                return;
+            try
+            {
+                // Calculate current values
+                var speedKmh = 360.0 * car.Speed / 32768.0;
+                var carX = car.X / 65536.0;
+                var carY = car.Y / 65536.0;
+                var carZ = car.Z / 65536.0;
 
-            // Check if we have path data for this AI
-            if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out var targetIndex) ||
-                !aiPaths.TryGetValue(aiPLID, out var path) ||
-                path == null || targetIndex < 0 || targetIndex >= path.Count)
-                return;
+                // Get current waypoint info
+                var currentWaypoint = path[targetIndex];
+                var wpX = currentWaypoint.Position.X / 65536.0;
+                var wpY = currentWaypoint.Position.Y / 65536.0;
 
-            // Calculate current values
-            var speedKmh = 360.0 * car.Speed / 32768.0;
-            var carX = car.X / 65536.0;
-            var carY = car.Y / 65536.0;
-            var carZ = car.Z / 65536.0;
+                // Calculate distance to waypoint
+                var dx = wpX - carX;
+                var dy = wpY - carY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
 
-            // Get current waypoint info
-            var currentWaypoint = path[targetIndex];
-            var wpX = currentWaypoint.Position.X / 65536.0;
-            var wpY = currentWaypoint.Position.Y / 65536.0;
+                // Calculate heading and direction in degrees (0-359)
+                var heading = car.Heading * 360.0 / 65536.0 % 360.0;
+                var direction = car.Direction * 360.0 / 65536.0 % 360.0;
 
-            // Calculate distance to waypoint
-            var dx = wpX - carX;
-            var dy = wpY - carY;
-            var distance = Math.Sqrt(dx * dx + dy * dy);
+                // Calculate angle between heading and direction
+                var angle = (heading - direction) % 360.0;
+                if (angle > 180.0) angle -= 360.0;
+                if (angle < -180.0) angle += 360.0;
 
-            // Calculate heading and direction in degrees (0-359)
-            var heading = car.Heading * 360.0 / 65536.0 % 360.0;
-            var direction = car.Direction * 360.0 / 65536.0 % 360.0;
+                // Get target speed for this waypoint
+                var targetSpeed = aiTargetSpeeds.TryGetValue(aiPLID, out var speed) ? speed : 0.0;
 
-            // Calculate angle between heading and direction
-            var angle = (heading - direction) % 360.0;
-            if (angle > 180.0) angle -= 360.0;
-            if (angle < -180.0) angle += 360.0;
+                // Calculate desired heading to waypoint using utility class
+                var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
+                var headingError = CoordinateUtils.CalculateHeadingError(car.Heading, desiredHeading);
 
-            // Get target speed for this waypoint
-            var targetSpeed = aiTargetSpeeds.TryGetValue(aiPLID, out var speed) ? speed : 0.0;
+                // Convert to degrees for display
+                var headingErrorDeg = headingError * 360.0 / 65536.0;
 
-            // Calculate desired heading to waypoint using utility class
-            var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
-            var headingError = CoordinateUtils.CalculateHeadingError(car.Heading, desiredHeading);
+                // Update the debug buttons with current values
+                UpdateDebugButton(aiButtonIds["Position"], $"AI_POS: {carX:F1},{carY:F1},{carZ:F1}m");
+                UpdateDebugButton(aiButtonIds["Speed"], $"AI_SPD: {speedKmh:F1} km/h");
+                UpdateDebugButton(aiButtonIds["Heading"], $"AI_HDG: {heading:F1}°");
+                UpdateDebugButton(aiButtonIds["Direction"], $"AI_DIR: {direction:F1}°");
+                UpdateDebugButton(aiButtonIds["Angle"], $"AI_ANG: {angle:F1}°");
 
-            // Convert to degrees for display
-            var headingErrorDeg = headingError * 360.0 / 65536.0;
+                // Steering angle - estimated from the difference between heading and direction
+                if (car.Speed > 0)
+                    UpdateDebugButton(aiButtonIds["Steering"], $"AI_STR: {angle:F1}°");
+                else
+                    UpdateDebugButton(aiButtonIds["Steering"], "AI_STR: 0.0°");
 
-            // Update the debug buttons with current values
-            UpdateDebugButton(aiButtonIds["Position"], $"AI_POS: {carX:F1},{carY:F1},{carZ:F1}m");
-            UpdateDebugButton(aiButtonIds["Speed"], $"AI_SPD: {speedKmh:F1} km/h");
-            UpdateDebugButton(aiButtonIds["Heading"], $"AI_HDG: {heading:F1}°");
-            UpdateDebugButton(aiButtonIds["Direction"], $"AI_DIR: {direction:F1}°");
-            UpdateDebugButton(aiButtonIds["Angle"], $"AI_ANG: {angle:F1}°");
+                UpdateDebugButton(aiButtonIds["Waypoint"], $"AI_WP: {targetIndex}/{path.Count - 1}");
+                UpdateDebugButton(aiButtonIds["Distance"], $"AI_DST: {distance:F1}m");
+                UpdateDebugButton(aiButtonIds["TargetSpeed"], $"AI_TGT: {targetSpeed:F1} km/h");
+                UpdateDebugButton(aiButtonIds["HeadingError"], $"AI_ERR: {headingErrorDeg:F1}°");
 
-            // Steering angle - estimated from the difference between heading and direction
-            if (car.Speed > 0)
-                UpdateDebugButton(aiButtonIds["Steering"], $"AI_STR: {angle:F1}°");
-            else
-                UpdateDebugButton(aiButtonIds["Steering"], "AI_STR: 0.0°");
+                // Additional info
+                if (aiControlInfo != null && aiControlInfo.TryGetValue(aiPLID, out var controlInfo))
+                    UpdateDebugButton(aiButtonIds["ControlInfo"], $"AI_CTL: {controlInfo}");
 
-            UpdateDebugButton(aiButtonIds["Waypoint"], $"AI_WP: {targetIndex}/{path.Count - 1}");
-            UpdateDebugButton(aiButtonIds["Distance"], $"AI_DST: {distance:F1}m");
-            UpdateDebugButton(aiButtonIds["TargetSpeed"], $"AI_TGT: {targetSpeed:F1} km/h");
-            UpdateDebugButton(aiButtonIds["HeadingError"], $"AI_ERR: {headingErrorDeg:F1}°");
+                UpdateDebugButton(aiButtonIds["RouteInfo"], $"AI_WP_POS: {wpX:F1},{wpY:F1}");
+                if (aiStates != null && aiStates.TryGetValue(aiPLID, out var state))
+                    UpdateDebugButton(aiButtonIds["State"], $"AI_ST: {state}");
+                else
+                    UpdateDebugButton(aiButtonIds["State"], "AI_ST: --");
+            }
+            catch (Exception ex)
+            {
+                // Skip noisy stack traces when AI data goes stale under heavy load; allow re-detection next tick.
+                logger.LogException(ex, $"Error updating AI debug info for PLID {aiPLID}");
+                aiPLID = 0;
+            }
+        }
 
-            // Additional info
-            if (aiControlInfo != null && aiControlInfo.TryGetValue(aiPLID, out var controlInfo))
-                UpdateDebugButton(aiButtonIds["ControlInfo"], $"AI_CTL: {controlInfo}");
+        /// <summary>
+        ///     Validate and resolve the tracked AI's car/path data; resets aiPLID when stale.
+        /// </summary>
+        private bool TryGetTrackedAiData(
+            CompCar[] allCars,
+            Dictionary<byte, int> aiTargetWaypointIndices,
+            Dictionary<byte, List<Util.Waypoint>> aiPaths,
+            Dictionary<byte, double> aiTargetSpeeds,
+            out CompCar car,
+            out List<Util.Waypoint> path,
+            out int targetIndex)
+        {
+            car = default;
+            path = null;
+            targetIndex = -1;
 
-            UpdateDebugButton(aiButtonIds["RouteInfo"], $"AI_WP_POS: {wpX:F1},{wpY:F1}");
-            if (aiStates != null && aiStates.TryGetValue(aiPLID, out var state))
-                UpdateDebugButton(aiButtonIds["State"], $"AI_ST: {state}");
-            else
-                UpdateDebugButton(aiButtonIds["State"], "AI_ST: --");
+            if (aiPLID == 0) return false;
+            if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null) return false;
+            if (allCars == null || allCars.Length == 0) return false;
+
+            car = Array.Find(allCars, c => c.PLID == aiPLID);
+            if (car.PLID == 0)
+            {
+                aiPLID = 0;
+                return false;
+            }
+
+            if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out targetIndex) ||
+                targetIndex < 0)
+            {
+                aiPLID = 0;
+                return false;
+            }
+
+            if (!aiPaths.TryGetValue(aiPLID, out path) || path == null || path.Count == 0)
+            {
+                aiPLID = 0;
+                return false;
+            }
+
+            if (targetIndex >= path.Count)
+            {
+                aiPLID = 0;
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>

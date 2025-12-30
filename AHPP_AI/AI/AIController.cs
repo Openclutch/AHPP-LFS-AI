@@ -482,6 +482,21 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure collision detection envelope when scanning for cars ahead.
+        /// </summary>
+        public void ConfigureCollisionDetection(
+            double detectionRangeMeters,
+            double detectionAngleDegrees,
+            double minimumSafetyDistanceMeters,
+            double collisionHalfWidthMeters)
+        {
+            config.CollisionDetectionRangeM = Math.Max(1.0, detectionRangeMeters);
+            config.CollisionDetectionAngle = Math.Max(0.1, detectionAngleDegrees);
+            config.MinimumSafetyDistanceM = Math.Max(0.1, minimumSafetyDistanceMeters);
+            config.CollisionDetectionHalfWidthM = Math.Max(0.1, collisionHalfWidthMeters);
+        }
+
+        /// <summary>
         /// Configure pure pursuit steering to smooth path following while keeping it tunable.
         /// </summary>
         public void ConfigurePurePursuit(
@@ -684,6 +699,21 @@ namespace AHPP_AI.AI
             {
                 return aiPLIDs.Count > 0 ? aiPLIDs[0] : (byte)0;
             }
+        }
+
+        /// <summary>
+        ///     Get an AI's name formatted for chat/admin commands (returns empty when unknown).
+        /// </summary>
+        public string GetAINameForCommand(byte plid)
+        {
+            lock (aiPlidLock)
+            {
+                if (!aiPLIDs.Contains(plid))
+                    return string.Empty;
+            }
+
+            var name = aiNames.TryGetValue(plid, out var storedName) ? storedName : $"AI {plid}";
+            return FormatNameForCommand(name);
         }
 
         /// <summary>
@@ -1161,7 +1191,11 @@ namespace AHPP_AI.AI
             {
                 if (!aiPLIDs.Contains(plid) || plid == 0) return;
             }
-            insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+            var aiNameForCmd = GetAINameForCommand(plid);
+            if (!string.IsNullOrWhiteSpace(aiNameForCmd))
+            {
+                insim.Send(new IS_MST { Msg = $"/spec {aiNameForCmd}" });
+            }
             ForgetAi(plid, notifyPopulationManager);
         }
 
@@ -1236,9 +1270,12 @@ namespace AHPP_AI.AI
 
         public void SpectateAllAIs()
         {
-            foreach (var plid in GetActiveAiPlids())
+            foreach (var (plid, name) in GetAiTuples())
             {
-                insim.Send(new IS_MST { Msg = $"/spec {plid}" });
+                var formattedName = FormatNameForCommand(name);
+                if (string.IsNullOrWhiteSpace(formattedName)) continue;
+
+                insim.Send(new IS_MST { Msg = $"/spec {formattedName}" });
             }
         }
 

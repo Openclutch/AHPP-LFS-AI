@@ -1,5 +1,8 @@
 # Changelog
 
+- Spectate commands now target AI by name (no quotes) and the AI list remove button is tighter so only the X glyph shows.
+- Hardened AI debug UI updates: validate tracked AI data before rendering, reset on stale info, and guard against null waypoint data to stop spammy null-ref logs when spectating or running many AI.
+- Added `CollisionDetectionHalfWidthM` AI config to tune how wide the forward collision scan should be when detecting cars ahead.
 - Waypoint visualization now uses recorded Z heights for cones/markers so pylons spawn on the road surface without AXM position errors.
 - Switched AI tool status messages to private host-only sends (or direct button responder UCIDs) so chat updates no longer broadcast under the admin name.
 - Added an `AutoManagePopulation` switch (defaulted off in `config.ini`) so AI population management stays paused on startup until manually enabled.

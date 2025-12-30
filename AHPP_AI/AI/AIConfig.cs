@@ -110,6 +110,7 @@ namespace AHPP_AI.AI
         public double CollisionDetectionRangeM { get; set; } = 30.0; // Detection range in meters
         public double CollisionDetectionAngle { get; set; } = 45.0; // Half-angle in degrees (total 180° arc)
         public double MinimumSafetyDistanceM { get; set; } = 10.0; // Minimum safe distance in meters
+        public double CollisionDetectionHalfWidthM { get; set; } = 2.5; // Half-width corridor to consider a car "ahead"
 
         // Waypoint approach
         public double WaypointMinThreshold { get; set; } = 1.5;
