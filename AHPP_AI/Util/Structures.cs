@@ -71,6 +71,11 @@ namespace AHPP_AI.Util
     public struct Waypoint
     {
         /// <summary>
+        ///     Elevation in meters for the waypoint position.
+        /// </summary>
+        public double ZMeters { get; }
+
+        /// <summary>
         ///     Position in LFS coordinates (65536 units = 1 meter)
         /// </summary>
         public Point Position;
@@ -88,23 +93,25 @@ namespace AHPP_AI.Util
         /// <summary>
         ///     Creates a waypoint from integer pixel coordinates
         /// </summary>
-        public Waypoint(int x, int y, double speedLimit, byte routeIndex = 0)
+        public Waypoint(int x, int y, double speedLimit, byte routeIndex = 0, double zMeters = 0)
         {
             Position = new Point(x, y);
             SpeedLimit = speedLimit;
             RouteIndex = routeIndex;
+            ZMeters = zMeters;
         }
 
         /// <summary>
         ///     Creates a waypoint from real-world coordinates in meters
         /// </summary>
-        public Waypoint(double xMeters, double yMeters, double speedLimit, byte routeIndex = 0)
+        public Waypoint(double xMeters, double yMeters, double speedLimit, byte routeIndex = 0, double zMeters = 0)
         {
             var x = (int)(xMeters * 65536);
             var y = (int)(yMeters * 65536);
             Position = new Point(x, y);
             SpeedLimit = speedLimit;
             RouteIndex = routeIndex;
+            ZMeters = zMeters;
         }
 
         /// <summary>
@@ -113,7 +120,7 @@ namespace AHPP_AI.Util
         public override string ToString()
         {
             return
-                $"Waypoint {RouteIndex}: ({Position.X / 65536.0:F2}, {Position.Y / 65536.0:F2}) - {SpeedLimit:F1} km/h";
+                $"Waypoint {RouteIndex}: ({Position.X / 65536.0:F2}, {Position.Y / 65536.0:F2}, {ZMeters:F1}m) - {SpeedLimit:F1} km/h";
         }
     }
 

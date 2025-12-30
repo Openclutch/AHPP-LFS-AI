@@ -183,6 +183,7 @@ namespace AHPP_AI.Debug
                 // Convert LFS coordinates (65536 units/meter) to meters
                 var centerX = waypoint.Position.X / 65536.0f;
                 var centerY = waypoint.Position.Y / 65536.0f;
+                var centerZ = waypoint.ZMeters == 0 ? 0.5f : (float)waypoint.ZMeters;
 
                 // Check if we already have cones at this position (using tolerance)
                 var positionKey = Tuple.Create(
@@ -193,7 +194,7 @@ namespace AHPP_AI.Debug
                 if (waypointPositions.Contains(positionKey)) continue;
 
                 // Place cones in a circle around the waypoint
-                PlaceWaypointCircle(plid, centerX, centerY, waypoint.RouteIndex, arrowHeading);
+                PlaceWaypointCircle(plid, centerX, centerY, centerZ, waypoint.RouteIndex, arrowHeading);
                 waypointPositions.Add(positionKey);
                 placedCount++;
 
@@ -251,7 +252,8 @@ namespace AHPP_AI.Debug
         /// <summary>
         ///     Place objects to visualize a waypoint with an optional heading for arrows
         /// </summary>
-        private void PlaceWaypointCircle(byte plid, float centerX, float centerY, int routeIndex, byte heading = 0)
+        private void PlaceWaypointCircle(byte plid, float centerX, float centerY, float centerZ, int routeIndex,
+            byte heading = 0)
         {
             // Ensure we have storage for this player's objects
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
@@ -270,7 +272,7 @@ namespace AHPP_AI.Debug
             try
             {
                 // Place an arrow at the exact waypoint position for precise visualization
-                var chalkObj = PlaceObject(plid, CHALK_AHEAD, centerX, centerY, 0.5f, heading);
+                var chalkObj = PlaceObject(plid, CHALK_AHEAD, centerX, centerY, centerZ, heading);
                 if (chalkObj != null) placedObjectsByPlid[plid].Add(chalkObj);
 
                 // Mark this position as having cones
@@ -453,11 +455,12 @@ namespace AHPP_AI.Debug
                 // Convert waypoint position to meters
                 var xMeters = waypoint.Position.X / 65536.0f;
                 var yMeters = waypoint.Position.Y / 65536.0f;
+                var zMeters = waypoint.ZMeters == 0 ? 0.5f : (float)waypoint.ZMeters;
 
-                logger.Log($"Placing active waypoint marker at X={xMeters:F2}, Y={yMeters:F2}");
+                logger.Log($"Placing active waypoint marker at X={xMeters:F2}, Y={yMeters:F2}, Z={zMeters:F2}");
 
                 // Place a red cone at the new waypoint position
-                var newMarker = PlaceObject(plid, 21 /* CONE_RED */, xMeters, yMeters, 0.5f);
+                var newMarker = PlaceObject(plid, 21 /* CONE_RED */, xMeters, yMeters, zMeters);
 
                 if (newMarker != null)
                 {

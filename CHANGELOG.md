@@ -1,5 +1,6 @@
 # Changelog
 
+- Waypoint visualization now uses recorded Z heights for cones/markers so pylons spawn on the road surface without AXM position errors.
 - Switched AI tool status messages to private host-only sends (or direct button responder UCIDs) so chat updates no longer broadcast under the admin name.
 - Added an `AutoManagePopulation` switch (defaulted off in `config.ini`) so AI population management stays paused on startup until manually enabled.
 - Added a "Start Auto AI" button in the main debug UI to enable population management and trigger the first reconcile when you're ready.

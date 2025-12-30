@@ -72,7 +72,7 @@ namespace AHPP_AI.Waypoint
             foreach (var node in Nodes)
             {
                 var speed = node.SpeedLimit ?? node.Speed;
-                waypoints.Add(new Util.Waypoint(node.X, node.Y, speed, idx++));
+                waypoints.Add(new Util.Waypoint(node.X, node.Y, speed, idx++, node.Z));
             }
 
             return waypoints;
