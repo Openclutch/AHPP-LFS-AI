@@ -94,6 +94,8 @@ namespace AHPP_AI.UI
         private string insimHost = "Host: pending";
         private bool autoPopulationEnabled = true;
         private byte autoAiButtonRow;
+        private bool layoutVisualizationEnabled;
+        private byte toggleLayoutRow;
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -112,7 +114,8 @@ namespace AHPP_AI.UI
             byte row = 70;
             CreateButton(HideUiButtonId, "Hide UI", LEFT_COL, HIDE_BUTTON_ROW);
             CreateButton(ReloadRoutesId, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
-            CreateButton(ToggleLayoutId, "Toggle Layout", LEFT_COL, row); row += ROW_HEIGHT;
+            toggleLayoutRow = row;
+            CreateButton(ToggleLayoutId, GetLayoutToggleLabel(), LEFT_COL, row); row += ROW_HEIGHT;
             CreateButton(ResetLayoutId, "Reset Layout", LEFT_COL, row);
             RenderInSimStatus();
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
@@ -174,6 +177,24 @@ namespace AHPP_AI.UI
         private string GetAutoAiButtonText()
         {
             return autoPopulationEnabled ? "Auto AI: On" : "Start Auto AI";
+        }
+
+        /// <summary>
+        /// Build the label for the layout visualization toggle button.
+        /// </summary>
+        private string GetLayoutToggleLabel()
+        {
+            return layoutVisualizationEnabled ? "Hide Layout" : "Show Layout";
+        }
+
+        /// <summary>
+        /// Update the layout toggle button label to reflect current state.
+        /// </summary>
+        public void UpdateLayoutToggleState(bool enabled)
+        {
+            layoutVisualizationEnabled = enabled;
+            if (!uiInitialized || uiHidden || toggleLayoutRow == 0) return;
+            CreateButton(ToggleLayoutId, GetLayoutToggleLabel(), LEFT_COL, toggleLayoutRow);
         }
 
         /// <summary>

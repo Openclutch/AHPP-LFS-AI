@@ -1,7 +1,15 @@
 # Changelog
 
+- Added rolling performance stats to AII/MCI handlers (gated by `DebugAI.PerformanceLogging`) so logs show active AI count, handler rates, and processing times when fleets grow large.
+- Merged MCI telemetry across packets and clear stale PLIDs so AI control keeps receiving car data when running large fleets (15+ bots).
+- Added config-driven throttling for active waypoint markers (`DebugAI.ActiveWaypointMarkers`, `DebugAI.ActiveWaypointIntervalMs`) to cut AXM spam and reduce InSim buffer overflows when many AIs are running.
+- Added an optional `DebugAI.VerboseInSimLogging` toggle plus extra spawn/connect diagnostics so InSim disconnects during large AI spawns can be traced.
+- Batched layout object placement into capped AXM packets to reduce InSim disconnects when visualizing large routes and waypoint cones.
+- Layout toggle now shows/hides both route and waypoint cone visuals and writes the preference back to `config.ini` so it sticks across restarts, with the UI button label reflecting current state.
 - Spectate commands now target AI by name (no quotes) and the AI list remove button is tighter so only the X glyph shows.
 - Hardened AI debug UI updates: validate tracked AI data before rendering, reset on stale info, and guard against null waypoint data to stop spammy null-ref logs when spectating or running many AI.
+- Further guarded AI debug data validation, clearing stale tracking without logging so AI removals/spectates stop throwing transient errors.
+- Private message helper now uses /echo via MST instead of IS_MTC so non-host clients stop hitting “only for multiplayer hosts” errors.
 - Added `CollisionDetectionHalfWidthM` AI config to tune how wide the forward collision scan should be when detecting cars ahead.
 - Waypoint visualization now uses recorded Z heights for cones/markers so pylons spawn on the road surface without AXM position errors.
 - Switched AI tool status messages to private host-only sends (or direct button responder UCIDs) so chat updates no longer broadcast under the admin name.

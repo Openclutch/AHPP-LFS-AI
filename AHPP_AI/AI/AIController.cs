@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,6 +35,7 @@ namespace AHPP_AI.AI
         private readonly InSimClient insim;
         private readonly LFSLayout lfsLayout;
         private readonly Logger logger;
+        private readonly AppConfig appConfig;
         private readonly WaypointFollower waypointFollower;
         private readonly WaypointManager waypointManager;
         private readonly PathManager pathManager;
@@ -43,6 +45,9 @@ namespace AHPP_AI.AI
         private readonly Dictionary<string, RouteMetadata> routePresets = new Dictionary<string, RouteMetadata>(StringComparer.OrdinalIgnoreCase);
         private readonly MainUI mainUI;
         private readonly AIPopulationManager populationManager;
+        private readonly bool insimDebugLogging;
+        private readonly bool activeWaypointMarkersEnabled;
+        private readonly int activeWaypointIntervalMs;
         private readonly Dictionary<byte, string> aiAssignedRoutes = new Dictionary<byte, string>();
         private readonly object assignmentLock = new object();
         private readonly Queue<string> plannedSpawnRoutes = new Queue<string>();
@@ -51,6 +56,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, DateTime> lastActiveWaypointUpdate = new Dictionary<byte, DateTime>();
         private readonly Random branchRandom = new Random();
         private const double InnerBranchJoinChance = 0.25;
         private const double InnerBranchMaxDistanceMeters = 12.0;
@@ -66,6 +72,10 @@ namespace AHPP_AI.AI
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
+        private readonly PerformanceTracker aiiPerformanceTracker = new PerformanceTracker();
+        private readonly PerformanceTracker mciPerformanceTracker = new PerformanceTracker();
+        private readonly bool performanceLogging;
+        private bool autoVisualizeWaypoints;
         private string recordingRouteName = "main_loop";
         private string visualizationRouteName = "main_loop";
         private int visualizationDetailStep = 2;
@@ -77,8 +87,12 @@ namespace AHPP_AI.AI
         private float playerSteering;
 
         private byte playerPLID;
+        private DateTime lastPerformanceLog = DateTime.UtcNow;
+        private static readonly TimeSpan PerformanceLogWindow = TimeSpan.FromSeconds(5);
 
         // Car tracking
+        private readonly object carStateLock = new object();
+        private readonly Dictionary<byte, CompCar> carStates = new Dictionary<byte, CompCar>();
         private CompCar[] allCars = Array.Empty<CompCar>();
         private bool debugUIInitialized;
 
@@ -91,13 +105,25 @@ namespace AHPP_AI.AI
             WaypointManager waypointManager,
             LFSLayout lfsLayout,
             RouteLibrary routeLibrary,
-            bool debugEnabled = false)
+            bool debugEnabled = false,
+            AppConfig appConfig = null,
+            bool autoVisualizeWaypointsEnabled = false,
+            bool insimDebugLogging = false,
+            bool activeWaypointMarkersEnabled = true,
+            int activeWaypointIntervalMs = 500,
+            bool performanceLoggingEnabled = true)
         {
             this.insim = insim;
             this.logger = logger;
             this.waypointManager = waypointManager;
             this.lfsLayout = lfsLayout;
             this.routeLibrary = routeLibrary;
+            this.appConfig = appConfig;
+            autoVisualizeWaypoints = autoVisualizeWaypointsEnabled;
+            this.insimDebugLogging = insimDebugLogging;
+            this.activeWaypointMarkersEnabled = activeWaypointMarkersEnabled;
+            this.activeWaypointIntervalMs = activeWaypointIntervalMs;
+            performanceLogging = performanceLoggingEnabled;
 
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
@@ -633,6 +659,7 @@ namespace AHPP_AI.AI
         {
             lfsLayout.ClearAllVisualizations();
             lfsLayout.WaypointsVisualized = false;
+            mainUI?.UpdateLayoutToggleState(false);
             insim.SendPrivateMessage("Layout cleared.");
         }
 
@@ -660,9 +687,6 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Toggle visualization of recorded routes in the layout editor for the current viewer.
-        /// </summary>
-        /// <summary>
         /// Toggle the visualization of recorded routes for the current view, with a fallback to a default player.
         /// </summary>
         public void ToggleRouteVisualization(byte viewPlid)
@@ -679,11 +703,79 @@ namespace AHPP_AI.AI
             {
                 lfsLayout.ClearAllVisualizations();
                 lfsLayout.WaypointsVisualized = false;
+                mainUI?.UpdateLayoutToggleState(false);
+                PersistWaypointVisualizationPreference(false);
                 insim.SendPrivateMessage("Layout visualization hidden.");
                 return;
             }
 
-            VisualizeSelectedRoute(effectivePlid);
+            EnqueueVisualization(() => VisualizeLayoutAndWaypoints(effectivePlid));
+        }
+
+        /// <summary>
+        /// Visualize the selected recorded route and AI waypoint cones together.
+        /// </summary>
+        private void VisualizeLayoutAndWaypoints(byte viewPlid)
+        {
+            VisualizeWaypointConesInternal(viewPlid);
+            VisualizeSelectedRouteInternal(viewPlid, false);
+
+            if (!lfsLayout.WaypointsVisualized) return;
+
+            mainUI?.UpdateLayoutToggleState(true);
+            PersistWaypointVisualizationPreference(true);
+        }
+
+        /// <summary>
+        /// Render waypoint cones for the active AI path tied to the supplied player.
+        /// </summary>
+        private void VisualizeWaypointConesInternal(byte plid)
+        {
+            var paths = GetAIPaths();
+            if (paths == null || paths.Count == 0)
+            {
+                logger.LogWarning("Cannot visualize waypoint cones: no AI paths available");
+                insim.SendPrivateMessage("No AI paths available for waypoint cones.");
+                return;
+            }
+
+            if (!paths.ContainsKey(plid))
+            {
+                var fallbackPlid = paths.Keys.FirstOrDefault();
+                if (fallbackPlid == 0)
+                {
+                    logger.LogWarning("Cannot visualize waypoint cones: no valid PLID found");
+                    insim.SendPrivateMessage("No AI cars available for waypoint cones.");
+                    return;
+                }
+
+                plid = fallbackPlid;
+            }
+
+            if (!paths.TryGetValue(plid, out var path) || path == null || path.Count == 0)
+            {
+                logger.LogWarning($"Cannot visualize waypoint cones: path empty for PLID {plid}");
+                insim.SendPrivateMessage("No waypoints to visualize for the selected AI.");
+                return;
+            }
+
+            lfsLayout.VisualizeWaypoints(plid, paths);
+        }
+
+        /// <summary>
+        /// Persist the waypoint visualization preference so it survives restarts.
+        /// </summary>
+        private void PersistWaypointVisualizationPreference(bool enabled)
+        {
+            autoVisualizeWaypoints = enabled;
+            try
+            {
+                appConfig?.SetBool("DebugAI", "AutoVisualizeWaypoints", enabled, true);
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to persist waypoint visualization preference");
+            }
         }
 
         public bool IsRecording => routeRecorder.IsRecording;
@@ -1125,7 +1217,16 @@ namespace AHPP_AI.AI
             {
                 try
                 {
+                    if (insimDebugLogging)
+                    {
+                        logger.Log(
+                            $"Spawn sequence starting: count={count}, useConfiguredDelay={useConfiguredDelay}, plannedRoutes={plannedSpawnRoutes.Count}");
+                    }
                     await SpawnAICarsAsync(count, useConfiguredDelay).ConfigureAwait(false);
+                    if (insimDebugLogging)
+                    {
+                        logger.Log("Spawn sequence completed");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1242,6 +1343,7 @@ namespace AHPP_AI.AI
             innerBranchSpeedHold.Remove(plid);
             innerBranchLastCheck.Remove(plid);
             innerLaneSwapLast.Remove(plid);
+            RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
                 populationManager?.OnAiLeft(plid);
@@ -1479,6 +1581,7 @@ namespace AHPP_AI.AI
             else
             {
                 populationManager?.UnregisterHuman(pll.PLID);
+                RemoveCarState(pll.PLID);
             }
         }
 
@@ -1518,53 +1621,99 @@ namespace AHPP_AI.AI
         /// </summary>
         public void OnMCI(IS_MCI mci)
         {
-            if (mci?.Info == null) return;
-
-            allCars = mci.Info.ToArray();
-            ApplyPendingRouteAssignments();
-
-            // Record player route if active
-            if (playerPLID != 0)
+            var stopwatch = Stopwatch.StartNew();
+            try
             {
-                var car = Array.Find(allCars, c => c.PLID == playerPLID);
-                if (car.PLID != 0)
+                if (mci?.Info == null) return;
+
+                lock (carStateLock)
                 {
-                    var pos = new Vec(car.X, car.Y, car.Z);
-                    var speed = 360.0 * car.Speed / 32768.0;
-                    var angleDiff = (car.Heading - car.Direction) * 360f / 65536f;
-                    routeRecorder.AddPoint(pos, speed, playerThrottle, playerBrake, angleDiff, car.Heading, playerPLID);
+                    foreach (var car in mci.Info)
+                    {
+                        carStates[car.PLID] = car;
+                    }
+
+                    allCars = carStates.Values.ToArray();
+                }
+                ApplyPendingRouteAssignments();
+
+                // Record player route if active
+                if (playerPLID != 0)
+                {
+                    var car = Array.Find(allCars, c => c.PLID == playerPLID);
+                    if (car != null && car.PLID != 0 && routeRecorder != null)
+                    {
+                        try
+                        {
+                            var pos = new Vec(car.X, car.Y, car.Z);
+                            var speed = 360.0 * car.Speed / 32768.0;
+                            var angleDiff = (car.Heading - car.Direction) * 360f / 65536f;
+                            routeRecorder.AddPoint(pos, speed, playerThrottle, playerBrake, angleDiff, car.Heading, playerPLID);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogException(ex, $"Route recording failed for PLID={playerPLID}");
+                        }
+                    }
+                }
+
+                // Update debug UI
+                if (config.DebugEnabled && debugUI != null && debugUIInitialized)
+                {
+                    // Collect waypoint and control info for the debug display
+                    var waypointIndices = new Dictionary<byte, int>();
+                    var targetSpeeds = new Dictionary<byte, double>();
+                    var controlInfo = new Dictionary<byte, string>();
+                    var aiStates = new Dictionary<byte, string>();
+                    var aiSnapshot = GetActiveAiPlids();
+
+                    foreach (var plid in aiSnapshot)
+                    {
+                        try
+                        {
+                            var (targetIndex, _, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
+                            waypointIndices[plid] = targetIndex;
+                            targetSpeeds[plid] = targetSpeed;
+                            controlInfo[plid] = driver.GetControlInfo(plid);
+                            var state = driver.GetStateDescription(plid);
+                            aiStates[plid] = BuildAiStateLabel(plid, state, inRecovery);
+
+                            // Place active waypoint marker if available
+                        var path = waypointFollower.GetPath(plid);
+                        if (activeWaypointMarkersEnabled && path != null && path.Count > 0)
+                        {
+                            var now = DateTime.UtcNow;
+                            if (!lastActiveWaypointUpdate.TryGetValue(plid, out var lastUpdate) ||
+                                (now - lastUpdate).TotalMilliseconds >= activeWaypointIntervalMs)
+                            {
+                                lastActiveWaypointUpdate[plid] = now;
+                                var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
+                                lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
+                            }
+                        }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogException(ex, $"Failed to update debug info for AI PLID={plid}");
+                        }
+                    }
+
+                    // Get paths for all AIs
+                    var paths = new Dictionary<byte, List<Util.Waypoint>>();
+                    foreach (var plid in aiSnapshot) paths[plid] = waypointFollower.GetPath(plid);
+
+                    debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo, aiStates);
                 }
             }
-
-            // Update debug UI
-            if (config.DebugEnabled && debugUI != null && debugUIInitialized)
+            catch (Exception ex)
             {
-                // Collect waypoint and control info for the debug display
-                var waypointIndices = new Dictionary<byte, int>();
-                var targetSpeeds = new Dictionary<byte, double>();
-                var controlInfo = new Dictionary<byte, string>();
-                var aiStates = new Dictionary<byte, string>();
-                var aiSnapshot = GetActiveAiPlids();
-
-                foreach (var plid in aiSnapshot)
-                {
-                    var (targetIndex, _, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
-                    waypointIndices[plid] = targetIndex;
-                    targetSpeeds[plid] = targetSpeed;
-                    controlInfo[plid] = driver.GetControlInfo(plid);
-                    var state = driver.GetStateDescription(plid);
-                    aiStates[plid] = BuildAiStateLabel(plid, state, inRecovery);
-
-                    // Place active waypoint marker
-                    var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
-                    lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
-                }
-
-                // Get paths for all AIs
-                var paths = new Dictionary<byte, List<Util.Waypoint>>();
-                foreach (var plid in aiSnapshot) paths[plid] = waypointFollower.GetPath(plid);
-
-                debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo, aiStates);
+                logger.LogException(ex, "OnMCI failed");
+            }
+            finally
+            {
+                stopwatch.Stop();
+                mciPerformanceTracker.Record(stopwatch.Elapsed);
+                LogPerformanceSnapshots();
             }
         }
 
@@ -1719,6 +1868,18 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Remove cached telemetry for a specific PLID so stale car data is not reused.
+        /// </summary>
+        private void RemoveCarState(byte plid)
+        {
+            lock (carStateLock)
+            {
+                if (carStates.Remove(plid))
+                    allCars = carStates.Values.ToArray();
+            }
+        }
+
+        /// <summary>
         ///     Get the paths for all active AI cars
         /// </summary>
         /// <returns>Dictionary of paths by PLID</returns>
@@ -1776,152 +1937,212 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        ///     Return the number of active AI PLIDs currently tracked.
+        /// </summary>
+        private int GetActiveAiCount()
+        {
+            lock (aiPlidLock)
+            {
+                return aiPLIDs.Count(p => p > 0);
+            }
+        }
+
+        /// <summary>
         ///     Handle AII packet (AI info)
         /// </summary>
         public void OnAII(IS_AII aii)
         {
-            var plid = aii.PLID;
-            bool knownAi;
-            lock (aiPlidLock)
+            var stopwatch = Stopwatch.StartNew();
+            try
             {
-                knownAi = aiPLIDs.Contains(plid);
-            }
-            if (!knownAi) return;
-            if (allCars == null) return;
-
-            // Check engine state - stalled if ignition is on but RPM is near zero
-            var ignitionOn = (aii.Flags & AIFlags.AIFLAGS_IGNITION) != 0;
-            var engineStalled = ignitionOn && aii.RPM < 0.1f;
-            var engineRunning = ignitionOn && !engineStalled;
-
-            // Update engine state in driver
-            driver.UpdateEngineState(plid, engineRunning);
-
-            // Find car data in MCI
-            var car = Array.Find(allCars, c => c.PLID == plid);
-            if (car.PLID == 0)
-            {
-                logger.Log($"PLID={plid} No MCI data available yet, skipping control update");
-                return;
-            }
-
-            // Update AI controls based on current state
-            driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects, aii.RPM);
-
-            // Route management
-            var (targetIndex, count, _, _) = waypointFollower.GetFollowerInfo(plid);
-            if (currentRoute.TryGetValue(plid, out var routeName))
-            {
-                if (routeName == "spawn" && targetIndex >= pathManager.SpawnRoute.Count - 1)
+                var plid = aii.PLID;
+                bool knownAi;
+                lock (aiPlidLock)
                 {
-                    var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-                    waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
-                    currentRoute[plid] = "main";
+                    knownAi = aiPLIDs.Contains(plid);
                 }
-                else if (routeName == "main")
+                if (!knownAi) return;
+                if (allCars == null) return;
+
+                // Check engine state - stalled if ignition is on but RPM is near zero
+                var ignitionOn = (aii.Flags & AIFlags.AIFLAGS_IGNITION) != 0;
+                var engineStalled = ignitionOn && aii.RPM < 0.1f;
+                var engineRunning = ignitionOn && !engineStalled;
+
+                // Update engine state in driver
+                driver.UpdateEngineState(plid, engineRunning);
+
+                // Find car data in MCI
+                var car = Array.Find(allCars, c => c.PLID == plid);
+                if (car == null || car.PLID == 0)
                 {
-                    TryGetAssignedRoute(plid, out var assignedRoute);
-                    var hasAssignment = !string.IsNullOrWhiteSpace(assignedRoute);
-                    var assignedIsMain = !hasAssignment ||
-                                         assignedRoute.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase);
-
-                    var allowInnerBranch = !hasAssignment ||
-                                           (pathManager.MainAlternateRoute != null &&
-                                            assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
-                                                StringComparison.OrdinalIgnoreCase));
-                    var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
-
-                    if (pathManager.TryGetBranch(targetIndex, out var branchInfo))
-                    {
-                        var innerBlocked = IsInnerBranch(branchInfo) &&
-                                           (!hasAssignment ||
-                                            !assignedRoute.Equals(branchInfo.Name, StringComparison.OrdinalIgnoreCase));
-                        var assignmentMismatch = hasAssignment &&
-                                                 !assignedRoute.Equals(branchInfo.Name,
-                                                     StringComparison.OrdinalIgnoreCase);
-                        var randomSkip = !hasAssignment && branchRandom.NextDouble() >= 0.5;
-
-                        var shouldSwitch = !switchedInner && !innerBlocked && !assignmentMismatch && !randomSkip;
-
-                        if (shouldSwitch)
-                        {
-                            SignalLaneChange(
-                                plid,
-                                pathManager.MainRoute,
-                                targetIndex,
-                                branchInfo.Path,
-                                0,
-                                $"Taking branch {branchInfo.Name}");
-
-                            var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
-                            waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
-                            currentRoute[plid] = "branch";
-                            activeBranchSelections[plid] = branchInfo;
-                        }
-                    }
-                    else if (!assignedIsMain)
-                    {
-                        TryAssignBranchIfNeeded(plid, assignedRoute);
-                    }
+                    logger.Log($"PLID={plid} No MCI data available yet, skipping control update");
+                    return;
                 }
-                else if (routeName == "branch")
+
+                // Update AI controls based on current state
+                driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects, aii.RPM);
+
+                // Route management
+                var (targetIndex, count, _, _) = waypointFollower.GetFollowerInfo(plid);
+                if (currentRoute.TryGetValue(plid, out var routeName))
                 {
-                    var path = waypointFollower.GetPath(plid);
-                    if (path == null || path.Count == 0)
-                    {
-                        logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
-                        waypointFollower.SetPath(plid, pathManager.MainRoute);
-                        activeBranchSelections.Remove(plid);
-                        if (innerBranchSpeedHold.Contains(plid))
-                        {
-                            waypointFollower.ClearManualTargetSpeed(plid);
-                            innerBranchSpeedHold.Remove(plid);
-                        }
-                        currentRoute[plid] = "main";
-                        return;
-                    }
-
-                    if (activeBranchSelections.TryGetValue(plid, out var branchInfo) && IsInnerBranch(branchInfo))
-                    {
-                        if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
-                            return;
-                    }
-
-                    if (targetIndex >= path.Count - 1)
+                    if (routeName == "spawn" && targetIndex >= pathManager.SpawnRoute.Count - 1)
                     {
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-
-                        if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit) && branchInfoExit != null)
-                        {
-                            var hintedIndex = pathManager.MainRoute.Count == 0
-                                ? 0
-                                : Math.Max(
-                                    0,
-                                    Math.Min(pathManager.MainRoute.Count - 1, branchInfoExit.RejoinIndex));
-                            bestIndex = hintedIndex;
-
-                            var approachIndex = Math.Max(0, path.Count - 2);
-                            SignalLaneChange(
-                                plid,
-                                path,
-                                approachIndex,
-                                pathManager.MainRoute,
-                                bestIndex,
-                                $"Rejoining main from {branchInfoExit.Name}");
-
-                            activeBranchSelections.Remove(plid);
-                        }
-
                         waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
-                        if (innerBranchSpeedHold.Contains(plid))
-                        {
-                            waypointFollower.ClearManualTargetSpeed(plid);
-                            innerBranchSpeedHold.Remove(plid);
-                        }
-                        innerBranchLastCheck[plid] = DateTime.Now;
                         currentRoute[plid] = "main";
                     }
+                    else if (routeName == "main")
+                    {
+                        TryGetAssignedRoute(plid, out var assignedRoute);
+                        var hasAssignment = !string.IsNullOrWhiteSpace(assignedRoute);
+                        var assignedIsMain = !hasAssignment ||
+                                             assignedRoute.Equals(config.MainRouteName,
+                                                 StringComparison.OrdinalIgnoreCase);
+
+                        var allowInnerBranch = !hasAssignment ||
+                                               (pathManager.MainAlternateRoute != null &&
+                                                assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
+                                                    StringComparison.OrdinalIgnoreCase));
+                        var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
+
+                        if (pathManager.TryGetBranch(targetIndex, out var branchInfo))
+                        {
+                            var innerBlocked = IsInnerBranch(branchInfo) &&
+                                               (!hasAssignment ||
+                                                !assignedRoute.Equals(branchInfo.Name,
+                                                    StringComparison.OrdinalIgnoreCase));
+                            var assignmentMismatch = hasAssignment &&
+                                                     !assignedRoute.Equals(branchInfo.Name,
+                                                         StringComparison.OrdinalIgnoreCase);
+                            var randomSkip = !hasAssignment && branchRandom.NextDouble() >= 0.5;
+
+                            var shouldSwitch = !switchedInner && !innerBlocked && !assignmentMismatch && !randomSkip;
+
+                            if (shouldSwitch)
+                            {
+                                SignalLaneChange(
+                                    plid,
+                                    pathManager.MainRoute,
+                                    targetIndex,
+                                    branchInfo.Path,
+                                    0,
+                                    $"Taking branch {branchInfo.Name}");
+
+                                var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
+                                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+                                currentRoute[plid] = "branch";
+                                activeBranchSelections[plid] = branchInfo;
+                            }
+                        }
+                        else if (!assignedIsMain)
+                        {
+                            TryAssignBranchIfNeeded(plid, assignedRoute);
+                        }
+                    }
+                    else if (routeName == "branch")
+                    {
+                        var path = waypointFollower.GetPath(plid);
+                        if (path == null || path.Count == 0)
+                        {
+                            logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
+                            waypointFollower.SetPath(plid, pathManager.MainRoute);
+                            activeBranchSelections.Remove(plid);
+                            if (innerBranchSpeedHold.Contains(plid))
+                            {
+                                waypointFollower.ClearManualTargetSpeed(plid);
+                                innerBranchSpeedHold.Remove(plid);
+                            }
+                            currentRoute[plid] = "main";
+                            return;
+                        }
+
+                        if (activeBranchSelections.TryGetValue(plid, out var branchInfo) && IsInnerBranch(branchInfo))
+                        {
+                            if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
+                                return;
+                        }
+
+                        if (targetIndex >= path.Count - 1)
+                        {
+                            var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+
+                            if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit) &&
+                                branchInfoExit != null)
+                            {
+                                var hintedIndex = pathManager.MainRoute.Count == 0
+                                    ? 0
+                                    : Math.Max(
+                                        0,
+                                        Math.Min(pathManager.MainRoute.Count - 1, branchInfoExit.RejoinIndex));
+                                bestIndex = hintedIndex;
+
+                                var approachIndex = Math.Max(0, path.Count - 2);
+                                SignalLaneChange(
+                                    plid,
+                                    path,
+                                    approachIndex,
+                                    pathManager.MainRoute,
+                                    bestIndex,
+                                    $"Rejoining main from {branchInfoExit.Name}");
+
+                                activeBranchSelections.Remove(plid);
+                            }
+
+                            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+                            if (innerBranchSpeedHold.Contains(plid))
+                            {
+                                waypointFollower.ClearManualTargetSpeed(plid);
+                                innerBranchSpeedHold.Remove(plid);
+                            }
+                            innerBranchLastCheck[plid] = DateTime.Now;
+                            currentRoute[plid] = "main";
+                        }
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "OnAII failed");
+            }
+            finally
+            {
+                stopwatch.Stop();
+                aiiPerformanceTracker.Record(stopwatch.Elapsed);
+                LogPerformanceSnapshots();
+            }
+        }
+
+        /// <summary>
+        ///     Emit aggregated timing stats for AII and MCI handlers on a rolling window.
+        /// </summary>
+        private void LogPerformanceSnapshots()
+        {
+            if (!performanceLogging) return;
+
+            var now = DateTime.UtcNow;
+            if (now - lastPerformanceLog < PerformanceLogWindow) return;
+
+            var parts = new List<string>();
+            if (aiiPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var aiiSnapshot))
+            {
+                parts.Add(
+                    $"AII count={aiiSnapshot.Count} avg={aiiSnapshot.AverageMs:F2}ms max={aiiSnapshot.MaxMs:F2}ms total={aiiSnapshot.TotalMs:F1}ms rate={aiiSnapshot.RatePerSecond:F1}/s");
+            }
+
+            if (mciPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var mciSnapshot))
+            {
+                parts.Add(
+                    $"MCI count={mciSnapshot.Count} avg={mciSnapshot.AverageMs:F2}ms max={mciSnapshot.MaxMs:F2}ms total={mciSnapshot.TotalMs:F1}ms rate={mciSnapshot.RatePerSecond:F1}/s");
+            }
+
+            if (parts.Count > 0)
+            {
+                var activeAiCount = GetActiveAiCount();
+                logger.Log(
+                    $"PERF ({PerformanceLogWindow.TotalSeconds}s): activeAI={activeAiCount} | {string.Join(" | ", parts)}");
+                lastPerformanceLog = now;
             }
         }
 
@@ -2284,6 +2505,14 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Sync the layout visualization toggle button with the current visualization state.
+        /// </summary>
+        public void SyncLayoutToggleState()
+        {
+            mainUI?.UpdateLayoutToggleState(lfsLayout.WaypointsVisualized);
+        }
+
+        /// <summary>
         /// Hide all debug UI buttons and leave a restore control in the top-left corner.
         /// </summary>
         public void HideUI()
@@ -2311,7 +2540,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Run the recorded route visualization without blocking the calling thread.
         /// </summary>
-        private void VisualizeSelectedRouteInternal(byte viewPlid)
+        private void VisualizeSelectedRouteInternal(byte viewPlid, bool clearExisting = true)
         {
             var effectivePlid = viewPlid == 0 ? GetDefaultVisualizationPlid() : viewPlid;
             if (effectivePlid == 0)
@@ -2331,7 +2560,7 @@ namespace AHPP_AI.AI
             }
 
             var detailStep = GetVisualizationStep(recorded.Nodes?.Count ?? 0, out var clamped);
-            lfsLayout.VisualizeRecordedRoute(effectivePlid, recorded, detailStep, true);
+            lfsLayout.VisualizeRecordedRoute(effectivePlid, recorded, detailStep, clearExisting);
             lfsLayout.WaypointsVisualized = true;
 
             if (clamped)
@@ -2343,6 +2572,8 @@ namespace AHPP_AI.AI
             {
                 insim.SendPrivateMessage($"Visualized {visualizationRouteName} (x{detailStep}).");
             }
+
+            mainUI?.UpdateLayoutToggleState(true);
         }
 
         /// <summary>

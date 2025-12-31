@@ -545,37 +545,53 @@ namespace AHPP_AI.Debug
             path = null;
             targetIndex = -1;
 
-            if (aiPLID == 0) return false;
-            if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null) return false;
-            if (allCars == null || allCars.Length == 0) return false;
-
-            car = Array.Find(allCars, c => c.PLID == aiPLID);
-            if (car.PLID == 0)
+            try
             {
+                if (aiPLID == 0) return false;
+                if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null) return false;
+                if (aiTargetWaypointIndices.Count == 0 || aiPaths.Count == 0) { aiPLID = 0; return false; }
+                if (allCars == null || allCars.Length == 0) return false;
+
+                car = Array.Find(allCars, c => c.PLID == aiPLID);
+                if (car.PLID == 0)
+                {
+                    aiPLID = 0;
+                    return false;
+                }
+
+                if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out targetIndex) ||
+                    targetIndex < 0)
+                {
+                    aiPLID = 0;
+                    return false;
+                }
+
+                if (!aiPaths.TryGetValue(aiPLID, out path) || path == null || path.Count == 0)
+                {
+                    aiPLID = 0;
+                    return false;
+                }
+
+                if (targetIndex >= path.Count)
+                {
+                    aiPLID = 0;
+                    return false;
+                }
+
+                // Ensure we have target speed data; if missing, allow update but set to zero later.
+                if (!aiTargetSpeeds.ContainsKey(aiPLID))
+                {
+                    aiTargetSpeeds[aiPLID] = 0;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Swallow transient errors when AI is removed mid-update; we reset tracking and continue.
                 aiPLID = 0;
                 return false;
             }
-
-            if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out targetIndex) ||
-                targetIndex < 0)
-            {
-                aiPLID = 0;
-                return false;
-            }
-
-            if (!aiPaths.TryGetValue(aiPLID, out path) || path == null || path.Count == 0)
-            {
-                aiPLID = 0;
-                return false;
-            }
-
-            if (targetIndex >= path.Count)
-            {
-                aiPLID = 0;
-                return false;
-            }
-
-            return true;
         }
 
         /// <summary>

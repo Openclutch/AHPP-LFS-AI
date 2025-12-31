@@ -54,12 +54,9 @@ namespace AHPP_AI.Util
             if (client == null) throw new ArgumentNullException(nameof(client));
 
             var safeMessage = message ?? string.Empty;
-            client.Send(new IS_MTC
-            {
-                UCID = ucid,
-                Msg = safeMessage,
-                Sound = sound
-            });
+            // IS_MTC is host-only and LFS throws runtime errors when sent as a client. Use /echo via MST instead so
+            // messages stay local without spamming host-only errors.
+            client.Send(new IS_MST { Msg = $"/echo {safeMessage}" });
         }
 
         public static void DisconnectSafe(this InSimClient client)

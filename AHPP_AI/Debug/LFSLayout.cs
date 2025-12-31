@@ -24,6 +24,7 @@ namespace AHPP_AI.Debug
 
         private const float WAYPOINT_RADIUS = 2.5f; // Radius of waypoint visualization in meters
         private const int CONES_PER_CIRCLE = 0; // Number of cones to place around each waypoint
+        private const int AXM_BATCH_SIZE = 24; // Max objects per AXM packet to avoid flooding InSim
         // Safe bounds for AXM coordinates (1/16th meters) — keep within short range but wide enough for full layouts.
         private const int LFS_MIN_COORD = -32000;
         private const int LFS_MAX_COORD = 32000;
@@ -165,6 +166,7 @@ namespace AHPP_AI.Debug
             // Start with current waypoint and visualize forward
             var startIdx = 0;
             var placedCount = 0;
+            var batch = new List<ObjectInfo>();
 
             for (var i = 0; i < waypointCount && placedCount < MaxVisibleWaypoints; i += step)
             {
@@ -194,7 +196,8 @@ namespace AHPP_AI.Debug
                 if (waypointPositions.Contains(positionKey)) continue;
 
                 // Place cones in a circle around the waypoint
-                PlaceWaypointCircle(plid, centerX, centerY, centerZ, waypoint.RouteIndex, arrowHeading);
+                PlaceWaypointCircle(plid, centerX, centerY, centerZ, waypoint.RouteIndex, arrowHeading, batch);
+                if (batch.Count >= AXM_BATCH_SIZE) FlushBatch(batch);
                 waypointPositions.Add(positionKey);
                 placedCount++;
 
@@ -203,6 +206,7 @@ namespace AHPP_AI.Debug
                     logger.Log(
                         $"Placed waypoint visualization {placedCount} at X={centerX:F2}, Y={centerY:F2}, Index={idx}");
             }
+            FlushBatch(batch);
 
             WaypointsVisualized = true;
             insim.SendPrivateMessage($"Visualized {placedCount} waypoints with cones");
@@ -238,12 +242,15 @@ namespace AHPP_AI.Debug
             // Default marker uses Chalk Ahead; use red chalk for pit entry routes via flags.
             var markerType = CHALK_AHEAD;
             var markerFlags = route.Metadata.Type == RouteType.PitEntry ? CHALK_COLOR_RED : CHALK_COLOR_WHITE;
+            var batch = new List<ObjectInfo>();
             for (var i = 0; i < nodes.Count && count < MaxVisibleWaypoints; i += effectiveStep)
             {
                 var heading = CalculateHeadingForNode(nodes, i, route.Metadata.IsLoop);
-                PlaceEditableWaypoint(plid, nodes[i], heading, markerType, markerFlags);
+                PlaceEditableWaypoint(plid, nodes[i], heading, markerType, markerFlags, batch);
+                if (batch.Count >= AXM_BATCH_SIZE) FlushBatch(batch);
                 count++;
             }
+            FlushBatch(batch);
 
             WaypointsVisualized = true;
             insim.SendPrivateMessage($"Visualized {count} nodes for {route.Metadata.Name}");
@@ -253,7 +260,7 @@ namespace AHPP_AI.Debug
         ///     Place objects to visualize a waypoint with an optional heading for arrows
         /// </summary>
         private void PlaceWaypointCircle(byte plid, float centerX, float centerY, float centerZ, int routeIndex,
-            byte heading = 0)
+            byte heading = 0, List<ObjectInfo> batch = null)
         {
             // Ensure we have storage for this player's objects
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
@@ -272,7 +279,9 @@ namespace AHPP_AI.Debug
             try
             {
                 // Place an arrow at the exact waypoint position for precise visualization
-                var chalkObj = PlaceObject(plid, CHALK_AHEAD, centerX, centerY, centerZ, heading);
+                var targetBatch = batch ?? new List<ObjectInfo>();
+                var chalkObj = PlaceObject(plid, CHALK_AHEAD, centerX, centerY, centerZ, heading, 0, targetBatch);
+                if (batch == null) FlushBatch(targetBatch);
                 if (chalkObj != null) placedObjectsByPlid[plid].Add(chalkObj);
 
                 // Mark this position as having cones
@@ -288,7 +297,7 @@ namespace AHPP_AI.Debug
         /// Place a chalk arrow marker for a recorded route node to support manual editing.
         /// </summary>
         private void PlaceEditableWaypoint(byte plid, RoutePoint node, byte heading, byte objectType,
-            byte flags = 0)
+            byte flags = 0, List<ObjectInfo> batch = null)
         {
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
 
@@ -296,7 +305,7 @@ namespace AHPP_AI.Debug
             var yMeters = (float)node.Y;
             var zMeters = (float)node.Z;
 
-            var marker = PlaceObject(plid, objectType, xMeters, yMeters, zMeters, heading, flags);
+            var marker = PlaceObject(plid, objectType, xMeters, yMeters, zMeters, heading, flags, batch);
             if (marker != null) placedObjectsByPlid[plid].Add(marker);
         }
 
@@ -366,7 +375,7 @@ namespace AHPP_AI.Debug
         ///     Place an object in the game world
         /// </summary>
         private ObjectInfo PlaceObject(byte plid, byte objectType, float xMeters, float yMeters, float zMeters,
-            byte heading = 0, byte flags = 0)
+            byte heading = 0, byte flags = 0, List<ObjectInfo> batch = null)
         {
             try
             {
@@ -395,13 +404,14 @@ namespace AHPP_AI.Debug
 
                 layoutObjects.Add(objInfo);
 
-                var axmPacket = new IS_AXM
+                if (batch != null)
                 {
-                    PMOAction = ActionFlags.PMO_ADD_OBJECTS
-                };
-
-                axmPacket.Info.Add(objInfo);
-                insim.Send(axmPacket);
+                    batch.Add(objInfo);
+                }
+                else
+                {
+                    FlushBatch(new List<ObjectInfo> { objInfo });
+                }
 
                 return objInfo;
             }
@@ -420,12 +430,42 @@ namespace AHPP_AI.Debug
             PlaceObject(plid, CHALK_AHEAD, xMeters, yMeters, zMeters, heading);
         }
 
+        /// <summary>
+        /// Send a batch of layout objects in capped AXM packets to avoid flooding InSim.
+        /// </summary>
+        private void FlushBatch(List<ObjectInfo> batch)
+        {
+            if (batch == null || batch.Count == 0) return;
+
+            var index = 0;
+            while (index < batch.Count)
+            {
+                var count = Math.Min(AXM_BATCH_SIZE, batch.Count - index);
+                var packet = new IS_AXM
+                {
+                    PMOAction = ActionFlags.PMO_ADD_OBJECTS
+                };
+
+                for (var i = 0; i < count; i++)
+                {
+                    packet.Info.Add(batch[index + i]);
+                }
+
+                insim.Send(packet);
+                index += count;
+            }
+
+            batch.Clear();
+        }
+
 
         /// <summary>
         ///     Show the active waypoint for each AI
         /// </summary>
         public void VisualizeActiveWaypoint(byte plid, Util.Waypoint waypoint)
         {
+            if (!WaypointsVisualized) return;
+
             try
             {
                 // Skip if the active waypoint hasn't changed to avoid spamming identical objects.

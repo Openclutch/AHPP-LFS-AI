@@ -91,6 +91,10 @@ namespace AHPP_AI
         private static readonly int spawnBatchSize;
         private static readonly int removeBatchSize;
         private static readonly bool autoManagePopulation;
+        private static readonly bool insimDebugLogging;
+        private static readonly bool activeWaypointMarkersEnabled;
+        private static readonly int activeWaypointIntervalMs;
+        private static readonly bool performanceLogging;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -162,13 +166,19 @@ namespace AHPP_AI
             spawnBatchSize = GetAiManagerInt("SpawnBatchSize", 1);
             removeBatchSize = GetAiManagerInt("RemoveBatchSize", 1);
             autoManagePopulation = appConfig.GetBool("AI", "AutoManagePopulation", true);
+            insimDebugLogging = appConfig.GetBool("DebugAI", "VerboseInSimLogging", false);
+            activeWaypointMarkersEnabled = appConfig.GetBool("DebugAI", "ActiveWaypointMarkers", true);
+            activeWaypointIntervalMs = Math.Max(100, appConfig.GetInt("DebugAI", "ActiveWaypointIntervalMs", 500));
+            performanceLogging = appConfig.GetBool("DebugAI", "PerformanceLogging", true);
 
             // Initialize components in the correct order
             waypointManager = new WaypointManager(logger, routeLibrary);
             visualizer = new LFSLayout(logger, insim);
 
             // Create AIController with dependencies
-            aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled);
+            aiController = new AIController(insim, logger, waypointManager, visualizer, routeLibrary, debugEnabled,
+                appConfig, debugWaypoints, insimDebugLogging, activeWaypointMarkersEnabled, activeWaypointIntervalMs,
+                performanceLogging);
             visualizer.LayoutSelectionChanged += aiController.OnLayoutSelectionChanged;
             visualizer.LayoutObjectMoved += aiController.OnLayoutObjectMoved;
             aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, mainAlternateRouteName, branchRouteNames);
@@ -326,13 +336,15 @@ namespace AHPP_AI
                         }
                     }
                     else
-                    {
-                        logger.LogError("No AI cars found to visualize waypoints");
-                    }
+                {
+                    logger.LogError("No AI cars found to visualize waypoints");
                 }
+            }
 
-                // Keep program running and listen for the 'q' key
-                logger.Log("Program is running. Press 'q' to exit cleanly or Ctrl+C to force exit.");
+            aiController.SyncLayoutToggleState();
+
+            // Keep program running and listen for the 'q' key
+            logger.Log("Program is running. Press 'q' to exit cleanly or Ctrl+C to force exit.");
 
                 // Create a thread to listen for the 'q' key
                 var keyListenerThread = new Thread(() =>
@@ -370,27 +382,51 @@ namespace AHPP_AI
         {
             logger.Log("Registering event handlers");
 
-            insim.IS_NPL += (_, e) => OnNewPlayer(e.Packet);
-            insim.IS_PLL += (_, e) => aiController.OnPlayerLeave(e.Packet);
-            insim.IS_CNL += (_, e) => aiController.OnConnectionLeave(e.Packet);
-            insim.IS_NCN += (_, e) => aiController.OnNewConnection(e.Packet);
+            if (insimDebugLogging)
+            {
+                insim.Initialized += (sender, args) =>
+                {
+                    logger.Log("InSim client reports Initialized event");
+                };
+                insim.Disconnected += (sender, e) =>
+                {
+                    var reason = e?.Reason.ToString() ?? "Unknown";
+                    logger.Log($"InSim disconnected (Reason={reason})");
+                };
+                insim.InSimError += (sender, e) =>
+                {
+                    if (e?.Exception != null)
+                    {
+                        logger.LogException(e.Exception, "InSimError raised by InSim client");
+                    }
+                    else
+                    {
+                        logger.LogError("InSimError raised by InSim client with no exception detail");
+                    }
+                };
+            }
+
+            insim.IS_NPL += (sender, e) => OnNewPlayer(e.Packet);
+            insim.IS_PLL += (sender, e) => aiController.OnPlayerLeave(e.Packet);
+            insim.IS_CNL += (sender, e) => aiController.OnConnectionLeave(e.Packet);
+            insim.IS_NCN += (sender, e) => aiController.OnNewConnection(e.Packet);
 
             // Car telemetry
-            insim.IS_AII += (_, e) => aiController.OnAII(e.Packet);
-            insim.IS_MCI += (_, e) => aiController.OnMCI(e.Packet);
+            insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
+            insim.IS_MCI += (sender, e) => aiController.OnMCI(e.Packet);
 
             // Button clicks
-            insim.IS_BTC += (_, e) => OnButtonClick(e.Packet);
-            insim.IS_BTT += (_, e) => OnButtonType(e.Packet);
+            insim.IS_BTC += (sender, e) => OnButtonClick(e.Packet);
+            insim.IS_BTT += (sender, e) => OnButtonType(e.Packet);
 
             // Objects and layout
-            insim.IS_AXM += (_, e) => visualizer.OnAXM(e.Packet);
-            insim.IS_CCH += (_, e) => OnCameraChange(e.Packet);
+            insim.IS_AXM += (sender, e) => visualizer.OnAXM(e.Packet);
+            insim.IS_CCH += (sender, e) => OnCameraChange(e.Packet);
             // System related
-            insim.IS_TINY += (_, e) => OnTiny(e.Packet);
-            insim.IS_VER += (_, e) => OnVersion(e.Packet);
-            insim.IS_STA += (_, e) => OnState(e.Packet);
-            insim.IS_AXI += (_, e) => OnAutoXInfo(e.Packet);
+            insim.IS_TINY += (sender, e) => OnTiny(e.Packet);
+            insim.IS_VER += (sender, e) => OnVersion(e.Packet);
+            insim.IS_STA += (sender, e) => OnState(e.Packet);
+            insim.IS_AXI += (sender, e) => OnAutoXInfo(e.Packet);
         }
 
 
