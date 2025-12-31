@@ -1,5 +1,6 @@
 # Changelog
 
+- Routed hard-braking clutch engagement through the clutch state machine so the pedal releases after braking instead of staying fully pressed while coasting.
 - Added rolling performance stats to AII/MCI handlers (gated by `DebugAI.PerformanceLogging`) so logs show active AI count, handler rates, and processing times when fleets grow large.
 - Merged MCI telemetry across packets and clear stale PLIDs so AI control keeps receiving car data when running large fleets (15+ bots).
 - Added config-driven throttling for active waypoint markers (`DebugAI.ActiveWaypointMarkers`, `DebugAI.ActiveWaypointIntervalMs`) to cut AXM spam and reduce InSim buffer overflows when many AIs are running.

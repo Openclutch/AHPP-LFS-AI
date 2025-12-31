@@ -190,10 +190,25 @@ namespace AHPP_AI.AI
         /// </summary>
         public void ApplyBrakingClutch(byte plid, int brakeValue)
         {
+            var hardBraking = brakeValue > config.BrakeBase * 2;
+
             // Apply clutch when braking hard
-            if (brakeValue > config.BrakeBase * 2)
+            if (hardBraking)
+            {
                 // Press clutch when hard braking to prevent stalling
                 currentClutchValues[plid] = config.ClutchFullyPressed;
+
+                // Hand over control to clutch state machine so release logic can run
+                if (clutchStates[plid] != ClutchState.Pressed) clutchStates[plid] = ClutchState.Pressing;
+                clutchTimers[plid] = DateTime.Now;
+            }
+            else if (clutchStates[plid] == ClutchState.Pressed || clutchStates[plid] == ClutchState.Pressing)
+            {
+                // Begin releasing once braking intensity drops
+                clutchStates[plid] = ClutchState.Releasing;
+                clutchTimers[plid] = DateTime.Now;
+                currentClutchValues[plid] = config.ClutchFullyPressed;
+            }
         }
 
         /// <summary>
