@@ -7,6 +7,8 @@
 - Fixed lane-change state to read the new transition path index before evaluating progress so merges don’t complete immediately and bounce back to the original lane.
 - Added throttled lane-change skip diagnostics (cooldown/interval/random/route missing) so highway merge attempts and their reasons surface in the logs.
 - Rebuild lane-change transitions at execution time using the AI’s current position/heading and a fresh entry point on the target lane so highway merges generate smooth pure-pursuit Bezier paths instead of jumping/overshooting.
+- Reduced false heading rejections for lane changes by comparing car heading to the lane’s forward vector (not just the waypoint position vector), so near-parallel lanes aren’t blocked by small lateral offsets.
+- During lane-change execution, we now pick the closest current-path index, bias the target a few nodes ahead, rebuild the merge path, and cap speed to the merge limit so the car follows a smoother arc instead of snapping and hitting walls.
 - Clutch release now waits for the requested gear change to be confirmed (while holding the pedal) before starting the release, matching the press-shift-detect-then-let-out flow.
 - While clutch-held during a shift, we now force-latch the requested gear before releasing so takeoff no longer bounces back to neutral/1 without actually selecting 1st.
 - Gearbox state now starts aligned to the spawn inputs (clutch in, 1st gear selected) so the initial launch no longer loops a 1→2 shift while still reporting gear 1.

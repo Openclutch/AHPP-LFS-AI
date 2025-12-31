@@ -976,6 +976,19 @@ namespace AHPP_AI.AI
                 var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
                 var headingError = Math.Abs(CoordinateUtils.CalculateHeadingError(carHeading, desiredHeading));
                 var headingErrorDeg = Math.Abs(CoordinateUtils.HeadingToDegrees(headingError));
+
+                // Also compare against the path’s forward vector to avoid penalizing parallel lanes that
+                // sit beside us but whose waypoint position is slightly behind/ahead.
+                var pathDir = GetDirectionVector(path, i);
+                var pathHeadingErrorDeg = 180.0;
+                if (Math.Abs(pathDir.x) > 0.0001 || Math.Abs(pathDir.y) > 0.0001)
+                {
+                    var pathHeading = CoordinateUtils.CalculateHeadingToTarget(pathDir.x, pathDir.y);
+                    var pathHeadingError = Math.Abs(CoordinateUtils.CalculateHeadingError(carHeading, pathHeading));
+                    pathHeadingErrorDeg = Math.Abs(CoordinateUtils.HeadingToDegrees(pathHeadingError));
+                }
+
+                headingErrorDeg = Math.Min(headingErrorDeg, pathHeadingErrorDeg);
                 if (headingErrorDeg > 180) headingErrorDeg = 360 - headingErrorDeg;
 
                 var distanceScore = distance;
@@ -1213,8 +1226,7 @@ namespace AHPP_AI.AI
                 currentPath = request.ToAlternate ? pathManager.MainRoute : targetPath;
 
             var car = Array.Find(allCars, c => c.PLID == plid);
-            var (fromIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
-            fromIndex = ClampIndex(currentPath, fromIndex);
+            var fromIndex = ClampIndex(currentPath, FindClosestIndex(currentPath, car));
 
             var preferredIndex = FindClosestIndex(targetPath, car);
             var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
@@ -1222,6 +1234,9 @@ namespace AHPP_AI.AI
                 car,
                 preferredIndex,
                 Math.Max(20, targetPath.Count - 1));
+
+            // Bias toward a few nodes ahead to reduce aggressive merges onto very near points.
+            entryIndex = Math.Min(targetPath.Count - 1, entryIndex + 3);
 
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
@@ -1241,6 +1256,10 @@ namespace AHPP_AI.AI
             }
 
             waypointFollower.SetPath(plid, transitionPath, 0);
+            var transitionSpeed = Math.Min(
+                config.LaneChangeMaxMergeSpeedKmh,
+                Math.Min(GetWaypointSpeedLimit(currentPath, fromIndex), GetWaypointSpeedLimit(targetPath, entryIndex)));
+            waypointFollower.SetManualTargetSpeed(plid, transitionSpeed);
             activeLaneChanges[plid] = new ActiveLaneChange
             {
                 TargetRoute = request.TargetRoute,
