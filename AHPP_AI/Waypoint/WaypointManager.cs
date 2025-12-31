@@ -180,7 +180,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Get the recorded route including metadata for editing.
         /// </summary>
-        public RecordedRoute GetRecordedRoute(string name)
+        public RecordedRoute? GetRecordedRoute(string name)
         {
             return recordedRoutes.TryGetValue(name, out var route) ? route : null;
         }

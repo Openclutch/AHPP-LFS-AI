@@ -11,11 +11,11 @@ namespace AHPP_AI.Waypoint
     /// </summary>
     public class BranchRouteInfo
     {
-        public string Name { get; set; }
-        public List<Util.Waypoint> Path { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public List<Util.Waypoint> Path { get; set; } = new List<Util.Waypoint>();
         public int StartIndex { get; set; }
         public int RejoinIndex { get; set; }
-        public RouteMetadata Metadata { get; set; }
+        public RouteMetadata Metadata { get; set; } = new RouteMetadata();
     }
 
     /// <summary>
@@ -31,14 +31,14 @@ namespace AHPP_AI.Waypoint
 
         public List<Util.Waypoint> SpawnRoute { get; private set; } = new List<Util.Waypoint>();
         public List<Util.Waypoint> MainRoute { get; private set; } = new List<Util.Waypoint>();
-        public BranchRouteInfo MainAlternateRoute { get; private set; }
+        public BranchRouteInfo? MainAlternateRoute { get; private set; }
         public IReadOnlyList<RouteValidationIssue> ValidationIssues => validationIssues;
 
         private readonly Dictionary<string, BranchRouteInfo> branches =
             new Dictionary<string, BranchRouteInfo>(StringComparer.OrdinalIgnoreCase);
 
-        public RouteMetadata SpawnRouteMetadata { get; private set; }
-        public RouteMetadata MainRouteMetadata { get; private set; }
+        public RouteMetadata SpawnRouteMetadata { get; private set; } = new RouteMetadata();
+        public RouteMetadata MainRouteMetadata { get; private set; } = new RouteMetadata();
 
         public PathManager(WaypointManager waypointManager, Logger logger, RouteLibrary routeLibrary)
         {
@@ -63,43 +63,37 @@ namespace AHPP_AI.Waypoint
 
             waypointManager.LoadTrafficRoute(config.SpawnRouteName);
             SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
-            var spawnMeta = waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
-            if (spawnMeta != null && spawnMeta.Type == RouteType.Unknown) spawnMeta.Type = RouteType.PitEntry;
-            if (spawnMeta != null && (!spawnMeta.AiWeight.HasValue || spawnMeta.AiWeight < 0))
-                spawnMeta.AiWeight = 0;
-            if (spawnMeta == null)
+            var spawnMetaCandidate = waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
+            if (spawnMetaCandidate != null && spawnMetaCandidate.Type == RouteType.Unknown) spawnMetaCandidate.Type = RouteType.PitEntry;
+            if (spawnMetaCandidate != null && (!spawnMetaCandidate.AiWeight.HasValue || spawnMetaCandidate.AiWeight < 0))
+                spawnMetaCandidate.AiWeight = 0;
+            RouteMetadata spawnMeta = spawnMetaCandidate ?? new RouteMetadata
             {
-                spawnMeta = new RouteMetadata
-                {
-                    Name = config.SpawnRouteName,
-                    Type = RouteType.PitEntry,
-                    AiWeight = 0,
-                    AiEnabled = false
-                };
-            }
+                Name = config.SpawnRouteName,
+                Type = RouteType.PitEntry,
+                AiWeight = 0,
+                AiEnabled = false
+            };
             SpawnRouteMetadata = spawnMeta;
             logger.Log(
-                $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta?.Type ?? RouteType.PitEntry}) with {SpawnRoute.Count} points");
+                $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta.Type}) with {SpawnRoute.Count} points");
 
             waypointManager.LoadTrafficRoute(config.MainRouteName);
             MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
-            var mainMeta = waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
-            if (mainMeta != null && mainMeta.Type == RouteType.Unknown) mainMeta.Type = RouteType.MainLoop;
-            if (mainMeta != null && (!mainMeta.AiWeight.HasValue || mainMeta.AiWeight <= 0))
-                mainMeta.AiWeight = 1.0;
-            if (mainMeta == null)
+            var mainMetaCandidate = waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
+            if (mainMetaCandidate != null && mainMetaCandidate.Type == RouteType.Unknown) mainMetaCandidate.Type = RouteType.MainLoop;
+            if (mainMetaCandidate != null && (!mainMetaCandidate.AiWeight.HasValue || mainMetaCandidate.AiWeight <= 0))
+                mainMetaCandidate.AiWeight = 1.0;
+            RouteMetadata mainMeta = mainMetaCandidate ?? new RouteMetadata
             {
-                mainMeta = new RouteMetadata
-                {
-                    Name = config.MainRouteName,
-                    Type = RouteType.MainLoop,
-                    AiWeight = 1.0,
-                    AiEnabled = true
-                };
-            }
+                Name = config.MainRouteName,
+                Type = RouteType.MainLoop,
+                AiWeight = 1.0,
+                AiEnabled = true
+            };
             MainRouteMetadata = mainMeta;
             logger.Log(
-                $"Loaded main route {config.MainRouteName} ({mainMeta?.Type ?? RouteType.MainLoop}) with {MainRoute.Count} points");
+                $"Loaded main route {config.MainRouteName} ({mainMeta.Type}) with {MainRoute.Count} points");
 
             // Load an optional alternate main lane (e.g., inner highway lane)
             if (!string.IsNullOrWhiteSpace(config.MainAlternateRouteName))
@@ -176,25 +170,21 @@ namespace AHPP_AI.Waypoint
                         $"Branch route {name} has no points and will be skipped.");
                     continue;
                 }
-                var metadata = waypointManager.GetRecordedRoute(name)?.Metadata;
-                if (metadata == null)
+                RouteMetadata metadata = waypointManager.GetRecordedRoute(name)?.Metadata ?? new RouteMetadata
                 {
-                    metadata = new RouteMetadata
-                    {
-                        Name = name,
-                        Type = RouteType.Detour,
-                        AiWeight = 1.0,
-                        AiEnabled = true
-                    };
-                }
-                else if (!metadata.AiWeight.HasValue || metadata.AiWeight <= 0)
+                    Name = name,
+                    Type = RouteType.Detour,
+                    AiWeight = 1.0,
+                    AiEnabled = true
+                };
+                if (!metadata.AiWeight.HasValue || metadata.AiWeight <= 0)
                 {
                     metadata.AiWeight = 1.0;
                 }
                 var nearestStart = FindNearestIndex(MainRoute, path[0]);
                 var nearestRejoin = FindNearestIndex(MainRoute, path[path.Count - 1]);
-                var startIndex = metadata?.AttachMainIndex ?? nearestStart;
-                var rejoinIndex = metadata?.RejoinMainIndex ?? nearestRejoin;
+                var startIndex = metadata.AttachMainIndex ?? nearestStart;
+                var rejoinIndex = metadata.RejoinMainIndex ?? nearestRejoin;
                 startIndex = ValidateBranchIndex(name, "attach", startIndex, nearestStart, MainRoute.Count);
                 rejoinIndex = ValidateBranchIndex(name, "rejoin", rejoinIndex, nearestRejoin, MainRoute.Count);
                 var branch = new BranchRouteInfo
@@ -206,10 +196,10 @@ namespace AHPP_AI.Waypoint
                     Metadata = metadata
                 };
                 branches[name] = branch;
-                if ((metadata?.Type == RouteType.AlternateMain || name.Equals(config.MainAlternateRouteName, StringComparison.OrdinalIgnoreCase)) &&
+                if ((metadata.Type == RouteType.AlternateMain || name.Equals(config.MainAlternateRouteName, StringComparison.OrdinalIgnoreCase)) &&
                     MainAlternateRoute == null)
                     MainAlternateRoute = branch;
-                logger.Log($"Loaded branch {name} ({metadata?.Type ?? RouteType.Detour}) with {path.Count} points " +
+                logger.Log($"Loaded branch {name} ({metadata.Type}) with {path.Count} points " +
                            $"starting near index {startIndex} and rejoining near {rejoinIndex}");
             }
 
@@ -240,7 +230,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Check if there is a branch starting at the given main route index.
         /// </summary>
-        public bool TryGetBranch(int mainIndex, out BranchRouteInfo branchInfo)
+        public bool TryGetBranch(int mainIndex, out BranchRouteInfo? branchInfo)
         {
             foreach (var b in branches.Values)
             {
@@ -257,7 +247,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Get the configured alternate main route (e.g., right-lane highway path) if available.
         /// </summary>
-        public BranchRouteInfo GetAlternateMainRoute()
+        public BranchRouteInfo? GetAlternateMainRoute()
         {
             return MainAlternateRoute;
         }
@@ -265,7 +255,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Find a branch by name for manual selection (case-insensitive).
         /// </summary>
-        public bool TryGetBranchByName(string name, out BranchRouteInfo branchInfo)
+        public bool TryGetBranchByName(string name, out BranchRouteInfo? branchInfo)
         {
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -424,13 +414,14 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         /// Validate and clamp branch indices to the bounds of the main route.
         /// </summary>
-        private void ValidateBranchIndices(BranchRouteInfo branch)
+        private void ValidateBranchIndices(BranchRouteInfo? branch)
         {
-            if (branch?.Path == null || branch.Path.Count == 0) return;
+            if (branch == null || branch.Path == null || branch.Path.Count == 0) return;
+            var branchName = branch.Name;
             if (MainRoute == null || MainRoute.Count == 0)
             {
                 AddValidationIssue(RouteValidationSeverity.Error,
-                    $"Branch {branch?.Name} cannot attach because the main route is empty.");
+                    $"Branch {branchName} cannot attach because the main route is empty.");
                 branch.StartIndex = 0;
                 branch.RejoinIndex = 0;
                 return;
@@ -441,7 +432,11 @@ namespace AHPP_AI.Waypoint
             branch.StartIndex = ValidateBranchIndex(branch.Name, "attach", branch.StartIndex, fallbackAttach, MainRoute.Count);
             branch.RejoinIndex = ValidateBranchIndex(branch.Name, "rejoin", branch.RejoinIndex, fallbackRejoin, MainRoute.Count);
 
-            if (branch.StartIndex == branch.RejoinIndex)
+            // For looped/alternate lanes the attach and rejoin can legitimately coincide; only warn otherwise.
+            var allowsSameIndex = (branch.Metadata?.IsLoop ?? false) ||
+                                  branch.Metadata?.Type == RouteType.AlternateMain;
+
+            if (branch.StartIndex == branch.RejoinIndex && !allowsSameIndex)
             {
                 AddValidationIssue(RouteValidationSeverity.Warning,
                     $"Branch {branch.Name} attach and rejoin at the same main index {branch.StartIndex}.");

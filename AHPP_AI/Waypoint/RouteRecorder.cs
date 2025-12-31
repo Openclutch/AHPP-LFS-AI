@@ -13,7 +13,7 @@ namespace AHPP_AI.Waypoint
     {
         private readonly Logger logger;
         private readonly LFSLayout layout;
-        private readonly DebugUI debugUI;
+        private readonly DebugUI? debugUI;
         private readonly RouteLibrary routeLibrary;
         private readonly UI.MainUI mainUI;
         private RecordedRoute currentRoute = new RecordedRoute();
@@ -28,7 +28,7 @@ namespace AHPP_AI.Waypoint
             captureInterval = Math.Max(0.1, meters);
         }
 
-        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI debugUI, RouteLibrary routeLibrary, UI.MainUI mainUI)
+        public RouteRecorder(Logger logger, LFSLayout layout, DebugUI? debugUI, RouteLibrary routeLibrary, UI.MainUI mainUI)
         {
             this.logger = logger;
             this.layout = layout;

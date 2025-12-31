@@ -49,7 +49,7 @@ namespace AHPP_AI.Waypoint
         public float Brake { get; set; }
         public float Steering { get; set; }
         public int Heading { get; set; }
-        public string Note { get; set; }
+        public string Note { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -84,8 +84,8 @@ namespace AHPP_AI.Waypoint
     /// </summary>
     public class SavedRoute
     {
-        public string Name { get; set; }
-        public string Type { get; set; }
-        public List<RoutePoint> Nodes { get; set; }
+        public string? Name { get; set; }
+        public string? Type { get; set; }
+        public List<RoutePoint>? Nodes { get; set; }
     }
 }

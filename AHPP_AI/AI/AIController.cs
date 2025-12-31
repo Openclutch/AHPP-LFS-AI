@@ -26,7 +26,7 @@ namespace AHPP_AI.AI
         private readonly AIConfig config;
 
         // Debug UI
-        private readonly DebugUI debugUI;
+        private readonly DebugUI? debugUI;
         private readonly AIDriver driver;
 
         // Engine state tracking
@@ -35,7 +35,7 @@ namespace AHPP_AI.AI
         private readonly InSimClient insim;
         private readonly LFSLayout lfsLayout;
         private readonly Logger logger;
-        private readonly AppConfig appConfig;
+        private readonly AppConfig? appConfig;
         private readonly WaypointFollower waypointFollower;
         private readonly WaypointManager waypointManager;
         private readonly PathManager pathManager;
@@ -79,7 +79,6 @@ namespace AHPP_AI.AI
 
         private float playerThrottle;
         private float playerBrake;
-        private float playerSteering;
 
         private byte playerPLID;
         private DateTime lastPerformanceLog = DateTime.UtcNow;
@@ -101,7 +100,7 @@ namespace AHPP_AI.AI
             LFSLayout lfsLayout,
             RouteLibrary routeLibrary,
             bool debugEnabled = false,
-            AppConfig appConfig = null,
+            AppConfig? appConfig = null,
             bool autoVisualizeWaypointsEnabled = false,
             bool insimDebugLogging = false,
             bool activeWaypointMarkersEnabled = true,
@@ -394,7 +393,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Refresh available route selection buttons based on the current track/layout context.
         /// </summary>
-        public void RefreshRouteOptions(string preferredSelection = null)
+        public void RefreshRouteOptions(string? preferredSelection = null)
         {
             var selection = string.IsNullOrWhiteSpace(preferredSelection)
                 ? recordingRouteName
@@ -472,7 +471,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Add a route name to the provided list if it is valid and not already present.
         /// </summary>
-        private static void AddOption(List<string> options, string name)
+        private static void AddOption(List<string> options, string? name)
         {
             if (options == null) return;
             if (string.IsNullOrWhiteSpace(name)) return;
@@ -1226,6 +1225,11 @@ namespace AHPP_AI.AI
                 currentPath = request.ToAlternate ? pathManager.MainRoute : targetPath;
 
             var car = Array.Find(allCars, c => c.PLID == plid);
+            if (car == null)
+            {
+                pendingLaneChanges.Remove(plid);
+                return;
+            }
             var fromIndex = ClampIndex(currentPath, FindClosestIndex(currentPath, car));
 
             var preferredIndex = FindClosestIndex(targetPath, car);
@@ -1895,9 +1899,10 @@ namespace AHPP_AI.AI
                 logger.LogWarning($"No branch named {branchName} available for lane change.");
                 return false;
             }
+            if (branchInfo == null) return false;
 
             var car = Array.Find(allCars, c => c.PLID == plid);
-            if (car.PLID == 0)
+            if (car == null || car.PLID == 0)
             {
                 logger.LogWarning($"Cannot switch AI {plid} to {branchName}: no MCI data.");
                 return false;
@@ -2284,7 +2289,7 @@ namespace AHPP_AI.AI
             if (branchInfo.Path == null || branchInfo.Path.Count == 0) return;
 
             var car = Array.Find(allCars, c => c.PLID == plid);
-            if (car.PLID == 0) return;
+            if (car == null || car.PLID == 0) return;
 
             if (activeBranchSelections.TryGetValue(plid, out var activeBranch) &&
                 activeBranch?.Name != null &&
@@ -2316,7 +2321,7 @@ namespace AHPP_AI.AI
             if (!currentRoute.TryGetValue(plid, out var routeLabel) || routeLabel != "branch") return;
 
             var car = Array.Find(allCars, c => c.PLID == plid);
-            if (car.PLID == 0) return;
+            if (car == null || car.PLID == 0) return;
 
             var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
             waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
@@ -2494,7 +2499,7 @@ namespace AHPP_AI.AI
                                                     StringComparison.OrdinalIgnoreCase));
                         var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
 
-                        if (pathManager.TryGetBranch(targetIndex, out var branchInfo))
+                        if (pathManager.TryGetBranch(targetIndex, out var branchInfo) && branchInfo != null)
                         {
                             var innerBlocked = IsInnerBranch(branchInfo) &&
                                                (!hasAssignment ||
@@ -2633,7 +2638,7 @@ namespace AHPP_AI.AI
             }
         }
 
-        private void OnOutGauge(object sender, OutGaugeEventArgs e)
+        private void OnOutGauge(object? sender, OutGaugeEventArgs e)
         {
             if (e.PLID == playerPLID)
             {
@@ -2798,7 +2803,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Handle layout editor selection changes to map layout objects back to route nodes.
         /// </summary>
-        public void OnLayoutSelectionChanged(ObjectInfo selectedObject)
+        public void OnLayoutSelectionChanged(ObjectInfo? selectedObject)
         {
             if (selectedObject == null)
             {
@@ -2827,11 +2832,12 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Persist moved layout object coordinates back into the selected route node.
         /// </summary>
-        public void OnLayoutObjectMoved(ObjectInfo movedObject)
+        public void OnLayoutObjectMoved(ObjectInfo? movedObject)
         {
             if (movedObject == null) return;
 
             var route = GetEditableRoute();
+            if (route == null) return;
             if (!TryGetSelectedNodeIndex(route, out var index)) return;
 
             route.Nodes[index].X = movedObject.X / 16.0;
@@ -2850,6 +2856,7 @@ namespace AHPP_AI.AI
         public void UpdateSelectedNodeSpeed(double speedKmh)
         {
             var route = GetEditableRoute();
+            if (route == null) return;
             if (!TryGetSelectedNodeIndex(route, out var index)) return;
 
             var clamped = Math.Max(0, speedKmh);
@@ -2891,6 +2898,7 @@ namespace AHPP_AI.AI
         private void ApplySelectedNodeMetadata(Action<RecordedRoute, int> updater, string label)
         {
             var route = GetEditableRoute();
+            if (route == null) return;
             if (!TryGetSelectedNodeIndex(route, out var index)) return;
 
             updater(route, index);
@@ -2901,7 +2909,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Get the recorded route currently selected for visualization and editing.
         /// </summary>
-        private RecordedRoute GetEditableRoute()
+        private RecordedRoute? GetEditableRoute()
         {
             var route = waypointManager.GetRecordedRoute(visualizationRouteName);
             if (route != null) return route;
@@ -2913,7 +2921,7 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Try to resolve the selected node index from the current layout selection state.
         /// </summary>
-        private bool TryGetSelectedNodeIndex(RecordedRoute route, out int index)
+        private bool TryGetSelectedNodeIndex(RecordedRoute? route, out int index)
         {
             index = 0;
             if (route == null || route.Nodes == null || route.Nodes.Count == 0)

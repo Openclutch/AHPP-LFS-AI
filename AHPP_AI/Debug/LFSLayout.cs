@@ -33,7 +33,8 @@ namespace AHPP_AI.Debug
 
         // Track active waypoint marker per PLID to remove old ones
         private readonly Dictionary<byte, ObjectInfo> activeWaypointMarkerIds = new Dictionary<byte, ObjectInfo>();
-        private readonly Dictionary<byte, (int X, int Y)> lastActiveWaypointPos = new Dictionary<byte, (int X, int Y)>();
+        private readonly Dictionary<byte, (int X, int Y, byte RouteIndex)> lastActiveWaypointPos =
+            new Dictionary<byte, (int X, int Y, byte RouteIndex)>();
 
         private readonly InSimClient insim;
         public readonly List<ObjectInfo> layoutObjects = new List<ObjectInfo>();
@@ -44,12 +45,12 @@ namespace AHPP_AI.Debug
         /// <summary>
         /// Fired when the layout editor selection changes (Shift+U selection updates).
         /// </summary>
-        public event Action<ObjectInfo> LayoutSelectionChanged;
+        public event Action<ObjectInfo?>? LayoutSelectionChanged;
 
         /// <summary>
         /// Fired when a layout object is moved in the editor (PMO_MOVE_MODIFY).
         /// </summary>
-        public event Action<ObjectInfo> LayoutObjectMoved;
+        public event Action<ObjectInfo?>? LayoutObjectMoved;
 
         /// <summary>
         ///     Initializes a new instance of the LFSLayout
@@ -260,7 +261,7 @@ namespace AHPP_AI.Debug
         ///     Place objects to visualize a waypoint with an optional heading for arrows
         /// </summary>
         private void PlaceWaypointCircle(byte plid, float centerX, float centerY, float centerZ, int routeIndex,
-            byte heading = 0, List<ObjectInfo> batch = null)
+            byte heading = 0, List<ObjectInfo>? batch = null)
         {
             // Ensure we have storage for this player's objects
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
@@ -297,7 +298,7 @@ namespace AHPP_AI.Debug
         /// Place a chalk arrow marker for a recorded route node to support manual editing.
         /// </summary>
         private void PlaceEditableWaypoint(byte plid, RoutePoint node, byte heading, byte objectType,
-            byte flags = 0, List<ObjectInfo> batch = null)
+            byte flags = 0, List<ObjectInfo>? batch = null)
         {
             if (!placedObjectsByPlid.ContainsKey(plid)) placedObjectsByPlid[plid] = new List<ObjectInfo>();
 
@@ -374,8 +375,8 @@ namespace AHPP_AI.Debug
         /// <summary>
         ///     Place an object in the game world
         /// </summary>
-        private ObjectInfo PlaceObject(byte plid, byte objectType, float xMeters, float yMeters, float zMeters,
-            byte heading = 0, byte flags = 0, List<ObjectInfo> batch = null)
+        private ObjectInfo? PlaceObject(byte plid, byte objectType, float xMeters, float yMeters, float zMeters,
+            byte heading = 0, byte flags = 0, List<ObjectInfo>? batch = null)
         {
             try
             {
@@ -469,9 +470,10 @@ namespace AHPP_AI.Debug
             try
             {
                 // Skip if the active waypoint hasn't changed to avoid spamming identical objects.
-                var currentPos = (waypoint.Position.X, waypoint.Position.Y);
+                var currentPos = (waypoint.Position.X, waypoint.Position.Y, waypoint.RouteIndex);
                 if (lastActiveWaypointPos.TryGetValue(plid, out var lastPos) &&
-                    lastPos.X == currentPos.X && lastPos.Y == currentPos.Y)
+                    lastPos.X == currentPos.X && lastPos.Y == currentPos.Y &&
+                    lastPos.RouteIndex == currentPos.RouteIndex)
                     return;
 
                 // Remove the previous active waypoint marker if it exists

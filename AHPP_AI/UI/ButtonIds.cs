@@ -21,7 +21,7 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Calculate an ID within the primary UI range.
         /// </summary>
-        public static byte Main(byte offset)
+        public static byte MainId(byte offset)
         {
             return ValidateRange(MainStart, MainEnd, offset);
         }

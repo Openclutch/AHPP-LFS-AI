@@ -130,7 +130,10 @@ namespace AHPP_AI.Waypoint
         /// </summary>
         public void Save(RecordedRoute route)
         {
-            var file = GetRoutePath(route?.Metadata?.Name ?? "route");
+            if (route == null) throw new ArgumentNullException(nameof(route));
+
+            var routeName = route.Metadata?.Name ?? "route";
+            var file = GetRoutePath(routeName);
             Save(route, file);
         }
 
@@ -204,6 +207,9 @@ namespace AHPP_AI.Waypoint
             return CreateTemplate(name);
         }
 
+        /// <summary>
+        /// Rehydrate a legacy saved route into the current recorded route format with defaults.
+        /// </summary>
         private RecordedRoute ConvertLegacy(SavedRoute saved, string fallbackName)
         {
             var type = ParseTypeString(saved.Type);
@@ -215,7 +221,10 @@ namespace AHPP_AI.Waypoint
             };
         }
 
-        private RouteType ParseTypeString(string type)
+        /// <summary>
+        /// Map a persisted type string to a <see cref="RouteType"/>, defaulting to Unknown.
+        /// </summary>
+        private RouteType ParseTypeString(string? type)
         {
             if (string.IsNullOrWhiteSpace(type)) return RouteType.Unknown;
             switch (type.ToLowerInvariant())
@@ -360,7 +369,7 @@ namespace AHPP_AI.Waypoint
         /// Load and normalize all routes within a directory, avoiding duplicates by name.
         /// </summary>
         private void LoadRoutesFromDirectory(string directory, List<RecordedRoute> routes, HashSet<string> seenNames,
-            List<string> duplicateNames = null)
+            List<string>? duplicateNames = null)
         {
             try
             {

@@ -11,17 +11,17 @@ namespace AHPP_AI.Util
     public class AppConfig
     {
         private readonly string filePath;
-        private readonly Logger logger;
+        private readonly Logger? logger;
         private readonly Dictionary<string, Dictionary<string, string>> sections =
             new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
-        private AppConfig(string filePath, Logger logger)
+        private AppConfig(string filePath, Logger? logger)
         {
             this.filePath = filePath;
             this.logger = logger;
         }
 
-        public static AppConfig Load(string path, Logger logger = null)
+        public static AppConfig Load(string path, Logger? logger = null)
         {
             var config = new AppConfig(path, logger);
             if (!File.Exists(path))
@@ -66,19 +66,19 @@ namespace AHPP_AI.Util
 
         public int GetInt(string section, string key, int defaultValue)
         {
-            var text = GetString(section, key, null);
+            var text = GetString(section, key, string.Empty);
             return int.TryParse(text, out var result) ? result : defaultValue;
         }
 
         public double GetDouble(string section, string key, double defaultValue)
         {
-            var text = GetString(section, key, null);
+            var text = GetString(section, key, string.Empty);
             return double.TryParse(text, out var result) ? result : defaultValue;
         }
 
         public bool GetBool(string section, string key, bool defaultValue)
         {
-            var text = GetString(section, key, null);
+            var text = GetString(section, key, string.Empty);
             if (string.IsNullOrWhiteSpace(text)) return defaultValue;
 
             if (int.TryParse(text, out var intVal))

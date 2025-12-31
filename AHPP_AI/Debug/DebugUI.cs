@@ -250,11 +250,11 @@ namespace AHPP_AI.Debug
         /// <param name="aiStates">Optional dictionary with high-level AI state descriptions</param>
         public void UpdateDebugInfo(
             CompCar[] allCars,
-            Dictionary<byte, int> aiTargetWaypointIndices = null,
-            Dictionary<byte, List<Util.Waypoint>> aiPaths = null,
-            Dictionary<byte, double> aiTargetSpeeds = null,
-            Dictionary<byte, string> aiControlInfo = null,
-            Dictionary<byte, string> aiStates = null)
+            Dictionary<byte, int>? aiTargetWaypointIndices = null,
+            Dictionary<byte, List<Util.Waypoint>>? aiPaths = null,
+            Dictionary<byte, double>? aiTargetSpeeds = null,
+            Dictionary<byte, string>? aiControlInfo = null,
+            Dictionary<byte, string>? aiStates = null)
         {
             // Check if we need to update (throttle updates to reduce bandwidth)
             if ((DateTime.Now - lastDebugUpdate).TotalMilliseconds < DEBUG_UPDATE_INTERVAL_MS)
@@ -293,12 +293,12 @@ namespace AHPP_AI.Debug
         /// </summary>
         private void UpdatePlayerDebugInfo(
             CompCar[] allCars,
-            Dictionary<byte, List<Util.Waypoint>> allPaths,
-            Dictionary<byte, double> targetSpeeds = null)
+            Dictionary<byte, List<Util.Waypoint>>? allPaths,
+            Dictionary<byte, double>? targetSpeeds = null)
         {
             // Get player car data from MCI
             var car = Array.Find(allCars, c => c.PLID == playerPLID);
-            if (car.PLID == 0) // No MCI data yet for player PLID
+            if (car == null || car.PLID == 0) // No MCI data yet for player PLID
                 return;
 
             // Calculate current values
@@ -447,25 +447,28 @@ namespace AHPP_AI.Debug
             Dictionary<byte, int> aiTargetWaypointIndices,
             Dictionary<byte, List<Util.Waypoint>> aiPaths,
             Dictionary<byte, double> aiTargetSpeeds,
-            Dictionary<byte, string> aiControlInfo = null,
-            Dictionary<byte, string> aiStates = null)
+            Dictionary<byte, string>? aiControlInfo = null,
+            Dictionary<byte, string>? aiStates = null)
         {
             if (!TryGetTrackedAiData(allCars, aiTargetWaypointIndices, aiPaths, aiTargetSpeeds,
-                    out var car, out var path, out var targetIndex))
+                    out var car, out var path, out var targetIndex) || car == null || path == null)
             {
                 return;
             }
 
             try
             {
+                var resolvedCar = car;
+                var resolvedPath = path;
+
                 // Calculate current values
-                var speedKmh = 360.0 * car.Speed / 32768.0;
-                var carX = car.X / 65536.0;
-                var carY = car.Y / 65536.0;
-                var carZ = car.Z / 65536.0;
+                var speedKmh = 360.0 * resolvedCar.Speed / 32768.0;
+                var carX = resolvedCar.X / 65536.0;
+                var carY = resolvedCar.Y / 65536.0;
+                var carZ = resolvedCar.Z / 65536.0;
 
                 // Get current waypoint info
-                var currentWaypoint = path[targetIndex];
+                var currentWaypoint = resolvedPath[targetIndex];
                 var wpX = currentWaypoint.Position.X / 65536.0;
                 var wpY = currentWaypoint.Position.Y / 65536.0;
 
@@ -475,8 +478,8 @@ namespace AHPP_AI.Debug
                 var distance = Math.Sqrt(dx * dx + dy * dy);
 
                 // Calculate heading and direction in degrees (0-359)
-                var heading = car.Heading * 360.0 / 65536.0 % 360.0;
-                var direction = car.Direction * 360.0 / 65536.0 % 360.0;
+                var heading = resolvedCar.Heading * 360.0 / 65536.0 % 360.0;
+                var direction = resolvedCar.Direction * 360.0 / 65536.0 % 360.0;
 
                 // Calculate angle between heading and direction
                 var angle = (heading - direction) % 360.0;
@@ -488,7 +491,7 @@ namespace AHPP_AI.Debug
 
                 // Calculate desired heading to waypoint using utility class
                 var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
-                var headingError = CoordinateUtils.CalculateHeadingError(car.Heading, desiredHeading);
+                var headingError = CoordinateUtils.CalculateHeadingError(resolvedCar.Heading, desiredHeading);
 
                 // Convert to degrees for display
                 var headingErrorDeg = headingError * 360.0 / 65536.0;
@@ -501,12 +504,12 @@ namespace AHPP_AI.Debug
                 UpdateDebugButton(aiButtonIds["Angle"], $"AI_ANG: {angle:F1}°");
 
                 // Steering angle - estimated from the difference between heading and direction
-                if (car.Speed > 0)
+                if (resolvedCar.Speed > 0)
                     UpdateDebugButton(aiButtonIds["Steering"], $"AI_STR: {angle:F1}°");
                 else
                     UpdateDebugButton(aiButtonIds["Steering"], "AI_STR: 0.0°");
 
-                UpdateDebugButton(aiButtonIds["Waypoint"], $"AI_WP: {targetIndex}/{path.Count - 1}");
+                UpdateDebugButton(aiButtonIds["Waypoint"], $"AI_WP: {targetIndex}/{resolvedPath.Count - 1}");
                 UpdateDebugButton(aiButtonIds["Distance"], $"AI_DST: {distance:F1}m");
                 UpdateDebugButton(aiButtonIds["TargetSpeed"], $"AI_TGT: {targetSpeed:F1} km/h");
                 UpdateDebugButton(aiButtonIds["HeadingError"], $"AI_ERR: {headingErrorDeg:F1}°");
@@ -537,11 +540,11 @@ namespace AHPP_AI.Debug
             Dictionary<byte, int> aiTargetWaypointIndices,
             Dictionary<byte, List<Util.Waypoint>> aiPaths,
             Dictionary<byte, double> aiTargetSpeeds,
-            out CompCar car,
-            out List<Util.Waypoint> path,
+            out CompCar? car,
+            out List<Util.Waypoint>? path,
             out int targetIndex)
         {
-            car = default;
+            car = null;
             path = null;
             targetIndex = -1;
 
@@ -552,12 +555,13 @@ namespace AHPP_AI.Debug
                 if (aiTargetWaypointIndices.Count == 0 || aiPaths.Count == 0) { aiPLID = 0; return false; }
                 if (allCars == null || allCars.Length == 0) return false;
 
-                car = Array.Find(allCars, c => c.PLID == aiPLID);
-                if (car.PLID == 0)
+                var foundCar = Array.Find(allCars, c => c.PLID == aiPLID);
+                if (foundCar == null || foundCar.PLID == 0)
                 {
                     aiPLID = 0;
                     return false;
                 }
+                car = foundCar;
 
                 if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out targetIndex) ||
                     targetIndex < 0)
@@ -566,11 +570,12 @@ namespace AHPP_AI.Debug
                     return false;
                 }
 
-                if (!aiPaths.TryGetValue(aiPLID, out path) || path == null || path.Count == 0)
+                if (!aiPaths.TryGetValue(aiPLID, out var resolvedPath) || resolvedPath == null || resolvedPath.Count == 0)
                 {
                     aiPLID = 0;
                     return false;
                 }
+                path = resolvedPath;
 
                 if (targetIndex >= path.Count)
                 {
@@ -586,7 +591,7 @@ namespace AHPP_AI.Debug
 
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // Swallow transient errors when AI is removed mid-update; we reset tracking and continue.
                 aiPLID = 0;

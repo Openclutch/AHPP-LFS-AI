@@ -1,120 +1,133 @@
 Product Requirements Document: AI Racing Driver System for Live for Speed
 Overview
-The AI Racing Driver System is a comprehensive solution that enables autonomous racing vehicles in the Live for Speed (LFS) racing simulation. The system controls AI cars to navigate tracks, follow racing lines, handle vehicle dynamics, and simulate realistic racing behavior without human input.
+The AI Racing Driver System provides autonomous driving for LFS vehicles using InSim control packets, recorded route data, and real‑time telemetry. It supports multi‑route traffic networks (main, alternate, pit entry, detours), configurable lane changes, recovery behaviors, and in‑game visualization/debug tooling. The system also manages AI population counts and route allocations based on live server occupancy.
 
 Core Features
-1. AI Navigation and Route Following
+1. Route Capture, Management, and Validation
+Recorded Routes (JSON): Capture player‑driven routes with per‑node metadata (position, speed, heading, throttle, brake, steering).
 
-Waypoint Navigation: AI vehicles follow track-derived waypoints with appropriate cornering speeds and racing lines
-Track Learning: System extracts waypoints from track maps or LYT files to create optimized racing paths
-Dynamic Path Selection: Intelligently selects appropriate paths based on car position and heading
-Smooth Curve Transitions: Uses Bezier curves for smooth entry into racing lines
+Route Metadata: Track type (main loop, alternate main, pit entry, detour), attach/rejoin indices, default speed limits, AI weights/targets, and enablement.
 
-2. Vehicle Control Systems
+Route Library: Load, and normalize, the standard routes are (Main Route, Main Alt Route, Pit to Main). Only Main Route and Pit to Main are required for AI to drive on it.
 
-Realistic Driving Controls: Manages throttle, brake, steering, gears, and clutch with human-like inputs
-Engine Management: Handles engine starting, stall recovery, and appropriate throttle application
-Gearbox Control: Implements realistic shifting with proper clutch coordination and timing
-Vehicle Recovery: Detects and recovers from incidents like wall collisions and being stuck
+Route Validation: Validate recorded routes on load and surface issues via logging + chat summaries.
 
-3. Telemetry and Feedback
+2. Multi‑Route Navigation
+Main + Alternate Lanes: Support a primary route and optional alternate main lane that is two main loops, that can be merged between the two lanes if aligned close enough.
 
-Vehicle State Monitoring: Tracks speed, position, heading, progress, and other telemetry data
-Performance Analytics: Measures progress toward waypoints and ability to maintain target speeds
-Debug Visualization: Displays real-time data on vehicle state and decision-making processes
-Logging System: Records detailed logs of all AI operations for analysis and troubleshooting 
+Detour / Branch Routes: Dynamically discover detours from recorded routes and integrate into the path manager.
 
-4. Physics-Aware Racing Behavior
+Spawn/Pit Entry Routes: Dedicated spawn route used for pit entry or staging that can be joined by closest point from spawning car to the main route.
 
-Speed Management: Calculates appropriate speeds for different track segments based on curvature
-Cornering Optimization: Adjusts steering, throttle, and braking for optimal cornering performance
-Stall Prevention: Manages clutch engagement to prevent stalling during low-speed maneuvers
-Adaptive Steering: Calculates steering angles based on heading errors with progressive control
+3. Dynamic Lane Change System
+Probabilistic Merges: Configurable merge chance, cooldowns, and check intervals for moving between main/alternate lanes.
+
+Safety Checks: Parallel distance, heading alignment, and speed thresholds guard merges.
+
+Signaling: Turn‑signal lead time and minimum duration before committing lane transitions and turns off when the merge is complete.
+
+Transition Paths: Generate a temporary interpolation path for smooth lane changes.
+
+4. Vehicle Control + Physics‑Aware Driving
+Pure Pursuit Steering: Optional pure‑pursuit controller with speed‑scaled lookahead and steering damping.
+
+Gearbox/Clutch Management: Human‑like shifts, clutch timing, and stall prevention.
+
+Speed + Waypoint Control: Speed targeting per waypoint with dynamic proximity thresholds.
+
+5. Collision Awareness & Recovery
+Forward Collision Detection: Detect vehicles ahead within a corridor and apply stopping behavior.
+
+Recovery State Machine: Multi‑stage reverse/steer/forward recovery with escalation to pit/spectate.
+
+6. Telemetry, Debugging & Visualization
+InSim UI Panels: Controls for AI spawning, recording, route selection, layout visualization, and InSim status.
+
+Layout Visualization: Render waypoints/routes into LFS layout objects with sampling to stay under limits.
+
+Active Waypoint Markers: Optional periodic marker placement during runtime.
+
+Performance Tracking: Rolling performance snapshots for MCI/AII handling.
+
+7. AI Population Management
+Auto‑Populate: Scale AI count based on human occupancy, min/max caps, and fill ratio.
+
+Route Distribution: Allocate AI across routes using metadata targets/weights.
 
 Technical Requirements
-Integration with Live for Speed
+InSim Integration
+Control: Use IS_AIC for throttle/brake/steering/gear/clutch and ignition.
 
-InSim Protocol: Full compatibility with LFS InSim protocol for bidirectional communication
-Car Control Interface: Use IS_AIC packets to send control inputs to AI vehicles
-Telemetry Reception: Process IS_MCI and IS_AII packets for vehicle data
-Object Visualization: Support for track object placement and waypoint visualization
+Telemetry: Process IS_MCI and IS_AII for live car state and AI info.
+
+Layout Objects: Use IS_AXM for waypoint/route visualization and markers.
 
 System Architecture
+Modular components: AIController, WaypointManager, RouteLibrary, PathManager, AIDriver, AIPopulationManager, UI/Debug UI.
 
-Modular Design: Maintain separation of concerns with specialized components
-Real-time Processing: Handle control decisions with minimal latency (<100ms)
-Error Handling: Robust error detection and recovery throughout the system
-Thread Safety: Proper synchronization for concurrent operations
+Thread‑safe reconciliation for AI population adjustments.
 
-User Interface
-
-Debug UI: Interactive overlay showing AI state, waypoints, and performance metrics
-Command Interface: Allow basic controls for spawning and managing AI cars
-Visualization Tools: Display racing lines, coordinate systems, and navigation paths
-Logging Interface: Provide detailed logs with configurable verbosity
-
-Functional Requirements
-Waypoint Management
-
-Extract racing lines from track images or LYT files
-Calculate optimal speeds for different track segments
-Generate smooth transition paths between waypoints
-Support multiple racing lines (inside, outside, optimal)
-
-Vehicle Control
-
-Manage throttle application based on target speed and track position
-Apply appropriate braking force approaching corners
-Execute realistic gear changes with proper clutch coordination
-Implement progressive steering with direction memory to prevent oscillation
-
-Recovery Systems
-
-Detect when vehicle is stuck against walls or obstacles
-Implement multi-stage recovery procedure (reverse, turn, move forward)
-Recover from engine stalls with realistic startup sequence
-Advance to next waypoint when progress is impossible
-
-Debugging and Development
-
-Provide real-time telemetry visualization
-Display waypoints and racing lines in-game
-Log all significant events and decisions
-Enable dynamic configuration adjustments
+Sub‑100ms control loop targets with configurable log windows.
 
 Configuration Requirements
-AI Behavior Parameters
+Population: max players, reserved slots, AI fill ratio, batch sizes.
 
-Throttle/Brake Settings: Base values and response curves
-Steering Parameters: Sensitivity, limits, and centering values
-Gearbox Settings: Shift timing, clutch control, and speed thresholds
-Recovery Parameters: Timeout thresholds and attempt limits
+Routes: main/alt/spawn route names, detour discovery.
 
-Track and Navigation Settings
+Lane Change: merge chance, cooldowns, safety bounds, signaling timing.
 
-Waypoint Thresholds: Distance required to consider waypoint reached
-Speed Profiles: Cornering speed calculation parameters
-Progress Monitoring: Minimum required progress and check intervals
-Path Generation: Curve smoothness and sampling intervals
+Steering: damping, deadzone, pure pursuit tuning.
+
+Recovery: stall detection thresholds and back‑off parameters.
+
+Visualization: sampling detail, active markers, auto visualize.
+
+Functional Requirements
+Route Recording + Editing
+Record routes with speed/heading snapshots and optional speed limits.
+
+Save to JSON under route library; auto‑generate templates when missing.
+
+Support attach/rejoin indices to define branch mapping.
+
+Navigation
+Follow recorded routes with speed‑aware waypoint thresholds.
+
+Support alternate main lane and detour branch selection.
+
+Lane Change
+Evaluate merge feasibility based on geometry, speed, and timing windows.
+
+Signal before lane change and transition through generated path.
+
+Return to main route when branch requirements end.
+
+AI Control + Safety
+Implement pure pursuit and heading‑error steering fallback.
+
+Detect potential collisions and stop as necessary.
+
+Recover from stalls and stuck conditions with multi‑stage behavior.
+
+UI & Debugging
+In‑game UI controls for AI spawning, auto‑population toggle, route recording, layout controls.
+
+Visualize active route selections and layout nodes with sampling controls.
+
+Performance logging for MCI/AII processing.
 
 Performance Requirements
+Support multiple AI concurrently with auto‑population scaling.
 
-Support for multiple simultaneous AI vehicles
-Maintain consistent racing line following within 2 meters
-Execute recovery maneuvers within 5 seconds
-Process telemetry and send control updates at minimum 10Hz
+Maintain waypoint tracking within configurable threshold multipliers.
 
-Future Enhancement Opportunities
+Recovery actions complete within configured windows.
 
-AI Competition: Enable AI cars to race against each other with passing logic
-Learning System: Implement reinforcement learning to improve lap times
-Weather Adaptation: Adjust driving behavior based on track conditions
-Advanced Racing Tactics: Implement defensive/offensive racing maneuvers
-Performance Profiles: Create different skill levels from novice to professional
+Telemetry processing at or above 10Hz.
 
-Constraints and Limitations
+Constraints & Limitations
+Must operate within LFS InSim packet limits and layout object caps.
 
-System must operate within the constraints of the LFS InSim protocol
-AI behavior limited by the physics simulation capabilities of LFS
-Visualizations constrained to available object types in LFS
-Performance depends on available computational resources and network latency
+Visualization constrained by LFS layout object limits (sampling required).
+
+AI behavior bounded by LFS physics and network latency.

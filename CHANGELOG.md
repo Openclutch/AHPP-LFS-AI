@@ -1,5 +1,11 @@
 # Changelog
 
+- Cleared nullable warnings across layout visualization, route loading, path validation, and debug UI by marking optional inputs nullable and guarding missing AI/route data.
+- Relaxed branch validation so looped/alternate lanes can use the same attach/rejoin index without spurious warnings when both lanes form closed loops.
+- Active waypoint marker now re-places the cone when switching routes even at the same coordinates, so merge points between main and alternate lanes show a pylon instead of being skipped as duplicates.
+- Cleared nullable warnings by marking optional AI dependencies/config/loggers as nullable, guarding missing OutGauge/MCI data, and allowing layout/debug events to handle null payloads safely.
+- Defaulted route metadata/branch models to safe values and relaxed path/route helpers to accept nulls so route loading/validation no longer emits nullability warnings.
+- Renamed the ButtonIds main helper to avoid false entry point detection during builds and aligned config parsing defaults to stop null literal warnings.
 - Braking clutch helper now only releases after a braking-engaged press, so mid-shift clutch cycles aren't cancelled and logs no longer show an upshift request followed by a release back in the previous gear.
 - Allowed highway lane-change checks even when AI are assigned to the main route so they will merge onto the alternate lane again and emit the expected lane-change logs.
 # Changelog
@@ -9,6 +15,7 @@
 - Rebuild lane-change transitions at execution time using the AI’s current position/heading and a fresh entry point on the target lane so highway merges generate smooth pure-pursuit Bezier paths instead of jumping/overshooting.
 - Reduced false heading rejections for lane changes by comparing car heading to the lane’s forward vector (not just the waypoint position vector), so near-parallel lanes aren’t blocked by small lateral offsets.
 - During lane-change execution, we now pick the closest current-path index, bias the target a few nodes ahead, rebuild the merge path, and cap speed to the merge limit so the car follows a smoother arc instead of snapping and hitting walls.
+- Engine restart recovery now hard-resets gearbox state to 1st gear (clutch held) before validation, preventing immediate upshifts to 4th and repeated stalls after a restart.
 - Clutch release now waits for the requested gear change to be confirmed (while holding the pedal) before starting the release, matching the press-shift-detect-then-let-out flow.
 - While clutch-held during a shift, we now force-latch the requested gear before releasing so takeoff no longer bounces back to neutral/1 without actually selecting 1st.
 - Gearbox state now starts aligned to the spawn inputs (clutch in, 1st gear selected) so the initial launch no longer loops a 1→2 shift while still reporting gear 1.

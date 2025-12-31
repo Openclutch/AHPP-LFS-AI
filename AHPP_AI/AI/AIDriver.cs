@@ -77,7 +77,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
-        private Action<byte> recoveryFailedHandler;
+        private Action<byte>? recoveryFailedHandler;
         private readonly Logger logger;
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
         private readonly Dictionary<byte, double> stuckPositionY = new Dictionary<byte, double>();
@@ -568,9 +568,9 @@ namespace AHPP_AI.AI
             var isRunning = engineRunning.TryGetValue(plid, out var running) && running;
             if (isRunning && engineStartStates[plid] == EngineStartState.Normal)
             {
-                EnterRecoveryCooldown(plid, "Engine restarted");
-                return false;
-            }
+                    EnterRecoveryCooldown(plid, "Engine restarted", true);
+                    return false;
+                }
 
             var steering = CalculateHeadingBasedSteering(headingError);
             var throttleBoost = CalculateStallRecoveryThrottleBoost(steering);
@@ -665,7 +665,7 @@ namespace AHPP_AI.AI
                     if (elapsed >= 100)
                     {
                         engineStartStates[plid] = EngineStartState.Normal;
-                        EnterRecoveryCooldown(plid, "Engine restart sequence complete");
+                        EnterRecoveryCooldown(plid, "Engine restart sequence complete", true);
                         return false;
                     }
 
@@ -673,7 +673,7 @@ namespace AHPP_AI.AI
                     return true;
                 default:
                     engineStartStates[plid] = EngineStartState.Normal;
-                    EnterRecoveryCooldown(plid, "Engine restart reset");
+                    EnterRecoveryCooldown(plid, "Engine restart reset", true);
                     return false;
             }
         }
@@ -681,7 +681,7 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Enter cooldown/validation after a recovery attempt.
         /// </summary>
-        private void EnterRecoveryCooldown(byte plid, string reason)
+        private void EnterRecoveryCooldown(byte plid, string reason, bool resetToFirstGear = false)
         {
             var context = GetRecoveryContext(plid);
             context.State = RecoveryState.Cooldown;
@@ -689,6 +689,8 @@ namespace AHPP_AI.AI
             context.ActionEnds = DateTime.Now.AddMilliseconds(config.RecoveryCooldownMs);
             context.ValidationActive = true;
             controlStatuses[plid] = $"Recovery cool: {reason}";
+            if (resetToFirstGear)
+                gearboxController.ResetToFirstGear(plid, reason);
             logger.Log($"PLID={plid} RECOVERY COOLING: {reason}");
         }
 

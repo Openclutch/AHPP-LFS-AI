@@ -97,6 +97,24 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Force-reset gearbox state to 1st gear with clutch held for recovery restart sequences.
+        /// </summary>
+        public void ResetToFirstGear(byte plid, string reason = "recovery gear reset")
+        {
+            currentGears[plid] = 2;
+            gearShiftTargets[plid] = currentGears[plid];
+            gearChangeInProgress[plid] = false;
+            clutchStates[plid] = ClutchState.Pressed;
+            currentClutchValues[plid] = config.ClutchFullyPressed;
+            clutchTimers[plid] = DateTime.Now;
+            lastShiftTimes[plid] = DateTime.Now;
+            brakingClutchActive[plid] = false;
+            lowRpmClutchActive[plid] = false;
+            lowRpmClutchTimers[plid] = DateTime.MinValue;
+            logger.Log($"PLID={plid} GEAR RESET: set to 1st ({reason})");
+        }
+
+        /// <summary>
         ///     Update gear with appropriate clutch control
         /// </summary>
         private void UpdateGearWithClutch(byte plid, byte desiredGear, double speedKmh)

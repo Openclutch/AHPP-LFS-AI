@@ -22,13 +22,13 @@ namespace AHPP_AI.AI
 
         // Memory of previous steering directions to prevent oscillation
         private readonly Dictionary<byte, SteeringMemory> carSteeringMemory = new Dictionary<byte, SteeringMemory>();
-        private readonly Logger logger;
+        private readonly Logger? logger;
 
         /// <summary>
         ///     Initializes a new instance of the SteeringCalculator
         /// </summary>
         /// <param name="logger">Logger for debugging information</param>
-        public SteeringCalculator(Logger logger = null)
+        public SteeringCalculator(Logger? logger = null)
         {
             this.logger = logger;
         }
