@@ -22,9 +22,12 @@ namespace AHPP_AI.AI
     {
         private readonly Dictionary<byte, ClutchState> clutchStates = new Dictionary<byte, ClutchState>();
         private readonly Dictionary<byte, DateTime> clutchTimers = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, bool> brakingClutchActive = new Dictionary<byte, bool>();
 
         private readonly AIConfig config;
         private readonly Dictionary<byte, int> currentClutchValues = new Dictionary<byte, int>();
+        private readonly Dictionary<byte, bool> gearChangeInProgress = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, byte> gearShiftTargets = new Dictionary<byte, byte>();
         private readonly Dictionary<byte, bool> lowRpmClutchActive = new Dictionary<byte, bool>();
         private readonly Dictionary<byte, DateTime> lowRpmClutchTimers = new Dictionary<byte, DateTime>();
 
@@ -44,13 +47,17 @@ namespace AHPP_AI.AI
         /// </summary>
         public void InitializeGearbox(byte plid)
         {
-            currentGears[plid] = 1; // Neutral
-            clutchStates[plid] = ClutchState.Released;
-            currentClutchValues[plid] = config.ClutchReleased;
+            // Start aligned with the control inputs we send on spawn (clutch in, first gear selected).
+            currentGears[plid] = 2; // LFS gear index 2 = 1st
+            clutchStates[plid] = ClutchState.Pressed;
+            currentClutchValues[plid] = config.ClutchFullyPressed;
+            gearChangeInProgress[plid] = false;
+            gearShiftTargets[plid] = currentGears[plid];
             lowRpmClutchActive[plid] = false;
             lowRpmClutchTimers[plid] = DateTime.MinValue;
-            clutchTimers[plid] = DateTime.MinValue;
+            clutchTimers[plid] = DateTime.Now;
             lastShiftTimes[plid] = DateTime.MinValue;
+            brakingClutchActive[plid] = false;
         }
 
         /// <summary>
@@ -58,9 +65,14 @@ namespace AHPP_AI.AI
         /// </summary>
         public void UpdateGearbox(byte plid, double speedKmh, float engineRpm = 0)
         {
+            var desiredGear = ApplyGearHysteresis(plid, config.CalculateDesiredGear(speedKmh), speedKmh);
+
+            // If RPM is falling too low, request a downshift instead of just holding the clutch.
+            if (engineRpm > 0 && engineRpm < config.StallPreventionReleaseRpm && currentGears[plid] > 2)
+                desiredGear = (byte)Math.Max(2, currentGears[plid] - 1);
+
             if (HandleLowRpmClutch(plid, engineRpm)) return;
 
-            var desiredGear = config.CalculateDesiredGear(speedKmh);
             UpdateGearWithClutch(plid, desiredGear, speedKmh);
         }
 
@@ -89,9 +101,21 @@ namespace AHPP_AI.AI
         /// </summary>
         private void UpdateGearWithClutch(byte plid, byte desiredGear, double speedKmh)
         {
+            if (!gearShiftTargets.ContainsKey(plid)) gearShiftTargets[plid] = currentGears[plid];
+            if (!gearChangeInProgress.ContainsKey(plid)) gearChangeInProgress[plid] = false;
+
+            // If we're mid-shift, keep pursuing the original target instead of re-evaluating every tick.
+            var targetGear = gearChangeInProgress[plid] ? gearShiftTargets[plid] : desiredGear;
+            var needGearChange = targetGear != currentGears[plid];
+
             // Check if we need to change gear
-            if (desiredGear != currentGears[plid])
+            if (needGearChange)
             {
+                // Respect minimum time between shifts to prevent hunting
+                if (DateTime.Now.Subtract(lastShiftTimes[plid]).TotalMilliseconds < config.GearShiftMinIntervalMs &&
+                    clutchStates[plid] == ClutchState.Released)
+                    return;
+
                 // Handle clutch state machine for gear changes
                 switch (clutchStates[plid])
                 {
@@ -99,11 +123,13 @@ namespace AHPP_AI.AI
                         // Start gear change process by fully pressing clutch
                         if (DateTime.Now.Subtract(lastShiftTimes[plid]).TotalMilliseconds >= config.ShiftDelayMs)
                         {
+                            gearChangeInProgress[plid] = true;
+                            gearShiftTargets[plid] = targetGear;
                             currentClutchValues[plid] = config.ClutchFullyPressed;
                             clutchStates[plid] = ClutchState.Pressing;
                             clutchTimers[plid] = DateTime.Now;
                             logger.Log(
-                                $"PLID={plid} CLUTCH: Pressing for gear change from {currentGears[plid]} to {desiredGear}");
+                                $"PLID={plid} CLUTCH: Pressing for gear change from {currentGears[plid]} to {targetGear}");
                         }
 
                         break;
@@ -112,18 +138,42 @@ namespace AHPP_AI.AI
                         // Wait for clutch press delay, then change gear
                         if (DateTime.Now.Subtract(clutchTimers[plid]).TotalMilliseconds >= config.ClutchPressDelayMs)
                         {
-                            currentGears[plid] = desiredGear;
+                            // Lock onto the current target for this shift cycle
+                            gearShiftTargets[plid] = targetGear;
+                            currentGears[plid] = gearShiftTargets[plid];
                             clutchStates[plid] = ClutchState.Pressed;
                             clutchTimers[plid] = DateTime.Now;
-                            logger.Log($"PLID={plid} GEAR: Changed to {desiredGear}");
+                            logger.Log($"PLID={plid} GEAR: Changed to {gearShiftTargets[plid]}");
                         }
 
                         break;
 
                     case ClutchState.Pressed:
-                        // Start releasing clutch gradually
-                        clutchStates[plid] = ClutchState.Releasing;
-                        clutchTimers[plid] = DateTime.Now;
+                        // Ensure the requested gear is latched while the clutch stays fully pressed
+                        if (currentGears[plid] != gearShiftTargets[plid])
+                        {
+                            currentGears[plid] = gearShiftTargets[plid];
+                            logger.Log($"PLID={plid} GEAR: Changed to {gearShiftTargets[plid]} (latched)");
+                        }
+
+                        // Stay fully pressed until the shift is confirmed, then start releasing
+                        var shiftConfirmed = !gearChangeInProgress[plid] ||
+                                             currentGears[plid] == gearShiftTargets[plid];
+                        var holdElapsed = DateTime.Now.Subtract(clutchTimers[plid]).TotalMilliseconds;
+                        var holdSatisfied = clutchTimers[plid] == DateTime.MinValue ||
+                                            holdElapsed >= config.ClutchHoldAfterShiftMs;
+
+                        if (shiftConfirmed && holdSatisfied)
+                        {
+                            gearChangeInProgress[plid] = false;
+                            clutchStates[plid] = ClutchState.Releasing;
+                            clutchTimers[plid] = DateTime.Now;
+                        }
+                        else
+                        {
+                            currentClutchValues[plid] = config.ClutchFullyPressed;
+                        }
+
                         break;
 
                     case ClutchState.Releasing:
@@ -137,6 +187,8 @@ namespace AHPP_AI.AI
                             currentClutchValues[plid] = config.ClutchReleased;
                             clutchStates[plid] = ClutchState.Released;
                             lastShiftTimes[plid] = DateTime.Now;
+                            gearShiftTargets[plid] = currentGears[plid];
+                            gearChangeInProgress[plid] = false;
                             logger.Log($"PLID={plid} CLUTCH: Fully released after gear change to {currentGears[plid]}");
                         }
                         else
@@ -151,31 +203,57 @@ namespace AHPP_AI.AI
             }
             else if (clutchStates[plid] != ClutchState.Released)
             {
-                // If clutch is still engaged but no gear change is needed, continue release process
-                if (clutchStates[plid] == ClutchState.Releasing)
+                // If clutch is still engaged but no gear change is needed, continue hold/release process
+                switch (clutchStates[plid])
                 {
-                    var elapsedMs = DateTime.Now.Subtract(clutchTimers[plid]).TotalMilliseconds;
-                    var releaseStep = (int)(elapsedMs / config.ClutchReleaseIntervalMs);
+                    case ClutchState.Releasing:
+                        var elapsedMs = DateTime.Now.Subtract(clutchTimers[plid]).TotalMilliseconds;
+                        var releaseStep = (int)(elapsedMs / config.ClutchReleaseIntervalMs);
 
-                    if (releaseStep >= config.ClutchReleaseSteps)
-                    {
-                        // Fully released
-                        currentClutchValues[plid] = config.ClutchReleased;
-                        clutchStates[plid] = ClutchState.Released;
-                        lastShiftTimes[plid] = DateTime.Now;
-                    }
-                    else
-                    {
-                        // Calculate intermediate clutch value
-                        var releaseProgress = (double)releaseStep / config.ClutchReleaseSteps;
-                        currentClutchValues[plid] = (int)(config.ClutchFullyPressed * (1 - releaseProgress));
-                    }
-                }
-                else
-                {
-                    // Skip to release phase
-                    clutchStates[plid] = ClutchState.Releasing;
-                    clutchTimers[plid] = DateTime.Now;
+                        if (releaseStep >= config.ClutchReleaseSteps)
+                        {
+                            // Fully released
+                            currentClutchValues[plid] = config.ClutchReleased;
+                            clutchStates[plid] = ClutchState.Released;
+                            lastShiftTimes[plid] = DateTime.Now;
+                            gearShiftTargets[plid] = currentGears[plid];
+                            gearChangeInProgress[plid] = false;
+                        }
+                        else
+                        {
+                            // Calculate intermediate clutch value
+                            var releaseProgress = (double)releaseStep / config.ClutchReleaseSteps;
+                            currentClutchValues[plid] = (int)(config.ClutchFullyPressed * (1 - releaseProgress));
+                        }
+
+                        break;
+
+                    case ClutchState.Pressed:
+                        var holdElapsedMs = DateTime.Now.Subtract(clutchTimers[plid]).TotalMilliseconds;
+                        var shiftConfirmed = !gearChangeInProgress[plid] ||
+                                             currentGears[plid] == gearShiftTargets[plid];
+                        var holdSatisfied = clutchTimers[plid] == DateTime.MinValue ||
+                                            holdElapsedMs >= config.ClutchHoldAfterShiftMs;
+
+                        if (shiftConfirmed && holdSatisfied)
+                        {
+                            gearChangeInProgress[plid] = false;
+                            clutchStates[plid] = ClutchState.Releasing;
+                            clutchTimers[plid] = DateTime.Now;
+                        }
+                        else
+                        {
+                            currentClutchValues[plid] = config.ClutchFullyPressed;
+                        }
+
+                        break;
+
+                    default:
+                        // Skip to release phase
+                        clutchStates[plid] = ClutchState.Releasing;
+                        clutchTimers[plid] = DateTime.Now;
+                        gearChangeInProgress[plid] = false;
+                        break;
                 }
             }
 
@@ -190,20 +268,32 @@ namespace AHPP_AI.AI
         /// </summary>
         public void ApplyBrakingClutch(byte plid, int brakeValue)
         {
+            if (!brakingClutchActive.ContainsKey(plid)) brakingClutchActive[plid] = false;
+
             var hardBraking = brakeValue > config.BrakeBase * 2;
 
             // Apply clutch when braking hard
             if (hardBraking)
             {
-                // Press clutch when hard braking to prevent stalling
-                currentClutchValues[plid] = config.ClutchFullyPressed;
+                if (!brakingClutchActive[plid])
+                {
+                    brakingClutchActive[plid] = true;
 
-                // Hand over control to clutch state machine so release logic can run
-                if (clutchStates[plid] != ClutchState.Pressed) clutchStates[plid] = ClutchState.Pressing;
-                clutchTimers[plid] = DateTime.Now;
+                    // Press clutch when hard braking to prevent stalling
+                    if (clutchStates[plid] != ClutchState.Pressed)
+                    {
+                        clutchStates[plid] = ClutchState.Pressing;
+                        clutchTimers[plid] = DateTime.Now;
+                    }
+                }
+
+                currentClutchValues[plid] = config.ClutchFullyPressed;
             }
-            else if (clutchStates[plid] == ClutchState.Pressed || clutchStates[plid] == ClutchState.Pressing)
+            else if (brakingClutchActive[plid] &&
+                     (clutchStates[plid] == ClutchState.Pressed || clutchStates[plid] == ClutchState.Pressing))
             {
+                brakingClutchActive[plid] = false;
+
                 // Begin releasing once braking intensity drops
                 clutchStates[plid] = ClutchState.Releasing;
                 clutchTimers[plid] = DateTime.Now;
@@ -266,6 +356,41 @@ namespace AHPP_AI.AI
             }
 
             return false;
+        }
+
+        /// <summary>
+        ///     Apply basic hysteresis so small speed oscillations do not trigger rapid gear hunting.
+        /// </summary>
+        private byte ApplyGearHysteresis(byte plid, byte desiredGear, double speedKmh)
+        {
+            if (!currentGears.ContainsKey(plid)) return desiredGear;
+
+            var currentGear = currentGears[plid];
+            var upHys = Math.Max(0, config.GearUpshiftHysteresisKmh);
+            var downHys = Math.Max(0, config.GearDownshiftHysteresisKmh);
+
+            // Prevent array bounds issues
+            var thresholds = config.GearSpeedThresholds ?? Array.Empty<double>();
+
+            // Upshift check (current gear -> next)
+            var upIndex = currentGear - 2;
+            if (upIndex >= 0 && upIndex < thresholds.Length)
+            {
+                var upThreshold = thresholds[upIndex];
+                if (desiredGear > currentGear && speedKmh < upThreshold + upHys)
+                    desiredGear = currentGear;
+            }
+
+            // Downshift check (current gear -> previous)
+            var downIndex = currentGear - 3;
+            if (downIndex >= 0 && downIndex < thresholds.Length)
+            {
+                var downThreshold = thresholds[downIndex];
+                if (desiredGear < currentGear && speedKmh > downThreshold - downHys)
+                    desiredGear = currentGear;
+            }
+
+            return desiredGear;
         }
     }
 }

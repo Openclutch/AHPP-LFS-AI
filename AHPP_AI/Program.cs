@@ -65,6 +65,7 @@ namespace AHPP_AI
         private static readonly double purePursuitWheelbaseMeters;
         private static readonly double purePursuitSteeringGain;
         private static readonly double purePursuitMaxSteerDegrees;
+        private static readonly int clutchHoldAfterShiftMs;
         private static readonly double collisionDetectionRangeMeters;
         private static readonly double collisionDetectionAngleDegrees;
         private static readonly double minimumSafetyDistanceMeters;
@@ -95,6 +96,20 @@ namespace AHPP_AI
         private static readonly bool activeWaypointMarkersEnabled;
         private static readonly int activeWaypointIntervalMs;
         private static readonly bool performanceLogging;
+        private static readonly double laneChangeInitialCheckIntervalSeconds;
+        private static readonly double laneChangePostCooldownIntervalSeconds;
+        private static readonly double laneChangeMergeChance;
+        private static readonly double laneChangeCooldownSeconds;
+        private static readonly double laneChangeSafetyCheckDistanceMeters;
+        private static readonly double laneChangeSafetyCheckHalfWidthMeters;
+        private static readonly double laneChangeMaxParallelDistanceMeters;
+        private static readonly double laneChangeMaxParallelHeadingDegrees;
+        private static readonly double laneChangeMaxMergeSpeedKmh;
+        private static readonly double laneChangeSignalLeadTimeSeconds;
+        private static readonly double laneChangeSignalMinimumDurationSeconds;
+        private static readonly double laneChangeTransitionLengthMeters;
+        private static readonly int laneChangeTransitionPointCount;
+        private static readonly string buildVersion;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -139,6 +154,7 @@ namespace AHPP_AI
             purePursuitWheelbaseMeters = appConfig.GetDouble("AI", "PurePursuitWheelbaseMeters", 2.5);
             purePursuitSteeringGain = appConfig.GetDouble("AI", "PurePursuitSteeringGain", 1.0);
             purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
+            clutchHoldAfterShiftMs = appConfig.GetInt("AI", "ClutchHoldAfterShiftMs", 75);
             collisionDetectionRangeMeters = appConfig.GetDouble("AI", "CollisionDetectionRangeM", 30.0);
             collisionDetectionAngleDegrees = appConfig.GetDouble("AI", "CollisionDetectionAngle", 45.0);
             minimumSafetyDistanceMeters = appConfig.GetDouble("AI", "MinimumSafetyDistanceM", 10.0);
@@ -170,6 +186,29 @@ namespace AHPP_AI
             activeWaypointMarkersEnabled = appConfig.GetBool("DebugAI", "ActiveWaypointMarkers", true);
             activeWaypointIntervalMs = Math.Max(100, appConfig.GetInt("DebugAI", "ActiveWaypointIntervalMs", 500));
             performanceLogging = appConfig.GetBool("DebugAI", "PerformanceLogging", true);
+            var laneSection = "LaneChange";
+            laneChangeInitialCheckIntervalSeconds =
+                appConfig.GetDouble(laneSection, "InitialCheckIntervalSeconds", 30.0);
+            laneChangePostCooldownIntervalSeconds =
+                appConfig.GetDouble(laneSection, "PostCooldownCheckIntervalSeconds", 10.0);
+            laneChangeMergeChance = appConfig.GetDouble(laneSection, "MergeChance", 0.30);
+            laneChangeCooldownSeconds = appConfig.GetDouble(laneSection, "CooldownSeconds", 180.0);
+            laneChangeSafetyCheckDistanceMeters =
+                appConfig.GetDouble(laneSection, "SafetyCheckDistanceMeters", 25.0);
+            laneChangeSafetyCheckHalfWidthMeters =
+                appConfig.GetDouble(laneSection, "SafetyCheckHalfWidthMeters", 3.5);
+            laneChangeMaxParallelDistanceMeters =
+                appConfig.GetDouble(laneSection, "MaxParallelDistanceMeters", 12.0);
+            laneChangeMaxParallelHeadingDegrees =
+                appConfig.GetDouble(laneSection, "MaxParallelHeadingDegrees", 45.0);
+            laneChangeMaxMergeSpeedKmh = appConfig.GetDouble(laneSection, "MaxMergeSpeedKmh", 60.0);
+            laneChangeSignalLeadTimeSeconds = appConfig.GetDouble(laneSection, "SignalLeadTimeSeconds", 3.0);
+            laneChangeSignalMinimumDurationSeconds =
+                appConfig.GetDouble(laneSection, "SignalMinimumDurationSeconds", 5.0);
+            laneChangeTransitionLengthMeters =
+                appConfig.GetDouble(laneSection, "TransitionLengthMeters", 25.0);
+            laneChangeTransitionPointCount = appConfig.GetInt(laneSection, "TransitionPointCount", 12);
+            buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
 
             // Initialize components in the correct order
             waypointManager = new WaypointManager(logger, routeLibrary);
@@ -190,6 +229,8 @@ namespace AHPP_AI
             aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
             aiController.SetSteeringResponseDamping(steeringResponseDamping);
             aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
+            aiController.SetBuildVersion(buildVersion);
+            aiController.SetClutchHoldAfterShiftMs(clutchHoldAfterShiftMs);
             aiController.ConfigureCollisionDetection(
                 collisionDetectionRangeMeters,
                 collisionDetectionAngleDegrees,
@@ -203,6 +244,20 @@ namespace AHPP_AI
                 purePursuitWheelbaseMeters,
                 purePursuitSteeringGain,
                 purePursuitMaxSteerDegrees);
+            aiController.ConfigureLaneChange(
+                laneChangeInitialCheckIntervalSeconds,
+                laneChangePostCooldownIntervalSeconds,
+                laneChangeMergeChance,
+                laneChangeCooldownSeconds,
+                laneChangeSafetyCheckDistanceMeters,
+                laneChangeSafetyCheckHalfWidthMeters,
+                laneChangeMaxParallelDistanceMeters,
+                laneChangeMaxParallelHeadingDegrees,
+                laneChangeMaxMergeSpeedKmh,
+                laneChangeSignalLeadTimeSeconds,
+                laneChangeSignalMinimumDurationSeconds,
+                laneChangeTransitionLengthMeters,
+                laneChangeTransitionPointCount);
             aiController.ConfigureRecovery(
                 recoveryShortReverseMs,
                 recoveryLongReverseMs,
@@ -624,7 +679,7 @@ namespace AHPP_AI
                 RequestLayoutSelectionFeed();
 
                 // Send welcome message
-                insim.SendPrivateMessage("AI Car Control initialized");
+                insim.SendPrivateMessage($"AI Car Control initialized (build {buildVersion})");
 
                 logger.Log("InSim initialized");
             }

@@ -39,6 +39,21 @@ namespace AHPP_AI.AI
         public string MainAlternateRouteName { get; set; } = string.Empty;
         public List<string> BranchRouteNames { get; set; } = new List<string>();
 
+        // Lane change settings
+        public double LaneChangeInitialCheckIntervalSeconds { get; set; } = 30.0;
+        public double LaneChangePostCooldownIntervalSeconds { get; set; } = 10.0;
+        public double LaneChangeMergeChance { get; set; } = 0.30;
+        public double LaneChangeCooldownSeconds { get; set; } = 180.0;
+        public double LaneChangeSafetyCheckDistanceMeters { get; set; } = 25.0;
+        public double LaneChangeSafetyCheckHalfWidthMeters { get; set; } = 3.5;
+        public double LaneChangeMaxParallelDistanceMeters { get; set; } = 12.0;
+        public double LaneChangeMaxParallelHeadingDegrees { get; set; } = 45.0;
+        public double LaneChangeMaxMergeSpeedKmh { get; set; } = 60.0;
+        public double LaneChangeSignalLeadTimeSeconds { get; set; } = 3.0;
+        public double LaneChangeSignalMinimumDurationSeconds { get; set; } = 5.0;
+        public double LaneChangeTransitionLengthMeters { get; set; } = 25.0;
+        public int LaneChangeTransitionPointCount { get; set; } = 12;
+
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;
         public int BrakeBase { get; set; } = 10000;
@@ -59,11 +74,16 @@ namespace AHPP_AI.AI
 
         // Gearbox settings
         public int ShiftDelayMs { get; set; } = 500;
+        public int GearUpshiftHysteresisKmh { get; set; } = 5;
+        public int GearDownshiftHysteresisKmh { get; set; } = 5;
+        public int GearShiftMinIntervalMs { get; set; } = 900;
+        public string BuildVersion { get; set; } = "dev";
 
         // Clutch settings
         public int ClutchFullyPressed { get; set; } = 65535;
         public int ClutchReleased { get; set; } = 0;
         public int ClutchPressDelayMs { get; set; } = 100;
+        public int ClutchHoldAfterShiftMs { get; set; } = 75;
         public int ClutchReleaseSteps { get; set; } = 5;
         public int ClutchReleaseIntervalMs { get; set; } = 100;
         public int StallPreventionRpm { get; set; } = 500;

@@ -58,17 +58,12 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastActiveWaypointUpdate = new Dictionary<byte, DateTime>();
         private readonly Random branchRandom = new Random();
-        private const double InnerBranchJoinChance = 0.25;
-        private const double InnerBranchMaxDistanceMeters = 12.0;
-        private const double InnerBranchMaxHeadingDegrees = 60.0;
-        private const double InnerBranchMaxSpeedKmh = 55.0;
-        private const double InnerBranchTargetSpeedKmh = 45.0;
-        private static readonly TimeSpan InnerBranchCheckCooldown = TimeSpan.FromSeconds(12);
-        private const double InnerLaneSwapChance = 0.35;
-        private static readonly TimeSpan InnerLaneSwapCooldown = TimeSpan.FromSeconds(8);
-        private readonly Dictionary<byte, DateTime> innerBranchLastCheck = new Dictionary<byte, DateTime>();
-        private readonly HashSet<byte> innerBranchSpeedHold = new HashSet<byte>();
-        private readonly Dictionary<byte, DateTime> innerLaneSwapLast = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, DateTime> laneChangeLastCheck = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, DateTime> laneChangeLastMerge = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, LaneChangeRequest> pendingLaneChanges = new Dictionary<byte, LaneChangeRequest>();
+        private readonly Dictionary<byte, ActiveLaneChange> activeLaneChanges = new Dictionary<byte, ActiveLaneChange>();
+        private readonly Dictionary<byte, DateTime> laneChangeSignalStart = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, LaneChangeSkipInfo> laneChangeSkipLog = new Dictionary<byte, LaneChangeSkipInfo>();
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
@@ -241,6 +236,39 @@ namespace AHPP_AI.AI
                 AiWeight = metadata.AiWeight,
                 AiEnabled = metadata.AiEnabled
             };
+        }
+
+        /// <summary>
+        /// Represents a scheduled lane change including its timing and target route.
+        /// </summary>
+        private class LaneChangeRequest
+        {
+            public BranchRouteInfo? TargetRoute { get; set; }
+            public List<Util.Waypoint> TargetPath { get; set; } = new List<Util.Waypoint>();
+            public bool ToAlternate { get; set; }
+            public DateTime ExecuteAt { get; set; }
+            public string Description { get; set; } = string.Empty;
+            public int ScheduledFromIndex { get; set; }
+        }
+
+        /// <summary>
+        /// Tracks an in-progress lane change that is following a generated transition path.
+        /// </summary>
+        private class ActiveLaneChange
+        {
+            public BranchRouteInfo? TargetRoute { get; set; }
+            public bool ToAlternate { get; set; }
+            public int TargetEntryIndex { get; set; }
+            public int TransitionPathCount { get; set; }
+        }
+
+        /// <summary>
+        /// Throttles repeated lane-change skip logs so the reasons are visible without spamming the log.
+        /// </summary>
+        private class LaneChangeSkipInfo
+        {
+            public DateTime LastLogged { get; set; }
+            public string Reason { get; set; } = string.Empty;
         }
 
         /// <summary>
@@ -508,6 +536,22 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure how long the clutch stays fully pressed after a completed shift before releasing.
+        /// </summary>
+        public void SetClutchHoldAfterShiftMs(int holdMs)
+        {
+            config.ClutchHoldAfterShiftMs = Math.Max(0, holdMs);
+        }
+
+        /// <summary>
+        /// Set build/version string for startup announcements.
+        /// </summary>
+        public void SetBuildVersion(string version)
+        {
+            config.BuildVersion = string.IsNullOrWhiteSpace(version) ? "dev" : version.Trim();
+        }
+
+        /// <summary>
         /// Configure collision detection envelope when scanning for cars ahead.
         /// </summary>
         public void ConfigureCollisionDetection(
@@ -542,6 +586,39 @@ namespace AHPP_AI.AI
             config.PurePursuitWheelbaseMeters = Math.Max(0.5, wheelbaseMeters);
             config.PurePursuitSteeringGain = Math.Max(0.01, steeringGain);
             config.PurePursuitMaxSteerDegrees = Math.Max(1.0, maxSteerDegrees);
+        }
+
+        /// <summary>
+        /// Configure lane change behavior between the main and alternate routes.
+        /// </summary>
+        public void ConfigureLaneChange(
+            double initialCheckIntervalSeconds,
+            double postCooldownIntervalSeconds,
+            double mergeChance,
+            double cooldownSeconds,
+            double safetyCheckDistanceMeters,
+            double safetyCheckHalfWidthMeters,
+            double maxParallelDistanceMeters,
+            double maxParallelHeadingDegrees,
+            double maxMergeSpeedKmh,
+            double signalLeadTimeSeconds,
+            double signalMinimumDurationSeconds,
+            double transitionLengthMeters,
+            int transitionPointCount)
+        {
+            config.LaneChangeInitialCheckIntervalSeconds = Math.Max(1.0, initialCheckIntervalSeconds);
+            config.LaneChangePostCooldownIntervalSeconds = Math.Max(1.0, postCooldownIntervalSeconds);
+            config.LaneChangeMergeChance = Math.Max(0.0, Math.Min(1.0, mergeChance));
+            config.LaneChangeCooldownSeconds = Math.Max(1.0, cooldownSeconds);
+            config.LaneChangeSafetyCheckDistanceMeters = Math.Max(1.0, safetyCheckDistanceMeters);
+            config.LaneChangeSafetyCheckHalfWidthMeters = Math.Max(0.1, safetyCheckHalfWidthMeters);
+            config.LaneChangeMaxParallelDistanceMeters = Math.Max(0.1, maxParallelDistanceMeters);
+            config.LaneChangeMaxParallelHeadingDegrees = Math.Max(0.0, maxParallelHeadingDegrees);
+            config.LaneChangeMaxMergeSpeedKmh = Math.Max(1.0, maxMergeSpeedKmh);
+            config.LaneChangeSignalLeadTimeSeconds = Math.Max(0.0, signalLeadTimeSeconds);
+            config.LaneChangeSignalMinimumDurationSeconds = Math.Max(0.5, signalMinimumDurationSeconds);
+            config.LaneChangeTransitionLengthMeters = Math.Max(1.0, transitionLengthMeters);
+            config.LaneChangeTransitionPointCount = Math.Max(4, transitionPointCount);
         }
 
         /// <summary>
@@ -920,27 +997,366 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Opportunistically merge onto an inner-lane branch when nearby instead of forcing the switch at the branch start.
+        /// Determine if a lane change check should run based on cooldowns and timers.
+        /// </summary>
+        private bool ShouldRunLaneChangeCheck(byte plid)
+        {
+            var now = DateTime.Now;
+            var hasMergedBefore = laneChangeLastMerge.TryGetValue(plid, out var lastMerge);
+            var cooldown = TimeSpan.FromSeconds(config.LaneChangeCooldownSeconds);
+
+            if (hasMergedBefore && now - lastMerge < cooldown)
+            {
+                var remaining = Math.Max(0, (cooldown - (now - lastMerge)).TotalSeconds);
+                LogLaneChangeSkip(plid, $"cooldown active ({remaining:F1}s remaining)");
+                return false;
+            }
+
+            var intervalSeconds = hasMergedBefore
+                ? config.LaneChangePostCooldownIntervalSeconds
+                : config.LaneChangeInitialCheckIntervalSeconds;
+            var interval = TimeSpan.FromSeconds(intervalSeconds);
+
+            if (!laneChangeLastCheck.TryGetValue(plid, out var lastCheck))
+            {
+                laneChangeLastCheck[plid] = now;
+                LogLaneChangeSkip(plid, $"seeding timer; first check after {interval.TotalSeconds:F1}s");
+                return false;
+            }
+
+            if (now - lastCheck < interval)
+            {
+                var remaining = Math.Max(0, (interval - (now - lastCheck)).TotalSeconds);
+                LogLaneChangeSkip(plid, $"waiting interval ({remaining:F1}s remaining)");
+                return false;
+            }
+
+            laneChangeLastCheck[plid] = now;
+
+            if (hasMergedBefore && branchRandom.NextDouble() > config.LaneChangeMergeChance)
+            {
+                LogLaneChangeSkip(plid, $"post-merge random skip (chance {config.LaneChangeMergeChance:P0})");
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Verify that the target lane segment is free of nearby cars before merging.
+        /// </summary>
+        private bool IsTargetLaneClear(byte plid, List<Util.Waypoint> targetPath, int targetIndex)
+        {
+            if (targetPath == null || targetPath.Count == 0) return false;
+
+            var checkDistance = Math.Max(1.0, config.LaneChangeSafetyCheckDistanceMeters);
+            var halfWidth = Math.Max(0.1, config.LaneChangeSafetyCheckHalfWidthMeters);
+            var targetPoint = GetWaypointPosition(targetPath, targetIndex);
+            var targetDirection = GetDirectionVector(targetPath, targetIndex);
+            if (Math.Abs(targetDirection.x) < 0.001 && Math.Abs(targetDirection.y) < 0.001)
+                targetDirection = (1, 0);
+
+            foreach (var other in allCars)
+            {
+                if (other.PLID == 0 || other.PLID == plid) continue;
+                var otherX = other.X / 65536.0;
+                var otherY = other.Y / 65536.0;
+                var dx = otherX - targetPoint.x;
+                var dy = otherY - targetPoint.y;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+                if (distance > checkDistance) continue;
+
+                var lateral = Math.Abs(Cross(targetDirection, (dx, dy)));
+                var longitudinal = dx * targetDirection.x + dy * targetDirection.y;
+                if (lateral <= halfWidth &&
+                    longitudinal >= -halfWidth &&
+                    longitudinal <= checkDistance)
+                {
+                    logger.Log(
+                        $"PLID={plid} Lane change blocked: car near target lane (distance={distance:F1}m, lateral={lateral:F1}m)");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Build a smooth Bezier transition between the current and target lanes using the AI's live position and heading.
+        /// </summary>
+        private List<Util.Waypoint> BuildLaneChangeTransition(
+            CompCar car,
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath,
+            int targetIndex)
+        {
+            var transition = new List<Util.Waypoint>();
+            if (car.PLID == 0 || targetPath == null || targetPath.Count == 0) return transition;
+
+            var startX = car.X / 65536.0;
+            var startY = car.Y / 65536.0;
+            var endPoint = GetWaypointPosition(targetPath, targetIndex);
+            var startDirection = GetDirectionVector(fromPath, fromIndex);
+            if (Math.Abs(startDirection.x) < 0.001 && Math.Abs(startDirection.y) < 0.001)
+                startDirection = NormalizeVector(endPoint.x - startX, endPoint.y - startY);
+            var endDirection = GetDirectionVector(targetPath, targetIndex);
+            if (Math.Abs(endDirection.x) < 0.001 && Math.Abs(endDirection.y) < 0.001)
+                endDirection = NormalizeVector(endPoint.x - startX, endPoint.y - startY);
+
+            var dx = endPoint.x - startX;
+            var dy = endPoint.y - startY;
+            var straightDistance = Math.Max(0.1, Math.Sqrt(dx * dx + dy * dy));
+            var handleLength = Math.Max(
+                3.0,
+                Math.Min(config.LaneChangeTransitionLengthMeters, straightDistance + config.LaneChangeTransitionLengthMeters * 0.5));
+
+            var control1 = (x: startX + startDirection.x * handleLength, y: startY + startDirection.y * handleLength);
+            var control2 = (x: endPoint.x - endDirection.x * handleLength, y: endPoint.y - endDirection.y * handleLength);
+
+            var points = Math.Max(4, config.LaneChangeTransitionPointCount);
+            var speedLimit = Math.Min(
+                config.LaneChangeMaxMergeSpeedKmh,
+                Math.Min(GetWaypointSpeedLimit(fromPath, fromIndex), GetWaypointSpeedLimit(targetPath, targetIndex)));
+            var routeIndex = targetPath[targetIndex].RouteIndex;
+
+            for (var i = 0; i < points; i++)
+            {
+                var t = i / (double)(points - 1);
+                var mt = 1 - t;
+                var x = mt * mt * mt * startX +
+                        3 * mt * mt * t * control1.x +
+                        3 * mt * t * t * control2.x +
+                        t * t * t * endPoint.x;
+                var y = mt * mt * mt * startY +
+                        3 * mt * mt * t * control1.y +
+                        3 * mt * t * t * control2.y +
+                        t * t * t * endPoint.y;
+
+                transition.Add(new Util.Waypoint(x, y, speedLimit, routeIndex));
+            }
+
+            return transition;
+        }
+
+        /// <summary>
+        /// Begin signalling for a planned lane change.
+        /// </summary>
+        private void StartLaneChangeIndicator(
+            byte plid,
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath,
+            int targetIndex,
+            string description)
+        {
+            var indicator = DetermineIndicatorDirection(fromPath, fromIndex, targetPath, targetIndex);
+            var holdSeconds = config.LaneChangeSignalLeadTimeSeconds + config.LaneChangeSignalMinimumDurationSeconds;
+            lightController.SetIndicators(plid, indicator, TimeSpan.FromSeconds(holdSeconds));
+            laneChangeSignalStart[plid] = DateTime.Now;
+            logger.Log($"PLID={plid} ROUTE CHANGE: {description} using indicator {indicator}");
+        }
+
+        /// <summary>
+        /// Clear indicators once the lane change has completed and the minimum duration elapsed.
+        /// </summary>
+        private void CompleteLaneChangeIndicators(byte plid)
+        {
+            if (!laneChangeSignalStart.TryGetValue(plid, out var started))
+            {
+                lightController.CancelIndicators(plid);
+                return;
+            }
+
+            var minHold = TimeSpan.FromSeconds(config.LaneChangeSignalMinimumDurationSeconds);
+            if (DateTime.Now - started >= minHold)
+            {
+                lightController.CancelIndicators(plid);
+                laneChangeSignalStart.Remove(plid);
+            }
+        }
+
+        /// <summary>
+        /// Safely clamp a waypoint index to the bounds of a path.
+        /// </summary>
+        private static int ClampIndex(List<Util.Waypoint> path, int index)
+        {
+            if (path == null || path.Count == 0) return 0;
+            return Math.Max(0, Math.Min(path.Count - 1, index));
+        }
+
+        /// <summary>
+        /// Get a usable speed limit from a waypoint list with safe fallbacks.
+        /// </summary>
+        private static double GetWaypointSpeedLimit(List<Util.Waypoint> path, int index)
+        {
+            if (path == null || path.Count == 0) return 50.0;
+            var clamped = ClampIndex(path, index);
+            return path[clamped].SpeedLimit <= 0 ? 50.0 : path[clamped].SpeedLimit;
+        }
+
+        /// <summary>
+        /// Kick off a pending lane change after the indicator lead time has elapsed, rebuilding the transition so it
+        /// uses the AI’s current position and heading.
+        /// </summary>
+        private void StartLaneChangeTransition(byte plid, LaneChangeRequest request)
+        {
+            if (request == null || request.TargetPath == null || request.TargetPath.Count == 0)
+            {
+                pendingLaneChanges.Remove(plid);
+                return;
+            }
+
+            var targetPath = request.TargetPath;
+            var currentPath = waypointFollower.GetPath(plid);
+            if (currentPath == null || currentPath.Count == 0)
+                currentPath = request.ToAlternate ? pathManager.MainRoute : targetPath;
+
+            var car = Array.Find(allCars, c => c.PLID == plid);
+            var (fromIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+            fromIndex = ClampIndex(currentPath, fromIndex);
+
+            var preferredIndex = FindClosestIndex(targetPath, car);
+            var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
+                targetPath,
+                car,
+                preferredIndex,
+                Math.Max(20, targetPath.Count - 1));
+
+            if (distance > config.LaneChangeMaxParallelDistanceMeters ||
+                headingError > config.LaneChangeMaxParallelHeadingDegrees)
+            {
+                LogLaneChangeSkip(plid,
+                    $"transition rebuild blocked - distance {distance:F1}m or heading {headingError:F1}° beyond limits");
+                pendingLaneChanges.Remove(plid);
+                return;
+            }
+
+            var transitionPath = BuildLaneChangeTransition(car, currentPath, fromIndex, targetPath, entryIndex);
+            if (transitionPath.Count == 0)
+            {
+                LogLaneChangeSkip(plid, "transition rebuild failed (no points)");
+                pendingLaneChanges.Remove(plid);
+                return;
+            }
+
+            waypointFollower.SetPath(plid, transitionPath, 0);
+            activeLaneChanges[plid] = new ActiveLaneChange
+            {
+                TargetRoute = request.TargetRoute,
+                ToAlternate = request.ToAlternate,
+                TargetEntryIndex = entryIndex,
+                TransitionPathCount = transitionPath.Count
+            };
+
+            pendingLaneChanges.Remove(plid);
+            logger.Log(
+                $"PLID={plid} Lane change executing: {request.Description} (from idx {fromIndex} to target {entryIndex}, {transitionPath.Count} pts)");
+        }
+
+        /// <summary>
+        /// Complete a lane change by swapping from the transition path to the destination lane.
+        /// </summary>
+        private void CompleteLaneChangePath(byte plid, ActiveLaneChange activeChange)
+        {
+            if (activeChange == null) return;
+
+            var targetPath = activeChange.ToAlternate
+                ? activeChange.TargetRoute?.Path
+                : pathManager.MainRoute;
+
+            if (targetPath == null || targetPath.Count == 0) return;
+
+            var startIndex = ClampIndex(targetPath, activeChange.TargetEntryIndex);
+            waypointFollower.SetPath(plid, targetPath, startIndex);
+
+            if (activeChange.ToAlternate)
+            {
+                currentRoute[plid] = "branch";
+                if (activeChange.TargetRoute != null)
+                    activeBranchSelections[plid] = activeChange.TargetRoute;
+            }
+            else
+            {
+                currentRoute[plid] = "main";
+                activeBranchSelections.Remove(plid);
+            }
+
+            waypointFollower.ClearManualTargetSpeed(plid);
+            laneChangeLastMerge[plid] = DateTime.Now;
+            laneChangeLastCheck[plid] = DateTime.Now;
+            CompleteLaneChangeIndicators(plid);
+        }
+
+        /// <summary>
+        /// Advance pending and active lane change state machines. Returns true if a lane change is underway.
+        /// </summary>
+        private bool HandleLaneChangeState(byte plid)
+        {
+            if (pendingLaneChanges.TryGetValue(plid, out var pending) &&
+                DateTime.Now >= pending.ExecuteAt)
+            {
+                StartLaneChangeTransition(plid, pending);
+            }
+
+            if (activeLaneChanges.TryGetValue(plid, out var active))
+            {
+                var (targetIndex, count, _, _) = waypointFollower.GetFollowerInfo(plid);
+                if (count == 0)
+                {
+                    activeLaneChanges.Remove(plid);
+                    return false;
+                }
+
+                if (count != active.TransitionPathCount)
+                {
+                    activeLaneChanges.Remove(plid);
+                    return false;
+                }
+
+                if (targetIndex >= active.TransitionPathCount - 2)
+                {
+                    CompleteLaneChangePath(plid, active);
+                    activeLaneChanges.Remove(plid);
+                    return false;
+                }
+
+                return true;
+            }
+
+            return pendingLaneChanges.ContainsKey(plid);
+        }
+
+        /// <summary>
+        /// Opportunistically merge onto the alternate main lane when nearby instead of forcing the switch at the branch start.
         /// </summary>
         private bool TryJoinInnerBranchLaneChange(byte plid, CompCar car, int mainRouteIndex)
         {
             if (!currentRoute.TryGetValue(plid, out var routeName) || routeName != "main")
                 return false;
 
-            if (innerBranchLastCheck.TryGetValue(plid, out var lastCheck) &&
-                DateTime.Now - lastCheck < InnerBranchCheckCooldown)
+            if (pendingLaneChanges.ContainsKey(plid) || activeLaneChanges.ContainsKey(plid))
                 return false;
 
-            var innerBranch = pathManager.GetAlternateMainRoute() ??
-                              pathManager.GetBranches().FirstOrDefault(IsInnerBranch);
-            innerBranchLastCheck[plid] = DateTime.Now;
+            var innerBranch = pathManager.GetAlternateMainRoute();
 
             if (innerBranch == null || innerBranch.Path == null || innerBranch.Path.Count == 0)
+            {
+                LogLaneChangeSkip(plid, "no alternate lane loaded");
+                return false;
+            }
+
+            if (!ShouldRunLaneChangeCheck(plid))
                 return false;
 
             var speedKmh = 360.0 * car.Speed / 32768.0;
-            if (speedKmh > InnerBranchMaxSpeedKmh)
+            var checkLabel = $"PLID={plid} Lane change main->alt";
+            logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
+            if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
+            {
+                logger.Log($"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
                 return false;
+            }
 
             var preferredIndex = FindClosestIndex(innerBranch.Path, car);
             var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
@@ -949,30 +1365,42 @@ namespace AHPP_AI.AI
                 preferredIndex,
                 Math.Max(innerBranch.Path.Count - 1, 10));
 
-            if (distance > InnerBranchMaxDistanceMeters || headingError > InnerBranchMaxHeadingDegrees)
+            if (distance > config.LaneChangeMaxParallelDistanceMeters ||
+                headingError > config.LaneChangeMaxParallelHeadingDegrees)
+            {
+                logger.Log(
+                    $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                return false;
+            }
+
+            if (!IsTargetLaneClear(plid, innerBranch.Path, entryIndex))
                 return false;
 
-            if (branchRandom.NextDouble() > InnerBranchJoinChance)
-                return false;
+            var request = new LaneChangeRequest
+            {
+                Description = $"Taking branch {innerBranch.Name}",
+                TargetRoute = innerBranch,
+                TargetPath = innerBranch.Path,
+                ToAlternate = true,
+                ExecuteAt = DateTime.Now.AddSeconds(config.LaneChangeSignalLeadTimeSeconds),
+                ScheduledFromIndex = mainRouteIndex
+            };
 
-            SignalLaneChange(
+            logger.Log(
+                $"{checkLabel}: scheduled merge to {innerBranch.Name} at entry {entryIndex} after {config.LaneChangeSignalLeadTimeSeconds:F1}s lead");
+            pendingLaneChanges[plid] = request;
+            StartLaneChangeIndicator(
                 plid,
                 pathManager.MainRoute,
                 mainRouteIndex,
                 innerBranch.Path,
                 entryIndex,
-                $"Taking branch {innerBranch.Name}");
-
-            waypointFollower.SetPath(plid, innerBranch.Path, entryIndex);
-            waypointFollower.SetManualTargetSpeed(plid, InnerBranchTargetSpeedKmh);
-            innerBranchSpeedHold.Add(plid);
-            currentRoute[plid] = "branch";
-            activeBranchSelections[plid] = innerBranch;
+                request.Description);
             return true;
         }
 
         /// <summary>
-        /// Attempt a lane change from the inner (right) branch back to the main (left) lane with cooldowns.
+        /// Attempt a lane change from the alternate branch back to the main lane with cooldowns.
         /// </summary>
         private bool TrySwapInnerToMainLane(byte plid, CompCar car, int branchTargetIndex, List<Util.Waypoint> branchPath)
         {
@@ -981,16 +1409,20 @@ namespace AHPP_AI.AI
             if (!activeBranchSelections.TryGetValue(plid, out var branchInfo) || !IsInnerBranch(branchInfo))
                 return false;
 
-            if (branchTargetIndex >= branchPath.Count - 3)
-                return false; // Skip swaps near the natural rejoin
+            if (pendingLaneChanges.ContainsKey(plid) || activeLaneChanges.ContainsKey(plid))
+                return false;
 
-            if (innerLaneSwapLast.TryGetValue(plid, out var lastSwap) &&
-                DateTime.Now - lastSwap < InnerLaneSwapCooldown)
+            if (!ShouldRunLaneChangeCheck(plid))
                 return false;
 
             var speedKmh = 360.0 * car.Speed / 32768.0;
-            if (speedKmh > InnerBranchMaxSpeedKmh)
+            var checkLabel = $"PLID={plid} Lane change alt->main";
+            logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
+            if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
+            {
+                logger.Log($"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
                 return false;
+            }
 
             var preferredIndex = FindClosestIndex(pathManager.MainRoute, car);
             var (mainIndex, distance, headingError) = FindAlignedWaypointIndex(
@@ -999,30 +1431,37 @@ namespace AHPP_AI.AI
                 preferredIndex,
                 8);
 
-            if (distance > InnerBranchMaxDistanceMeters || headingError > InnerBranchMaxHeadingDegrees)
+            if (distance > config.LaneChangeMaxParallelDistanceMeters ||
+                headingError > config.LaneChangeMaxParallelHeadingDegrees)
+            {
+                logger.Log(
+                    $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                return false;
+            }
+
+            if (!IsTargetLaneClear(plid, pathManager.MainRoute, mainIndex))
                 return false;
 
-            if (branchRandom.NextDouble() > InnerLaneSwapChance)
-                return false;
+            var request = new LaneChangeRequest
+            {
+                Description = $"Inner lane change to main",
+                TargetRoute = null,
+                TargetPath = pathManager.MainRoute,
+                ToAlternate = false,
+                ExecuteAt = DateTime.Now.AddSeconds(config.LaneChangeSignalLeadTimeSeconds),
+                ScheduledFromIndex = branchTargetIndex
+            };
 
-            SignalLaneChange(
+            logger.Log(
+                $"{checkLabel}: scheduled merge to main at entry {mainIndex} after {config.LaneChangeSignalLeadTimeSeconds:F1}s lead");
+            pendingLaneChanges[plid] = request;
+            StartLaneChangeIndicator(
                 plid,
                 branchPath,
                 branchTargetIndex,
                 pathManager.MainRoute,
                 mainIndex,
-                "Inner lane change to main");
-
-            waypointFollower.SetPath(plid, pathManager.MainRoute, mainIndex);
-            if (innerBranchSpeedHold.Contains(plid))
-            {
-                waypointFollower.ClearManualTargetSpeed(plid);
-                innerBranchSpeedHold.Remove(plid);
-            }
-            activeBranchSelections.Remove(plid);
-            currentRoute[plid] = "main";
-            innerLaneSwapLast[plid] = DateTime.Now;
-            innerBranchLastCheck[plid] = DateTime.Now;
+                request.Description);
             return true;
         }
 
@@ -1062,7 +1501,8 @@ namespace AHPP_AI.AI
             string description)
         {
             var indicator = DetermineIndicatorDirection(fromPath, fromIndex, targetPath, targetIndex);
-            lightController.SetIndicators(plid, indicator, TimeSpan.FromSeconds(5));
+            var durationSeconds = Math.Max(3.0, config.LaneChangeSignalMinimumDurationSeconds);
+            lightController.SetIndicators(plid, indicator, TimeSpan.FromSeconds(durationSeconds));
             logger.Log($"PLID={plid} ROUTE CHANGE: {description} using indicator {indicator}");
         }
 
@@ -1097,6 +1537,28 @@ namespace AHPP_AI.AI
         private static double Cross((double x, double y) a, (double x, double y) b)
         {
             return a.x * b.y - a.y * b.x;
+        }
+
+        /// <summary>
+        /// Emit a throttled log explaining why a lane-change attempt was skipped.
+        /// </summary>
+        private void LogLaneChangeSkip(byte plid, string reason)
+        {
+            var now = DateTime.Now;
+            if (laneChangeSkipLog.TryGetValue(plid, out var info))
+            {
+                var sameReason = string.Equals(info.Reason, reason, StringComparison.OrdinalIgnoreCase);
+                if (sameReason && now - info.LastLogged < TimeSpan.FromSeconds(10))
+                    return;
+            }
+
+            laneChangeSkipLog[plid] = new LaneChangeSkipInfo
+            {
+                LastLogged = now,
+                Reason = reason
+            };
+
+            logger.Log($"PLID={plid} Lane change check skipped: {reason}");
         }
 
         public void SetNumberOfAIs(int count)
@@ -1340,9 +1802,12 @@ namespace AHPP_AI.AI
             {
                 aiAssignedRoutes.Remove(plid);
             }
-            innerBranchSpeedHold.Remove(plid);
-            innerBranchLastCheck.Remove(plid);
-            innerLaneSwapLast.Remove(plid);
+            laneChangeLastCheck.Remove(plid);
+            laneChangeLastMerge.Remove(plid);
+            pendingLaneChanges.Remove(plid);
+            activeLaneChanges.Remove(plid);
+            laneChangeSignalStart.Remove(plid);
+            laneChangeSkipLog.Remove(plid);
             RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
@@ -1837,11 +2302,8 @@ namespace AHPP_AI.AI
             var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
             waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
             activeBranchSelections.Remove(plid);
-            if (innerBranchSpeedHold.Contains(plid))
-            {
-                waypointFollower.ClearManualTargetSpeed(plid);
-                innerBranchSpeedHold.Remove(plid);
-            }
+            laneChangeLastMerge[plid] = DateTime.Now;
+            laneChangeLastCheck[plid] = DateTime.Now;
             currentRoute[plid] = "main";
         }
 
@@ -1984,9 +2446,13 @@ namespace AHPP_AI.AI
                 driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects, aii.RPM);
 
                 // Route management
-                var (targetIndex, count, _, _) = waypointFollower.GetFollowerInfo(plid);
+                var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+                var laneChangeActive = HandleLaneChangeState(plid);
                 if (currentRoute.TryGetValue(plid, out var routeName))
                 {
+                    if (laneChangeActive)
+                        return;
+
                     if (routeName == "spawn" && targetIndex >= pathManager.SpawnRoute.Count - 1)
                     {
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
@@ -2001,8 +2467,10 @@ namespace AHPP_AI.AI
                                              assignedRoute.Equals(config.MainRouteName,
                                                  StringComparison.OrdinalIgnoreCase);
 
-                        var allowInnerBranch = !hasAssignment ||
-                                               (pathManager.MainAlternateRoute != null &&
+                        var allowInnerBranch = pathManager.MainAlternateRoute != null &&
+                                               (!hasAssignment ||
+                                                assignedRoute.Equals(config.MainRouteName,
+                                                    StringComparison.OrdinalIgnoreCase) ||
                                                 assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
                                                     StringComparison.OrdinalIgnoreCase));
                         var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
@@ -2049,11 +2517,6 @@ namespace AHPP_AI.AI
                             logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
                             waypointFollower.SetPath(plid, pathManager.MainRoute);
                             activeBranchSelections.Remove(plid);
-                            if (innerBranchSpeedHold.Contains(plid))
-                            {
-                                waypointFollower.ClearManualTargetSpeed(plid);
-                                innerBranchSpeedHold.Remove(plid);
-                            }
                             currentRoute[plid] = "main";
                             return;
                         }
@@ -2090,14 +2553,19 @@ namespace AHPP_AI.AI
                                 activeBranchSelections.Remove(plid);
                             }
 
-                            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
-                            if (innerBranchSpeedHold.Contains(plid))
+                            if (IsTargetLaneClear(plid, pathManager.MainRoute, bestIndex))
                             {
-                                waypointFollower.ClearManualTargetSpeed(plid);
-                                innerBranchSpeedHold.Remove(plid);
+                                waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+                                currentRoute[plid] = "main";
+                                activeBranchSelections.Remove(plid);
+                                laneChangeLastMerge[plid] = DateTime.Now;
+                                laneChangeLastCheck[plid] = DateTime.Now;
+                                CompleteLaneChangeIndicators(plid);
                             }
-                            innerBranchLastCheck[plid] = DateTime.Now;
-                            currentRoute[plid] = "main";
+                            else
+                            {
+                                logger.Log($"PLID={plid} Main lane blocked, holding rejoin from {branchInfo?.Name ?? "branch"}");
+                            }
                         }
                     }
                 }

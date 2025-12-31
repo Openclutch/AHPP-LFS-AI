@@ -1,5 +1,22 @@
 # Changelog
 
+- Braking clutch helper now only releases after a braking-engaged press, so mid-shift clutch cycles aren't cancelled and logs no longer show an upshift request followed by a release back in the previous gear.
+- Allowed highway lane-change checks even when AI are assigned to the main route so they will merge onto the alternate lane again and emit the expected lane-change logs.
+# Changelog
+
+- Fixed lane-change state to read the new transition path index before evaluating progress so merges don’t complete immediately and bounce back to the original lane.
+- Added throttled lane-change skip diagnostics (cooldown/interval/random/route missing) so highway merge attempts and their reasons surface in the logs.
+- Rebuild lane-change transitions at execution time using the AI’s current position/heading and a fresh entry point on the target lane so highway merges generate smooth pure-pursuit Bezier paths instead of jumping/overshooting.
+- Clutch release now waits for the requested gear change to be confirmed (while holding the pedal) before starting the release, matching the press-shift-detect-then-let-out flow.
+- While clutch-held during a shift, we now force-latch the requested gear before releasing so takeoff no longer bounces back to neutral/1 without actually selecting 1st.
+- Gearbox state now starts aligned to the spawn inputs (clutch in, 1st gear selected) so the initial launch no longer loops a 1→2 shift while still reporting gear 1.
+- When a shift starts we now stick to the original target gear until the cycle finishes, preventing rapid clutch in/out flapping when speed hovers near a threshold (e.g., 4↔5 dithering).
+- Added gear hysteresis (up/down buffers) to suppress gear hunting near speed thresholds and stop needless clutch presses while cruising.
+- Added min time-in-gear plus RPM-based downshift preference so the clutch only comes in for real gear changes or stall prevention, not constant hunting.
+- Added a config build tag (`AI.BuildVersion`) announced on startup so we can verify the running build without digging logs.
+- Made the post-shift clutch hold configurable via `AI.ClutchHoldAfterShiftMs` in `config.ini` so the shift dwell can be lengthened without code changes.
+- Added a short post-shift clutch hold so the pedal stays down briefly before releasing, reducing missed or harsh gear engagements for the AI.
+- Added configurable alternate-lane merging: detect the MainAlt lane, schedule indicator-led transitions with safety checks, smooth Bezier handoffs, cooldowns, and post-cooldown random merge attempts tuned via new `[LaneChange]` config.
 - Routed hard-braking clutch engagement through the clutch state machine so the pedal releases after braking instead of staying fully pressed while coasting.
 - Added rolling performance stats to AII/MCI handlers (gated by `DebugAI.PerformanceLogging`) so logs show active AI count, handler rates, and processing times when fleets grow large.
 - Merged MCI telemetry across packets and clear stale PLIDs so AI control keeps receiving car data when running large fleets (15+ bots).
