@@ -130,4 +130,4 @@ Must operate within LFS InSim packet limits and layout object caps.
 
 Visualization constrained by LFS layout object limits (sampling required).
 
-AI behavior bounded by LFS physics and network latency.
+AI behavior bounded by LFS physics and network latency. 
