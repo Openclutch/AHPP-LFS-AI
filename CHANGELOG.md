@@ -1,5 +1,6 @@
 # Changelog
 
+- Enforced main_alt rejoin safety by gating branch-end merges with distance/heading/speed checks and indicator lead time before switching back to the main lane.
 - Cleared nullable warnings across layout visualization, route loading, path validation, and debug UI by marking optional inputs nullable and guarding missing AI/route data.
 - Relaxed branch validation so looped/alternate lanes can use the same attach/rejoin index without spurious warnings when both lanes form closed loops.
 - Active waypoint marker now re-places the cone when switching routes even at the same coordinates, so merge points between main and alternate lanes show a pylon instead of being skipped as duplicates.

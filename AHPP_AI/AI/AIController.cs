@@ -1423,6 +1423,71 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Evaluate a branch end rejoin to the main lane with full safety checks and scheduled signaling.
+        /// </summary>
+        private bool TryScheduleBranchEndRejoin(
+            byte plid,
+            CompCar car,
+            int branchIndex,
+            List<Util.Waypoint> branchPath,
+            BranchRouteInfo? branchInfo,
+            int preferredMainIndex)
+        {
+            if (branchPath == null || branchPath.Count == 0) return false;
+            if (pendingLaneChanges.ContainsKey(plid) || activeLaneChanges.ContainsKey(plid)) return true;
+
+            var speedKmh = 360.0 * car.Speed / 32768.0;
+            var checkLabel = $"PLID={plid} Branch end rejoin";
+
+            var (mainIndex, distance, headingError) = FindAlignedWaypointIndex(
+                pathManager.MainRoute,
+                car,
+                ClampIndex(pathManager.MainRoute, preferredMainIndex),
+                8);
+
+            if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
+            {
+                logger.Log(
+                    $"{checkLabel}: holding - speed {speedKmh:F1} km/h above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
+                return false;
+            }
+
+            if (distance > config.LaneChangeMaxParallelDistanceMeters ||
+                headingError > config.LaneChangeMaxParallelHeadingDegrees)
+            {
+                logger.Log(
+                    $"{checkLabel}: holding - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                return false;
+            }
+
+            if (!IsTargetLaneClear(plid, pathManager.MainRoute, mainIndex))
+                return false;
+
+            var request = new LaneChangeRequest
+            {
+                Description = $"Rejoining main from {branchInfo?.Name ?? "branch"}",
+                TargetRoute = null,
+                TargetPath = pathManager.MainRoute,
+                ToAlternate = false,
+                ExecuteAt = DateTime.Now.AddSeconds(config.LaneChangeSignalLeadTimeSeconds),
+                ScheduledFromIndex = branchIndex
+            };
+
+            pendingLaneChanges[plid] = request;
+            StartLaneChangeIndicator(
+                plid,
+                branchPath,
+                branchIndex,
+                pathManager.MainRoute,
+                mainIndex,
+                request.Description);
+
+            logger.Log(
+                $"{checkLabel}: scheduled rejoin to main at entry {mainIndex} after {config.LaneChangeSignalLeadTimeSeconds:F1}s lead");
+            return true;
+        }
+
+        /// <summary>
         /// Attempt a lane change from the alternate branch back to the main lane with cooldowns.
         /// </summary>
         private bool TrySwapInnerToMainLane(byte plid, CompCar car, int branchTargetIndex, List<Util.Waypoint> branchPath)
@@ -2554,6 +2619,7 @@ namespace AHPP_AI.AI
                         if (targetIndex >= path.Count - 1)
                         {
                             var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                            var approachIndex = Math.Max(0, path.Count - 2);
 
                             if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit) &&
                                 branchInfoExit != null)
@@ -2565,31 +2631,16 @@ namespace AHPP_AI.AI
                                         Math.Min(pathManager.MainRoute.Count - 1, branchInfoExit.RejoinIndex));
                                 bestIndex = hintedIndex;
 
-                                var approachIndex = Math.Max(0, path.Count - 2);
-                                SignalLaneChange(
-                                    plid,
-                                    path,
-                                    approachIndex,
-                                    pathManager.MainRoute,
-                                    bestIndex,
-                                    $"Rejoining main from {branchInfoExit.Name}");
-
-                                activeBranchSelections.Remove(plid);
-                            }
-
-                            if (IsTargetLaneClear(plid, pathManager.MainRoute, bestIndex))
-                            {
-                                waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
-                                currentRoute[plid] = "main";
-                                activeBranchSelections.Remove(plid);
-                                laneChangeLastMerge[plid] = DateTime.Now;
-                                laneChangeLastCheck[plid] = DateTime.Now;
-                                CompleteLaneChangeIndicators(plid);
+                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfoExit, bestIndex))
+                                    return;
                             }
                             else
                             {
-                                logger.Log($"PLID={plid} Main lane blocked, holding rejoin from {branchInfo?.Name ?? "branch"}");
+                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
+                                    return;
                             }
+
+                            logger.Log($"PLID={plid} Holding rejoin from {branchInfo?.Name ?? "branch"} until lane change safety conditions pass");
                         }
                     }
                 }
