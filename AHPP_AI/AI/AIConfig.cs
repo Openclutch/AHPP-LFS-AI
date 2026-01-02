@@ -13,6 +13,13 @@ namespace AHPP_AI.AI
             Recorded
         }
 
+        public enum PassByReactionMode
+        {
+            Flash,
+            Horn,
+            FlashAndHorn
+        }
+
         // Basic AI configuration
         public int NumberOfAIs { get; set; } = 0;
 
@@ -48,11 +55,22 @@ namespace AHPP_AI.AI
         public double LaneChangeSafetyCheckHalfWidthMeters { get; set; } = 3.5;
         public double LaneChangeMaxParallelDistanceMeters { get; set; } = 12.0;
         public double LaneChangeMaxParallelHeadingDegrees { get; set; } = 45.0;
+        public double LaneChangeParallelLookaheadSeconds { get; set; } = 1.5;
+        public double LaneChangeParallelLookaheadMinMeters { get; set; } = 20.0;
         public double LaneChangeMaxMergeSpeedKmh { get; set; } = 60.0;
         public double LaneChangeSignalLeadTimeSeconds { get; set; } = 3.0;
         public double LaneChangeSignalMinimumDurationSeconds { get; set; } = 5.0;
         public double LaneChangeTransitionLengthMeters { get; set; } = 25.0;
         public int LaneChangeTransitionPointCount { get; set; } = 12;
+        public int LaneChangeTargetAheadWaypoints { get; set; } = 4;
+
+        // Player interaction settings
+        public bool PassByReactionEnabled { get; set; } = true;
+        public double PassByReactionChance { get; set; } = 0.10;
+        public double PassBySpeedThresholdKmh { get; set; } = 120.0;
+        public double PassByReactionDurationSeconds { get; set; } = 2.0;
+        public double PassByReactionDistanceMeters { get; set; } = 25.0;
+        public PassByReactionMode PassByMode { get; set; } = PassByReactionMode.FlashAndHorn;
 
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;

@@ -64,13 +64,17 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, ActiveLaneChange> activeLaneChanges = new Dictionary<byte, ActiveLaneChange>();
         private readonly Dictionary<byte, DateTime> laneChangeSignalStart = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, LaneChangeSkipInfo> laneChangeSkipLog = new Dictionary<byte, LaneChangeSkipInfo>();
+        private readonly Dictionary<byte, RouteAssignmentLogInfo> routeAssignmentLog = new Dictionary<byte, RouteAssignmentLogInfo>();
+        private readonly Dictionary<byte, DateTime> passByCooldowns = new Dictionary<byte, DateTime>();
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
         private readonly PerformanceTracker aiiPerformanceTracker = new PerformanceTracker();
         private readonly PerformanceTracker mciPerformanceTracker = new PerformanceTracker();
         private readonly bool performanceLogging;
+        private readonly Random passByRandom = new Random();
         private bool autoVisualizeWaypoints;
+        private bool debugButtonsVisible = true;
         private string recordingRouteName = "main_loop";
         private string visualizationRouteName = "main_loop";
         private int visualizationDetailStep = 2;
@@ -118,6 +122,7 @@ namespace AHPP_AI.AI
             this.activeWaypointMarkersEnabled = activeWaypointMarkersEnabled;
             this.activeWaypointIntervalMs = activeWaypointIntervalMs;
             performanceLogging = performanceLoggingEnabled;
+            debugButtonsVisible = appConfig?.GetBool("DebugAI", "ShowDebugButtons", true) ?? true;
 
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
@@ -126,7 +131,11 @@ namespace AHPP_AI.AI
             pathManager.LoadRoutes(config);
 
             // Initialize debug UI if enabled
-            if (debugEnabled) debugUI = new DebugUI(insim, logger);
+            if (debugEnabled)
+            {
+                debugUI = new DebugUI(insim, logger);
+                debugUI.SetDebugButtonsVisible(debugButtonsVisible);
+            }
 
             // Create component hierarchy
             var steeringCalculator = new SteeringCalculator(logger);
@@ -136,6 +145,7 @@ namespace AHPP_AI.AI
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim, lightController);
             driver.SetRecoveryFailedHandler(ResetAI);
             mainUI = new MainUI(insim, logger);
+            mainUI.SetDebugButtonsVisible(debugButtonsVisible);
             routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
@@ -271,6 +281,15 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Throttles route assignment logs so assignment decisions are visible without spamming the log.
+        /// </summary>
+        private class RouteAssignmentLogInfo
+        {
+            public DateTime LastLogged { get; set; }
+            public string Reason { get; set; } = string.Empty;
+        }
+
+        /// <summary>
         /// Build recording metadata using presets and any overrides provided by the caller.
         /// </summary>
         private RouteMetadata BuildRecordingMetadata(string name, RouteType type, int? attachIndex, int? rejoinIndex)
@@ -339,10 +358,12 @@ namespace AHPP_AI.AI
         {
             if (config.DebugEnabled && debugUI != null && !debugUIInitialized)
             {
+                debugUI.SetDebugButtonsVisible(debugButtonsVisible);
                 debugUI.Initialize();
                 debugUIInitialized = true;
                 logger.Log("Debug UI initialized");
                 mainUI.Show();
+                mainUI.SetDebugButtonsVisible(debugButtonsVisible);
                 mainUI.UpdateVisualizationDetail(visualizationDetailStep);
             }
         }
@@ -368,11 +389,6 @@ namespace AHPP_AI.AI
                 if (aiPLIDs.Contains(viewPlid))
                 {
                     debugUI.SetAIPLID(viewPlid);
-                    debugUI.ShowAIButtons(true);
-                }
-                else
-                {
-                    debugUI.ShowAIButtons(false);
                 }
             }
         }
@@ -399,38 +415,31 @@ namespace AHPP_AI.AI
                 ? recordingRouteName
                 : routeLibrary.NormalizeRouteName(preferredSelection);
 
-            var options = new List<string>();
-            AddOption(options, config.MainRouteName);
-            AddOption(options, config.SpawnRouteName);
-
-            try
+            var recordedLookup = BuildRecordedRouteLookup();
+            var options = new List<(string name, bool recorded)>();
+            AddRouteOption(options, config.MainRouteName, recordedLookup);
+            AddRouteOption(options, config.MainAlternateRouteName, recordedLookup);
+            AddRouteOption(options, config.SpawnRouteName, recordedLookup);
+            if (config.BranchRouteNames != null)
             {
-                var routes = routeLibrary.ListRoutes();
-                foreach (var route in routes)
+                foreach (var branch in config.BranchRouteNames)
                 {
-                    AddOption(options, route?.Metadata?.Name);
+                    AddRouteOption(options, branch, recordedLookup);
                 }
             }
-            catch (Exception ex)
+
+            foreach (var recorded in recordedLookup.OrderBy(r => r.Key, StringComparer.OrdinalIgnoreCase))
             {
-                logger.LogException(ex, "Failed to refresh route options from disk");
+                AddRouteOption(options, recorded.Key, recordedLookup, recorded.Value);
             }
 
-            AddOption(options, selection);
+            AddRouteOption(options, selection, recordedLookup);
             mainUI?.SetRouteOptions(options, selection);
 
             var visualizationOptions = new List<string>();
-            try
+            foreach (var recorded in recordedLookup.OrderBy(r => r.Key, StringComparer.OrdinalIgnoreCase))
             {
-                var routes = routeLibrary.ListRoutes();
-                foreach (var route in routes)
-                {
-                    AddOption(visualizationOptions, route?.Metadata?.Name);
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogException(ex, "Failed to refresh visualization routes from disk");
+                if (recorded.Value) AddOption(visualizationOptions, recorded.Key);
             }
 
             if (visualizationOptions.Count > 0 &&
@@ -477,6 +486,57 @@ namespace AHPP_AI.AI
             if (string.IsNullOrWhiteSpace(name)) return;
             if (options.Exists(o => o.Equals(name, StringComparison.OrdinalIgnoreCase))) return;
             options.Add(name);
+        }
+
+        /// <summary>
+        /// Add a route option with recorded status, ensuring uniqueness by name.
+        /// </summary>
+        private static void AddRouteOption(
+            List<(string name, bool recorded)> options,
+            string? name,
+            Dictionary<string, bool> recordedLookup,
+            bool? recordedOverride = null)
+        {
+            if (options == null || string.IsNullOrWhiteSpace(name)) return;
+            if (options.Exists(o => o.name.Equals(name, StringComparison.OrdinalIgnoreCase))) return;
+
+            var recorded = recordedOverride ??
+                           (recordedLookup != null &&
+                            recordedLookup.TryGetValue(name, out var hasRecording) &&
+                            hasRecording);
+            options.Add((name, recorded));
+        }
+
+        /// <summary>
+        /// Build a lookup of recorded routes and whether they contain points for the current track/layout.
+        /// </summary>
+        private Dictionary<string, bool> BuildRecordedRouteLookup()
+        {
+            var lookup = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                var routes = routeLibrary.ListRoutes(out var duplicateNames);
+                foreach (var duplicate in duplicateNames)
+                {
+                    logger.LogWarning(
+                        $"Duplicate recorded route name \"{duplicate}\" detected while refreshing UI options.");
+                }
+
+                foreach (var route in routes)
+                {
+                    var name = route?.Metadata?.Name;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    var hasPoints = route?.Nodes != null && route.Nodes.Count > 0;
+                    lookup[name] = hasPoints;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to build recorded route lookup");
+            }
+
+            return lookup;
         }
 
         /// <summary>
@@ -543,6 +603,109 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure base throttle/brake values and steering range/center for AI inputs.
+        /// </summary>
+        public void ConfigureControlInputs(int throttleBase, int brakeBase, int minSteering, int maxSteering,
+            int steeringCenter)
+        {
+            var clampedThrottle = Math.Max(0, Math.Min(65535, throttleBase));
+            var clampedBrake = Math.Max(0, Math.Min(65535, brakeBase));
+            var clampedMinSteering = Math.Max(0, Math.Min(65535, minSteering));
+            var clampedMaxSteering = Math.Max(0, Math.Min(65535, maxSteering));
+
+            if (clampedMaxSteering < clampedMinSteering)
+            {
+                var swap = clampedMaxSteering;
+                clampedMaxSteering = clampedMinSteering;
+                clampedMinSteering = swap;
+            }
+
+            var clampedCenter = Math.Max(clampedMinSteering, Math.Min(clampedMaxSteering, steeringCenter));
+
+            config.ThrottleBase = clampedThrottle;
+            config.BrakeBase = clampedBrake;
+            config.MinSteering = clampedMinSteering;
+            config.MaxSteering = clampedMaxSteering;
+            config.SteeringCenter = clampedCenter;
+        }
+
+        /// <summary>
+        /// Configure gearbox timing, hysteresis, and speed thresholds for shifts.
+        /// </summary>
+        public void ConfigureGearbox(int shiftDelayMs, int upshiftHysteresisKmh, int downshiftHysteresisKmh,
+            int gearShiftMinIntervalMs, double[] gearSpeedThresholdsKmh)
+        {
+            config.ShiftDelayMs = Math.Max(0, shiftDelayMs);
+            config.GearUpshiftHysteresisKmh = Math.Max(0, upshiftHysteresisKmh);
+            config.GearDownshiftHysteresisKmh = Math.Max(0, downshiftHysteresisKmh);
+            config.GearShiftMinIntervalMs = Math.Max(0, gearShiftMinIntervalMs);
+
+            if (gearSpeedThresholdsKmh != null && gearSpeedThresholdsKmh.Length > 0)
+            {
+                var cleaned = gearSpeedThresholdsKmh
+                    .Where(value => value > 0.0)
+                    .OrderBy(value => value)
+                    .ToArray();
+
+                if (cleaned.Length > 0)
+                    config.GearSpeedThresholds = cleaned;
+            }
+        }
+
+        /// <summary>
+        /// Configure clutch timing, range, and stall-prevention behavior.
+        /// </summary>
+        public void ConfigureClutch(int clutchFullyPressed, int clutchReleased, int clutchPressDelayMs,
+            int clutchHoldAfterShiftMs, int clutchReleaseSteps, int clutchReleaseIntervalMs, int stallPreventionRpm,
+            int stallPreventionReleaseRpm, int stallPreventionHoldMs)
+        {
+            var clampedPressed = Math.Max(0, Math.Min(65535, clutchFullyPressed));
+            var clampedReleased = Math.Max(0, Math.Min(clampedPressed, clutchReleased));
+            var clampedStallRpm = Math.Max(0, stallPreventionRpm);
+
+            config.ClutchFullyPressed = clampedPressed;
+            config.ClutchReleased = clampedReleased;
+            config.ClutchPressDelayMs = Math.Max(0, clutchPressDelayMs);
+            config.ClutchHoldAfterShiftMs = Math.Max(0, clutchHoldAfterShiftMs);
+            config.ClutchReleaseSteps = Math.Max(1, clutchReleaseSteps);
+            config.ClutchReleaseIntervalMs = Math.Max(1, clutchReleaseIntervalMs);
+            config.StallPreventionRpm = clampedStallRpm;
+            config.StallPreventionReleaseRpm = Math.Max(clampedStallRpm, stallPreventionReleaseRpm);
+            config.StallPreventionHoldMs = Math.Max(0, stallPreventionHoldMs);
+        }
+
+        /// <summary>
+        /// Configure waypoint threshold tuning used for proximity checks.
+        /// </summary>
+        public void ConfigureWaypointThresholds(double minThresholdMeters, double maxThresholdMeters,
+            double speedFactor)
+        {
+            var clampedMin = Math.Max(0.1, minThresholdMeters);
+            var clampedMax = Math.Max(clampedMin, maxThresholdMeters);
+
+            config.WaypointMinThreshold = clampedMin;
+            config.WaypointMaxThreshold = clampedMax;
+            config.WaypointThresholdSpeedFactor = Math.Max(0.0, speedFactor);
+        }
+
+        /// <summary>
+        /// Configure recovery limits and progress checks used when validating path tracking.
+        /// </summary>
+        public void ConfigureRecoveryLimits(bool wallRecoveryEnabled, int waypointTimeoutSeconds,
+            int progressCheckIntervalMs, double minRequiredProgress, int maxRecoveryAttempts,
+            int maxFailedRecoveryCycles, double minSpeedThreshold, int stationaryCheckCount)
+        {
+            config.WallRecoveryEnabled = wallRecoveryEnabled;
+            config.WaypointTimeoutSeconds = Math.Max(1, waypointTimeoutSeconds);
+            config.ProgressCheckIntervalMs = Math.Max(100, progressCheckIntervalMs);
+            config.MinRequiredProgress = Math.Max(0.0, minRequiredProgress);
+            config.MaxRecoveryAttempts = Math.Max(1, maxRecoveryAttempts);
+            config.MaxFailedRecoveryCycles = Math.Max(1, maxFailedRecoveryCycles);
+            config.MinSpeedThreshold = Math.Max(0.0, minSpeedThreshold);
+            config.StationaryCheckCount = Math.Max(1, stationaryCheckCount);
+        }
+
+        /// <summary>
         /// Set build/version string for startup announcements.
         /// </summary>
         public void SetBuildVersion(string version)
@@ -599,11 +762,14 @@ namespace AHPP_AI.AI
             double safetyCheckHalfWidthMeters,
             double maxParallelDistanceMeters,
             double maxParallelHeadingDegrees,
+            double parallelLookaheadSeconds,
+            double parallelLookaheadMinMeters,
             double maxMergeSpeedKmh,
             double signalLeadTimeSeconds,
             double signalMinimumDurationSeconds,
             double transitionLengthMeters,
-            int transitionPointCount)
+            int transitionPointCount,
+            int targetAheadWaypoints)
         {
             config.LaneChangeInitialCheckIntervalSeconds = Math.Max(1.0, initialCheckIntervalSeconds);
             config.LaneChangePostCooldownIntervalSeconds = Math.Max(1.0, postCooldownIntervalSeconds);
@@ -613,11 +779,33 @@ namespace AHPP_AI.AI
             config.LaneChangeSafetyCheckHalfWidthMeters = Math.Max(0.1, safetyCheckHalfWidthMeters);
             config.LaneChangeMaxParallelDistanceMeters = Math.Max(0.1, maxParallelDistanceMeters);
             config.LaneChangeMaxParallelHeadingDegrees = Math.Max(0.0, maxParallelHeadingDegrees);
+            config.LaneChangeParallelLookaheadSeconds = Math.Max(0.1, parallelLookaheadSeconds);
+            config.LaneChangeParallelLookaheadMinMeters = Math.Max(1.0, parallelLookaheadMinMeters);
             config.LaneChangeMaxMergeSpeedKmh = Math.Max(1.0, maxMergeSpeedKmh);
             config.LaneChangeSignalLeadTimeSeconds = Math.Max(0.0, signalLeadTimeSeconds);
             config.LaneChangeSignalMinimumDurationSeconds = Math.Max(0.5, signalMinimumDurationSeconds);
             config.LaneChangeTransitionLengthMeters = Math.Max(1.0, transitionLengthMeters);
             config.LaneChangeTransitionPointCount = Math.Max(4, transitionPointCount);
+            config.LaneChangeTargetAheadWaypoints = Math.Max(1, targetAheadWaypoints);
+        }
+
+        /// <summary>
+        /// Configure the AI reaction when a fast player drives nearby.
+        /// </summary>
+        public void ConfigurePassByReactions(
+            bool enabled,
+            double chance,
+            double speedThresholdKmh,
+            double durationSeconds,
+            double distanceMeters,
+            AIConfig.PassByReactionMode mode)
+        {
+            config.PassByReactionEnabled = enabled;
+            config.PassByReactionChance = Math.Max(0.0, Math.Min(1.0, chance));
+            config.PassBySpeedThresholdKmh = Math.Max(0.0, speedThresholdKmh);
+            config.PassByReactionDurationSeconds = Math.Max(0.1, durationSeconds);
+            config.PassByReactionDistanceMeters = Math.Max(1.0, distanceMeters);
+            config.PassByMode = mode;
         }
 
         /// <summary>
@@ -723,9 +911,13 @@ namespace AHPP_AI.AI
             populationManager?.RequestReconcile("route config");
         }
 
+        /// <summary>
+        /// Stop route recording and refresh UI state to reflect any saved data.
+        /// </summary>
         public void StopRecording()
         {
             routeRecorder.Stop();
+            RefreshRouteOptions(recordingRouteName);
         }
 
         /// <summary>
@@ -854,6 +1046,38 @@ namespace AHPP_AI.AI
             }
         }
 
+        /// <summary>
+        /// Toggle visibility of the debug HUD buttons and persist the preference.
+        /// </summary>
+        public void ToggleDebugButtonsVisibility()
+        {
+            if (!config.DebugEnabled || debugUI == null) return;
+
+            debugButtonsVisible = !debugButtonsVisible;
+            debugUI.SetDebugButtonsVisible(debugButtonsVisible);
+            mainUI.SetDebugButtonsVisible(debugButtonsVisible);
+            PersistDebugButtonsPreference(debugButtonsVisible);
+
+            var status = debugButtonsVisible ? "shown" : "hidden";
+            insim.SendPrivateMessage($"Debug buttons {status}.");
+        }
+
+        /// <summary>
+        /// Persist the debug HUD visibility preference to the config file.
+        /// </summary>
+        /// <param name="visible">True when debug buttons should be shown.</param>
+        private void PersistDebugButtonsPreference(bool visible)
+        {
+            try
+            {
+                appConfig?.SetBool("DebugAI", "ShowDebugButtons", visible, true);
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to persist debug buttons preference");
+            }
+        }
+
         public bool IsRecording => routeRecorder.IsRecording;
 
         public string MainRouteName => config.MainRouteName;
@@ -925,6 +1149,103 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Find the index of the waypoint closest to the given world position.
+        /// </summary>
+        private static int FindClosestIndex(List<Util.Waypoint> path, double xMeters, double yMeters)
+        {
+            if (path == null || path.Count == 0) return 0;
+
+            var closestIndex = 0;
+            var minDistance = double.MaxValue;
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                var wpX = path[i].Position.X / 65536.0;
+                var wpY = path[i].Position.Y / 65536.0;
+                var dx = wpX - xMeters;
+                var dy = wpY - yMeters;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+
+                if (distance < minDistance)
+                {
+                    minDistance = distance;
+                    closestIndex = i;
+                }
+            }
+
+            return closestIndex;
+        }
+
+        /// <summary>
+        /// Calculate the distance between two waypoint points in meters.
+        /// </summary>
+        private static double DistanceMeters(global::SixLabors.ImageSharp.Point a, global::SixLabors.ImageSharp.Point b)
+        {
+            var dx = (a.X - b.X) / 65536.0;
+            var dy = (a.Y - b.Y) / 65536.0;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        /// <summary>
+        /// Get a point along a path a set distance ahead of a start index, including the index used for heading.
+        /// </summary>
+        private (double x, double y, int index) GetPathPointAhead(
+            List<Util.Waypoint> path,
+            int startIndex,
+            double distanceMeters)
+        {
+            if (path == null || path.Count == 0) return (0, 0, 0);
+
+            var clampedStart = ClampIndex(path, startIndex);
+            var remaining = Math.Max(0.0, distanceMeters);
+            var currentIndex = clampedStart;
+            var currentPoint = path[currentIndex].Position;
+
+            var steps = 0;
+            while (remaining > 0 && steps <= path.Count)
+            {
+                var nextIndex = (currentIndex + 1) % path.Count;
+                var nextPoint = path[nextIndex].Position;
+                var segmentDistance = DistanceMeters(currentPoint, nextPoint);
+
+                if (segmentDistance >= remaining && segmentDistance > 0.0001)
+                {
+                    var ratio = remaining / segmentDistance;
+                    var curX = currentPoint.X / 65536.0;
+                    var curY = currentPoint.Y / 65536.0;
+                    var nextX = nextPoint.X / 65536.0;
+                    var nextY = nextPoint.Y / 65536.0;
+                    return (
+                        curX + (nextX - curX) * ratio,
+                        curY + (nextY - curY) * ratio,
+                        currentIndex);
+                }
+
+                remaining -= segmentDistance;
+                currentIndex = nextIndex;
+                currentPoint = nextPoint;
+                steps++;
+            }
+
+            return (currentPoint.X / 65536.0, currentPoint.Y / 65536.0, currentIndex);
+        }
+
+        /// <summary>
+        /// Calculate heading delta between two direction vectors in degrees.
+        /// </summary>
+        private static double CalculateHeadingDeltaDegrees((double x, double y) first, (double x, double y) second)
+        {
+            var magFirst = Math.Sqrt(first.x * first.x + first.y * first.y);
+            var magSecond = Math.Sqrt(second.x * second.x + second.y * second.y);
+            if (magFirst < 0.0001 || magSecond < 0.0001) return 180.0;
+
+            var dot = first.x * second.x + first.y * second.y;
+            var cos = dot / (magFirst * magSecond);
+            cos = Math.Max(-1.0, Math.Min(1.0, cos));
+            return Math.Abs(Math.Acos(cos) * 180.0 / Math.PI);
+        }
+
+        /// <summary>
         /// Check if a branch represents an inner-lane route based on its name.
         /// </summary>
         private static bool IsInnerBranch(BranchRouteInfo branchInfo)
@@ -933,6 +1254,17 @@ namespace AHPP_AI.AI
             if (branchInfo?.Metadata?.Type == RouteType.AlternateMain) return true;
             return name.IndexOf("inner", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    name.IndexOf("alt", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Check if a branch represents the alternate main lane based on metadata or configured route name.
+        /// </summary>
+        private bool IsAlternateMainBranch(BranchRouteInfo? branchInfo)
+        {
+            if (branchInfo == null) return false;
+            if (branchInfo.Metadata?.Type == RouteType.AlternateMain) return true;
+            if (pathManager.MainAlternateRoute == null) return false;
+            return branchInfo.Name.Equals(pathManager.MainAlternateRoute.Name, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -949,6 +1281,9 @@ namespace AHPP_AI.AI
             var carX = car.X / 65536.0;
             var carY = car.Y / 65536.0;
             var carHeading = CoordinateUtils.NormalizeHeading((int)car.Heading);
+            var headingRadians =
+                (carHeading + CoordinateUtils.QUARTER_CIRCLE) * 2 * Math.PI / CoordinateUtils.FULL_CIRCLE;
+            var forwardVector = (x: Math.Cos(headingRadians), y: Math.Sin(headingRadians));
 
             var maxOffset = Math.Min(searchRadius, path.Count - 1);
             var startIndex = Math.Max(0, preferredIndex - maxOffset);
@@ -972,6 +1307,7 @@ namespace AHPP_AI.AI
                 var dx = wpX - carX;
                 var dy = wpY - carY;
                 var distance = Math.Sqrt(dx * dx + dy * dy);
+                var forwardProjection = dx * forwardVector.x + dy * forwardVector.y;
                 var desiredHeading = CoordinateUtils.CalculateHeadingToTarget(dx, dy);
                 var headingError = Math.Abs(CoordinateUtils.CalculateHeadingError(carHeading, desiredHeading));
                 var headingErrorDeg = Math.Abs(CoordinateUtils.HeadingToDegrees(headingError));
@@ -987,14 +1323,17 @@ namespace AHPP_AI.AI
                     pathHeadingErrorDeg = Math.Abs(CoordinateUtils.HeadingToDegrees(pathHeadingError));
                 }
 
-                headingErrorDeg = Math.Min(headingErrorDeg, pathHeadingErrorDeg);
+                headingErrorDeg = forwardProjection >= 0
+                    ? Math.Min(headingErrorDeg, pathHeadingErrorDeg)
+                    : headingErrorDeg;
                 if (headingErrorDeg > 180) headingErrorDeg = 360 - headingErrorDeg;
 
+                var aheadPenalty = forwardProjection < 0 ? Math.Abs(forwardProjection) * 10.0 : 0.0;
                 var distanceScore = distance;
                 var headingScore = headingErrorDeg * 0.1;
                 var backwardPenalty = headingErrorDeg > 135 ? 50.0 : 0.0;
                 var indexPenalty = Math.Abs(i - preferredIndex) * 0.5;
-                var score = distanceScore + headingScore + backwardPenalty + indexPenalty;
+                var score = distanceScore + headingScore + backwardPenalty + indexPenalty + aheadPenalty;
 
                 if (score < bestScore)
                 {
@@ -1049,6 +1388,48 @@ namespace AHPP_AI.AI
             {
                 LogLaneChangeSkip(plid, $"post-merge random skip (chance {config.LaneChangeMergeChance:P0})");
                 return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Ensure the target lane stays parallel over a speed-scaled lookahead window before allowing a merge.
+        /// </summary>
+        private bool HasParallelLaneWindow(
+            CompCar car,
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath)
+        {
+            if (car == null || car.PLID == 0) return false;
+            if (fromPath == null || fromPath.Count == 0) return false;
+            if (targetPath == null || targetPath.Count == 0) return false;
+
+            var speedKmh = 360.0 * car.Speed / 32768.0;
+            var lookaheadMeters = Math.Max(
+                config.LaneChangeParallelLookaheadMinMeters,
+                (speedKmh / 3.6) * config.LaneChangeParallelLookaheadSeconds);
+
+            var samples = new[] { 0.25, 0.5, 0.75, 1.0 };
+            foreach (var fraction in samples)
+            {
+                var distanceAhead = lookaheadMeters * fraction;
+                var (sampleX, sampleY, sampleIndex) = GetPathPointAhead(fromPath, fromIndex, distanceAhead);
+                var targetIndex = FindClosestIndex(targetPath, sampleX, sampleY);
+                var targetPoint = targetPath[targetIndex].Position;
+
+                var dx = targetPoint.X / 65536.0 - sampleX;
+                var dy = targetPoint.Y / 65536.0 - sampleY;
+                var separation = Math.Sqrt(dx * dx + dy * dy);
+                if (separation > config.LaneChangeMaxParallelDistanceMeters)
+                    return false;
+
+                var fromDir = GetDirectionVector(fromPath, sampleIndex);
+                var targetDir = GetDirectionVector(targetPath, targetIndex);
+                var headingDelta = CalculateHeadingDeltaDegrees(fromDir, targetDir);
+                if (headingDelta > config.LaneChangeMaxParallelHeadingDegrees)
+                    return false;
             }
 
             return true;
@@ -1152,6 +1533,35 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Pick a forward-looking waypoint on the target lane so merges aim several nodes ahead instead of snapping backward.
+        /// </summary>
+        private (int entryIndex, double distance, double headingErrorDeg) SelectLaneChangeTargetIndex(
+            CompCar car,
+            List<Util.Waypoint> fromPath,
+            int fromIndex,
+            List<Util.Waypoint> targetPath)
+        {
+            if (car == null || car.PLID == 0) return (0, double.MaxValue, 180);
+            if (fromPath == null || fromPath.Count == 0) return (0, double.MaxValue, 180);
+            if (targetPath == null || targetPath.Count == 0) return (0, double.MaxValue, 180);
+
+            var lookaheadPoints = Math.Max(1, config.LaneChangeTargetAheadWaypoints);
+            var anchorIndex = ClampIndex(fromPath, fromIndex + lookaheadPoints);
+            var anchorPoint = GetWaypointPosition(fromPath, anchorIndex);
+            var preferredIndex = FindClosestIndex(targetPath, anchorPoint.x, anchorPoint.y);
+            var searchRadius = Math.Max(lookaheadPoints * 2, 8);
+
+            var (alignedIndex, distance, headingError) = FindAlignedWaypointIndex(
+                targetPath,
+                car,
+                preferredIndex,
+                searchRadius);
+
+            var entryIndex = ClampIndex(targetPath, Math.Max(alignedIndex, preferredIndex));
+            return (entryIndex, distance, headingError);
+        }
+
+        /// <summary>
         /// Begin signalling for a planned lane change.
         /// </summary>
         private void StartLaneChangeIndicator(
@@ -1231,16 +1641,12 @@ namespace AHPP_AI.AI
                 return;
             }
             var fromIndex = ClampIndex(currentPath, FindClosestIndex(currentPath, car));
-
-            var preferredIndex = FindClosestIndex(targetPath, car);
-            var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
-                targetPath,
+            var anchorIndex = Math.Max(fromIndex, ClampIndex(currentPath, request.ScheduledFromIndex));
+            var (entryIndex, distance, headingError) = SelectLaneChangeTargetIndex(
                 car,
-                preferredIndex,
-                Math.Max(20, targetPath.Count - 1));
-
-            // Bias toward a few nodes ahead to reduce aggressive merges onto very near points.
-            entryIndex = Math.Min(targetPath.Count - 1, entryIndex + 3);
+                currentPath,
+                anchorIndex,
+                targetPath);
 
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
@@ -1381,12 +1787,17 @@ namespace AHPP_AI.AI
                 return false;
             }
 
-            var preferredIndex = FindClosestIndex(innerBranch.Path, car);
-            var (entryIndex, distance, headingError) = FindAlignedWaypointIndex(
-                innerBranch.Path,
+            if (!HasParallelLaneWindow(car, pathManager.MainRoute, mainRouteIndex, innerBranch.Path))
+            {
+                LogLaneChangeSkip(plid, "main->alt blocked - lanes not parallel over lookahead window");
+                return false;
+            }
+
+            var (entryIndex, distance, headingError) = SelectLaneChangeTargetIndex(
                 car,
-                preferredIndex,
-                Math.Max(innerBranch.Path.Count - 1, 10));
+                pathManager.MainRoute,
+                mainRouteIndex,
+                innerBranch.Path);
 
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
@@ -1497,6 +1908,18 @@ namespace AHPP_AI.AI
             if (!activeBranchSelections.TryGetValue(plid, out var branchInfo) || !IsInnerBranch(branchInfo))
                 return false;
 
+            var isAlternateMain = branchInfo?.Metadata?.Type == RouteType.AlternateMain ||
+                                  branchInfo?.Metadata?.IsLoop == true;
+
+            if (isAlternateMain &&
+                TryGetAssignedRoute(plid, out var assignedRoute) &&
+                !string.IsNullOrWhiteSpace(assignedRoute) &&
+                assignedRoute.Equals(branchInfo?.Name ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+            {
+                LogLaneChangeSkip(plid, $"alt->main blocked - assigned to {branchInfo?.Name}");
+                return false;
+            }
+
             if (pendingLaneChanges.ContainsKey(plid) || activeLaneChanges.ContainsKey(plid))
                 return false;
 
@@ -1512,12 +1935,17 @@ namespace AHPP_AI.AI
                 return false;
             }
 
-            var preferredIndex = FindClosestIndex(pathManager.MainRoute, car);
-            var (mainIndex, distance, headingError) = FindAlignedWaypointIndex(
-                pathManager.MainRoute,
+            if (!HasParallelLaneWindow(car, branchPath, branchTargetIndex, pathManager.MainRoute))
+            {
+                LogLaneChangeSkip(plid, "alt->main blocked - lanes not parallel over lookahead window");
+                return false;
+            }
+
+            var (mainIndex, distance, headingError) = SelectLaneChangeTargetIndex(
                 car,
-                preferredIndex,
-                8);
+                branchPath,
+                branchTargetIndex,
+                pathManager.MainRoute);
 
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
@@ -1647,6 +2075,28 @@ namespace AHPP_AI.AI
             };
 
             logger.Log($"PLID={plid} Lane change check skipped: {reason}");
+        }
+
+        /// <summary>
+        /// Emit a throttled log explaining why a route assignment was applied or deferred.
+        /// </summary>
+        private void LogRouteAssignmentDecision(byte plid, string reason)
+        {
+            var now = DateTime.Now;
+            if (routeAssignmentLog.TryGetValue(plid, out var info))
+            {
+                var sameReason = string.Equals(info.Reason, reason, StringComparison.OrdinalIgnoreCase);
+                if (sameReason && now - info.LastLogged < TimeSpan.FromSeconds(10))
+                    return;
+            }
+
+            routeAssignmentLog[plid] = new RouteAssignmentLogInfo
+            {
+                LastLogged = now,
+                Reason = reason
+            };
+
+            logger.Log($"PLID={plid} Route assignment: {reason}");
         }
 
         public void SetNumberOfAIs(int count)
@@ -1896,6 +2346,7 @@ namespace AHPP_AI.AI
             activeLaneChanges.Remove(plid);
             laneChangeSignalStart.Remove(plid);
             laneChangeSkipLog.Remove(plid);
+            passByCooldowns.Remove(plid);
             RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
@@ -2258,6 +2709,8 @@ namespace AHPP_AI.AI
 
                     debugUI.UpdateDebugInfo(allCars, waypointIndices, paths, targetSpeeds, controlInfo, aiStates);
                 }
+
+                EvaluatePassByReactions();
             }
             catch (Exception ex)
             {
@@ -2269,6 +2722,94 @@ namespace AHPP_AI.AI
                 mciPerformanceTracker.Record(stopwatch.Elapsed);
                 LogPerformanceSnapshots();
             }
+        }
+
+        /// <summary>
+        /// Trigger light/horn reactions when a fast human driver passes close to an AI.
+        /// </summary>
+        private void EvaluatePassByReactions()
+        {
+            if (!config.PassByReactionEnabled || allCars == null || allCars.Length == 0) return;
+
+            var aiSnapshot = GetActiveAiPlids();
+            if (aiSnapshot.Count == 0) return;
+
+            var now = DateTime.UtcNow;
+            var aiSet = new HashSet<byte>(aiSnapshot);
+
+            foreach (var aiPlid in aiSnapshot)
+            {
+                if (passByCooldowns.TryGetValue(aiPlid, out var cooldownUntil) && cooldownUntil > now)
+                    continue;
+
+                var aiCar = Array.Find(allCars, c => c.PLID == aiPlid);
+                if (aiCar == null || aiCar.PLID == 0) continue;
+
+                var aiX = aiCar.X / 65536.0;
+                var aiY = aiCar.Y / 65536.0;
+
+                var foundTarget = false;
+                double targetDistance = double.MaxValue;
+
+                foreach (var car in allCars)
+                {
+                    if (car.PLID == 0 || aiSet.Contains(car.PLID)) continue;
+
+                    var humanX = car.X / 65536.0;
+                    var humanY = car.Y / 65536.0;
+                    var dx = humanX - aiX;
+                    var dy = humanY - aiY;
+                    var distance = Math.Sqrt(dx * dx + dy * dy);
+                    if (distance > config.PassByReactionDistanceMeters) continue;
+
+                    var speedKmh = 360.0 * car.Speed / 32768.0;
+                    if (speedKmh < config.PassBySpeedThresholdKmh) continue;
+
+                    if (distance < targetDistance)
+                    {
+                        targetDistance = distance;
+                        foundTarget = true;
+                    }
+                }
+
+                if (!foundTarget) continue;
+                if (passByRandom.NextDouble() > config.PassByReactionChance) continue;
+
+                TriggerPassByReaction(aiPlid);
+                var cooldownSeconds = Math.Max(config.PassByReactionDurationSeconds, 0.5) + 1.0;
+                passByCooldowns[aiPlid] = now.AddSeconds(cooldownSeconds);
+            }
+        }
+
+        /// <summary>
+        /// Send the configured flash and/or horn reaction for a passing player.
+        /// </summary>
+        private void TriggerPassByReaction(byte plid)
+        {
+            var durationHundredths = GetPassByDurationHundredths();
+
+            switch (config.PassByMode)
+            {
+                case AIConfig.PassByReactionMode.Flash:
+                    lightController.FlashHighBeams(plid, durationHundredths);
+                    break;
+                case AIConfig.PassByReactionMode.Horn:
+                    lightController.Honk(plid, 1, durationHundredths);
+                    break;
+                default:
+                    lightController.FlashHighBeams(plid, durationHundredths);
+                    lightController.Honk(plid, 1, durationHundredths);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Convert configured reaction duration to hundredths of a second for InSim inputs.
+        /// </summary>
+        private byte GetPassByDurationHundredths()
+        {
+            var durationHundredths = (int)Math.Round(config.PassByReactionDurationSeconds * 100.0);
+            return (byte)Math.Max(1, Math.Min(255, durationHundredths));
         }
 
         /// <summary>
@@ -2328,14 +2869,25 @@ namespace AHPP_AI.AI
             var normalized = routeLibrary.NormalizeRouteName(
                 string.IsNullOrWhiteSpace(routeName) ? config.MainRouteName : routeName);
 
+            string previous;
+            bool assignmentChanged;
             lock (assignmentLock)
             {
+                previous = aiAssignedRoutes.TryGetValue(plid, out var stored) ? stored : string.Empty;
                 aiAssignedRoutes[plid] = normalized;
+                assignmentChanged = !string.Equals(previous, normalized, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (assignmentChanged)
+            {
+                var previousLabel = string.IsNullOrWhiteSpace(previous) ? "none" : previous;
+                LogRouteAssignmentDecision(plid, $"assignment updated {previousLabel} -> {normalized}");
             }
 
             if (normalized.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
             {
-                TryReturnToMainRoute(plid);
+                if (assignmentChanged)
+                    TryReturnToMainRoute(plid);
                 return;
             }
 
@@ -2409,6 +2961,20 @@ namespace AHPP_AI.AI
 
                 if (targetRoute.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
                 {
+                    if (currentRoute.TryGetValue(plid, out var routeLabel) &&
+                        routeLabel == "branch" &&
+                        activeBranchSelections.TryGetValue(plid, out var branchInfo) &&
+                        IsAlternateMainBranch(branchInfo))
+                    {
+                        LogRouteAssignmentDecision(
+                            plid,
+                            $"main assignment deferred for alternate lane {branchInfo?.Name ?? "branch"}");
+                        continue;
+                    }
+
+                    if (currentRoute.TryGetValue(plid, out routeLabel) && routeLabel == "branch")
+                        LogRouteAssignmentDecision(plid, "main assignment forcing return to main");
+
                     TryReturnToMainRoute(plid);
                 }
                 else
@@ -2610,9 +3176,17 @@ namespace AHPP_AI.AI
                             return;
                         }
 
-                        if (activeBranchSelections.TryGetValue(plid, out var branchInfo) && IsInnerBranch(branchInfo))
+                        var hasBranchInfo = activeBranchSelections.TryGetValue(plid, out var branchInfo);
+                        var isInnerBranch = hasBranchInfo && IsInnerBranch(branchInfo);
+
+                        if (isInnerBranch)
                         {
                             if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
+                                return;
+
+                            // Stay on alternate/looping inner lanes until an explicit merge is requested.
+                            if (branchInfo?.Metadata?.Type == RouteType.AlternateMain ||
+                                branchInfo?.Metadata?.IsLoop == true)
                                 return;
                         }
 
@@ -2621,17 +3195,16 @@ namespace AHPP_AI.AI
                             var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
                             var approachIndex = Math.Max(0, path.Count - 2);
 
-                            if (activeBranchSelections.TryGetValue(plid, out var branchInfoExit) &&
-                                branchInfoExit != null)
+                            if (hasBranchInfo && branchInfo != null)
                             {
                                 var hintedIndex = pathManager.MainRoute.Count == 0
                                     ? 0
                                     : Math.Max(
                                         0,
-                                        Math.Min(pathManager.MainRoute.Count - 1, branchInfoExit.RejoinIndex));
+                                        Math.Min(pathManager.MainRoute.Count - 1, branchInfo.RejoinIndex));
                                 bestIndex = hintedIndex;
 
-                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfoExit, bestIndex))
+                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
                                     return;
                             }
                             else
@@ -2919,6 +3492,85 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Delete the currently selected layout node and refresh the visualization.
+        /// </summary>
+        public void DeleteSelectedNode(byte viewPlid)
+        {
+            var route = GetEditableRoute();
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                insim.SendPrivateMessage("No recorded route loaded to delete from.");
+                return;
+            }
+
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+
+            if (route.Nodes.Count <= 1)
+            {
+                insim.SendPrivateMessage("Cannot delete the last node of the route.");
+                return;
+            }
+
+            route.Nodes.RemoveAt(index);
+            var nextIndex = route.Nodes.Count == 0 ? -1 : Math.Min(index, route.Nodes.Count - 1);
+            selectedRouteNodeIndex = nextIndex >= 0 ? nextIndex : (int?)null;
+            routeLibrary.Save(route);
+
+            if (selectedRouteNodeIndex.HasValue)
+            {
+                var node = route.Nodes[selectedRouteNodeIndex.Value];
+                var speed = node.SpeedLimit ?? node.Speed;
+                mainUI?.UpdateLayoutSelectionStatus($"Node {selectedRouteNodeIndex.Value} @ {speed:F0} km/h");
+            }
+            else
+            {
+                mainUI?.UpdateLayoutSelectionStatus("No node selected");
+            }
+
+            insim.SendPrivateMessage(
+                $"Deleted node {index} from {route.Metadata.Name}. {route.Nodes.Count} nodes remain.");
+
+            if (route.Nodes.Count == 0)
+            {
+                lfsLayout.ClearAllVisualizations();
+                lfsLayout.WaypointsVisualized = false;
+                mainUI?.UpdateLayoutToggleState(false);
+                return;
+            }
+
+            if (lfsLayout.WaypointsVisualized) VisualizeSelectedRoute(viewPlid);
+        }
+
+        /// <summary>
+        /// Start recording to extend the current route from the selected node, replacing later nodes.
+        /// </summary>
+        public void ExtendRecordingFromSelection(byte viewPlid)
+        {
+            var route = GetEditableRoute();
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                insim.SendPrivateMessage("No recorded route loaded to extend.");
+                return;
+            }
+
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+
+            recordingRouteName = route.Metadata.Name;
+            mainUI?.UpdateRecordingRouteSelection(recordingRouteName);
+            visualizationRouteName = recordingRouteName;
+            mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
+
+            routeRecorder.StartFromExisting(route, index);
+            selectedRouteNodeIndex = Math.Min(index, route.Nodes.Count - 1);
+            var preserved = route.Nodes?.Count ?? 0;
+            mainUI?.UpdateLayoutSelectionStatus($"Extending from node {index} ({preserved} kept)");
+            insim.SendPrivateMessage(
+                $"Extending {route.Metadata.Name} from node {index}; later nodes will be re-recorded.");
+
+            if (lfsLayout.WaypointsVisualized) VisualizeSelectedRoute(viewPlid);
+        }
+
+        /// <summary>
         /// Assign the selected node as the attach-to-main index for the route metadata.
         /// </summary>
         public void SetSelectedNodeAsAttachIndex()
@@ -3040,6 +3692,56 @@ namespace AHPP_AI.AI
             mainUI?.UpdateVisualizationDetail(visualizationDetailStep);
 
             if (lfsLayout.WaypointsVisualized) VisualizeSelectedRoute(viewPlid);
+        }
+
+        /// <summary>
+        /// Reset the tracked player car to the selected layout node position.
+        /// </summary>
+        public void SpawnPlayerAtSelection()
+        {
+            var route = GetEditableRoute();
+            if (route == null || route.Nodes == null || route.Nodes.Count == 0)
+            {
+                insim.SendPrivateMessage("No recorded route loaded to spawn from.");
+                return;
+            }
+
+            if (!TryGetSelectedNodeIndex(route, out var index)) return;
+            if (playerPLID == 0)
+            {
+                insim.SendPrivateMessage("No player tracked to spawn. Join the server to capture your PLID.");
+                return;
+            }
+
+            var node = route.Nodes[index];
+            var x = (int)Math.Round(node.X * 16.0);
+            var y = (int)Math.Round(node.Y * 16.0);
+            var xShort = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, x));
+            var yShort = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, y));
+            var zByte = (byte)Math.Max(0, Math.Min(255, Math.Round(node.Z * 4.0)));
+            var headingByte = (byte)Math.Max(0, Math.Min(255, node.Heading / 256));
+
+            var startPos = new ObjectInfo
+            {
+                X = xShort,
+                Y = yShort,
+                Zbyte = zByte,
+                Heading = headingByte,
+                Flags = 0x80,
+                Index = 0
+            };
+
+            insim.Send(new IS_JRR
+            {
+                ReqI = 0,
+                JRRAction = JrrAction.JRR_RESET_NO_REPAIR,
+                PLID = playerPLID,
+                UCID = 0,
+                StartPos = startPos
+            });
+
+            insim.SendPrivateMessage(
+                $"Spawned player at node {index} ({node.X:F1}, {node.Y:F1}, z={node.Z:F1}) heading {node.Heading}.");
         }
 
         /// <summary>

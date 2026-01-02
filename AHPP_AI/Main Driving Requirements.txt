@@ -1,133 +1,402 @@
-Product Requirements Document: AI Racing Driver System for Live for Speed
-Overview
-The AI Racing Driver System provides autonomous driving for LFS vehicles using InSim control packets, recorded route data, and real‑time telemetry. It supports multi‑route traffic networks (main, alternate, pit entry, detours), configurable lane changes, recovery behaviors, and in‑game visualization/debug tooling. The system also manages AI population counts and route allocations based on live server occupancy.
+PRODUCT REQUIREMENTS DOCUMENT
+AI Racing Driver System for Live for Speed (LFS)
 
-Core Features
-1. Route Capture, Management, and Validation
-Recorded Routes (JSON): Capture player‑driven routes with per‑node metadata (position, speed, heading, throttle, brake, steering).
+PURPOSE AND SCOPE
 
-Route Metadata: Track type (main loop, alternate main, pit entry, detour), attach/rejoin indices, default speed limits, AI weights/targets, and enablement.
+The AI Racing Driver System provides autonomous driving for Live for Speed vehicles using local InSim control and telemetry. The system drives AI vehicles along recorded routes, manages multi-lane traffic on looped routes, executes dynamic lane changes, handles non-looping branch routes, and maintains stable AI population levels in multiplayer environments.
 
-Route Library: Load, and normalize, the standard routes are (Main Route, Main Alt Route, Pit to Main). Only Main Route and Pit to Main are required for AI to drive on it.
+Out of scope:
 
-Route Validation: Validate recorded routes on load and surface issues via logging + chat summaries.
+Machine learning or training systems
 
-2. Multi‑Route Navigation
-Main + Alternate Lanes: Support a primary route and optional alternate main lane that is two main loops, that can be merged between the two lanes if aligned close enough.
+Physics replacement or override
 
-Detour / Branch Routes: Dynamically discover detours from recorded routes and integrate into the path manager.
+Remote or cloud services
 
-Spawn/Pit Entry Routes: Dedicated spawn route used for pit entry or staging that can be joined by closest point from spawning car to the main route.
+Primary objectives:
 
-3. Dynamic Lane Change System
-Probabilistic Merges: Configurable merge chance, cooldowns, and check intervals for moving between main/alternate lanes.
+Stable highway-style autonomous driving
 
-Safety Checks: Parallel distance, heading alignment, and speed thresholds guard merges.
+Continuous lane-based navigation on looped routes
 
-Signaling: Turn‑signal lead time and minimum duration before committing lane transitions and turns off when the merge is complete.
+Opportunistic and safe lane merging at runtime
 
-Transition Paths: Generate a temporary interpolation path for smooth lane changes.
+Deterministic recovery from stalls or blockages
 
-4. Vehicle Control + Physics‑Aware Driving
-Pure Pursuit Steering: Optional pure‑pursuit controller with speed‑scaled lookahead and steering damping.
+Clear in-game visualization and diagnostics
 
-Gearbox/Clutch Management: Human‑like shifts, clutch timing, and stall prevention.
+ROUTE SYSTEM
 
-Speed + Waypoint Control: Speed targeting per waypoint with dynamic proximity thresholds.
+2.1 ROUTE CATEGORIES
 
-5. Collision Awareness & Recovery
-Forward Collision Detection: Detect vehicles ahead within a corridor and apply stopping behavior.
+The system must support the following route types:
 
-Recovery State Machine: Multi‑stage reverse/steer/forward recovery with escalation to pit/spectate.
+Main Route
+Loop: Yes
+Required: Yes
+Purpose: Primary driving lane
 
-6. Telemetry, Debugging & Visualization
-InSim UI Panels: Controls for AI spawning, recording, route selection, layout visualization, and InSim status.
+Main Alternate Route
+Loop: Yes
+Required: No
+Purpose: Parallel second lane
 
-Layout Visualization: Render waypoints/routes into LFS layout objects with sampling to stay under limits.
+Pit-to-Main Route
+Loop: No
+Required: Yes
+Purpose: Spawn and pit entry
 
-Active Waypoint Markers: Optional periodic marker placement during runtime.
+Branch or Detour Routes
+Loop: No
+Required: No
+Purpose: Temporary deviations
 
-Performance Tracking: Rolling performance snapshots for MCI/AII handling.
+AI must not spawn unless:
 
-7. AI Population Management
-Auto‑Populate: Scale AI count based on human occupancy, min/max caps, and fill ratio.
+A valid Main Route exists
 
-Route Distribution: Allocate AI across routes using metadata targets/weights.
+A valid Pit-to-Main Route exists
 
-Technical Requirements
-InSim Integration
-Control: Use IS_AIC for throttle/brake/steering/gear/clutch and ignition.
+2.2 LOOP SEMANTICS
 
-Telemetry: Process IS_MCI and IS_AII for live car state and AI info.
+Main Route:
 
-Layout Objects: Use IS_AXM for waypoint/route visualization and markers.
+Must be a closed loop
 
-System Architecture
-Modular components: AIController, WaypointManager, RouteLibrary, PathManager, AIDriver, AIPopulationManager, UI/Debug UI.
+First and last nodes are implicitly connected
 
-Thread‑safe reconciliation for AI population adjustments.
+AI may start at any node index
 
-Sub‑100ms control loop targets with configurable log windows.
+Navigation wraps seamlessly without reset
 
-Configuration Requirements
-Population: max players, reserved slots, AI fill ratio, batch sizes.
+Main Alternate Route:
 
-Routes: main/alt/spawn route names, detour discovery.
+Must be a closed loop
 
-Lane Change: merge chance, cooldowns, safety bounds, signaling timing.
+Represents a parallel second lane of the Main Route
 
-Steering: damping, deadzone, pure pursuit tuning.
+Shares direction and logical progression
 
-Recovery: stall detection thresholds and back‑off parameters.
+Node indices do not need to align with Main Route
 
-Visualization: sampling detail, active markers, auto visualize.
+Both looped routes are always valid driving surfaces.
 
-Functional Requirements
-Route Recording + Editing
-Record routes with speed/heading snapshots and optional speed limits.
+2.3 BRANCH ROUTE SEMANTICS (NON-LOOPS)
 
-Save to JSON under route library; auto‑generate templates when missing.
+Branch routes:
 
-Support attach/rejoin indices to define branch mapping.
+Are linear and non-looping
 
-Navigation
-Follow recorded routes with speed‑aware waypoint thresholds.
+Have exactly one attach point and one rejoin point
 
-Support alternate main lane and detour branch selection.
+May attach to either Main or Main Alternate route
 
-Lane Change
-Evaluate merge feasibility based on geometry, speed, and timing windows.
+Rules:
 
-Signal before lane change and transition through generated path.
+AI may only enter a branch at its defined start
 
-Return to main route when branch requirements end.
+AI must exit at its defined end
 
-AI Control + Safety
-Implement pure pursuit and heading‑error steering fallback.
+Branch routes are one-directional and non-reversible
 
-Detect potential collisions and stop as necessary.
+Lane changes are not permitted on branch routes
 
-Recover from stalls and stuck conditions with multi‑stage behavior.
+Failure to rejoin at the branch end must trigger recovery or despawn logic.
 
-UI & Debugging
-In‑game UI controls for AI spawning, auto‑population toggle, route recording, layout controls.
+2.4 ROUTE DATA FORMAT
 
-Visualize active route selections and layout nodes with sampling controls.
+Routes are stored as JSON with ordered nodes.
 
-Performance logging for MCI/AII processing.
+Each node includes:
 
-Performance Requirements
-Support multiple AI concurrently with auto‑population scaling.
+Position (X, Y)
 
-Maintain waypoint tracking within configurable threshold multipliers.
+Heading
 
-Recovery actions complete within configured windows.
+Target speed
 
-Telemetry processing at or above 10Hz.
+Optional per-node speed cap
 
-Constraints & Limitations
-Must operate within LFS InSim packet limits and layout object caps.
+Optional throttle and brake hints (non-authoritative)
 
-Visualization constrained by LFS layout object limits (sampling required).
+Each route includes metadata:
 
-AI behavior bounded by LFS physics and network latency. 
+Route type
+
+Default speed limit
+
+Weight or target ratio for AI allocation
+
+Attach index (branches only)
+
+Rejoin index (branches only)
+
+Enabled flag
+
+2.5 ROUTE VALIDATION
+
+On route load:
+
+Validate loop closure for Main and Main Alternate routes
+
+Validate end-to-start distance and heading tolerance
+
+Reject non-looped Main or Main Alternate routes
+
+Reject looping branch routes
+
+Validate attach and rejoin indices
+
+Validate node spacing and curvature limits
+
+Validation failures must:
+
+Log to server console
+
+Emit concise admin-only chat summaries
+
+NAVIGATION AND PATH MANAGEMENT
+
+3.1 BASE NAVIGATION
+
+AI follows recorded routes using speed-scaled waypoint proximity thresholds
+
+Waypoint progression is gated by heading alignment
+
+Speed targets are derived from route and node metadata
+
+3.2 LOOP NAVIGATION
+
+Main and Main Alternate routes are traversed infinitely
+
+No concept of start or end during runtime
+
+AI may circulate indefinitely
+
+LANE DETECTION AND MERGE SYSTEM
+
+4.1 PARALLEL ROUTE DETECTION
+
+The system must continuously detect parallel segments between the Main Route and Main Alternate Route.
+
+Detection:
+
+Occurs at runtime
+
+Occurs at any point along the loop
+
+Is not restricted to route boundaries
+
+Parallelism criteria:
+
+Lateral distance below threshold
+
+Heading delta below threshold
+
+Directional consistency
+
+Parallel segments may exist intermittently.
+
+4.2 LANE MERGE ELIGIBILITY
+
+AI may initiate a lane merge at any point where:
+
+Parallelism is detected
+
+All merge safety rules are satisfied
+
+There are no fixed merge nodes.
+
+Lane merging:
+
+Is bidirectional between Main and Main Alternate
+
+May occur multiple times per lap
+
+Is cooldown-limited
+
+Is never permitted on branch routes
+
+4.3 MERGE DECISION MODEL
+
+Lane changes are:
+
+Probabilistic
+
+Cooldown-limited
+
+Evaluated at fixed intervals
+
+Safety checks include:
+
+Parallel distance
+
+Heading alignment
+
+Speed delta
+
+Clear merge corridor using MCI vehicle detection
+
+4.4 SIGNALING AND TRANSITION PATH
+
+Turn signals must activate before lateral movement
+
+Minimum signal duration is enforced
+
+Signals must deactivate only after merge completion
+
+A temporary interpolation path must be generated:
+
+Curvature-limited
+
+Speed-aware
+
+Followed until the merge completes
+
+VEHICLE CONTROL AND DRIVING MODEL
+
+5.1 STEERING
+
+Primary controller is Pure Pursuit
+
+Lookahead distance scales with speed
+
+Steering damping and deadzone are configurable
+
+Fallback:
+
+Heading-error steering when pursuit is unstable
+
+5.2 POWERTRAIN CONTROL
+
+Human-like gear shifting
+
+Explicit clutch timing
+
+Stall detection and prevention
+
+No instant gear snapping
+
+5.3 SPEED CONTROL
+
+Route and node-based speed targets
+
+Proactive deceleration for curvature
+
+Emergency braking overrides allowed
+
+COLLISION AWARENESS AND RECOVERY
+
+6.1 COLLISION DETECTION
+
+Forward corridor vehicle detection using MCI data
+
+Stop or slow when blocked
+
+No overtaking unless on approved alternate route
+
+6.2 RECOVERY STATE MACHINE
+
+Recovery stages:
+
+Pause and reassess
+
+Reverse with steering bias
+
+Forward retry
+
+Escalation to pit or spectate
+
+All recovery actions must be:
+
+Time-boxed
+
+Logged
+
+Non-blocking
+
+AI POPULATION MANAGEMENT
+
+7.1 AUTO-POPULATION
+
+AI count scales with human players
+
+Minimum and maximum AI enforced
+
+Reserved human slots respected
+
+7.2 ROUTE ALLOCATION
+
+AI distributed across routes using route weights
+
+Allocation occurs only at spawn or despawn
+
+No mid-route reassignment
+
+All population changes must be thread-safe.
+
+VISUALIZATION AND DEBUG TOOLING
+
+8.1 IN-GAME UI
+
+InSim panels must provide:
+
+AI spawn and despawn controls
+
+Auto-population toggle
+
+Route recording controls
+
+Visualization toggles
+
+Live AI state display
+
+8.2 LAYOUT VISUALIZATION
+
+Routes rendered as layout objects
+
+Sampling required to remain under object limits
+
+Distinct colors per route type
+
+Optional live waypoint markers
+
+TELEMETRY AND PERFORMANCE
+
+IS_MCI and IS_AII processed at or above 10 Hz
+
+Control loop target under 100 ms
+
+Rolling performance snapshots
+
+Configurable logging windows
+
+CONFIGURATION REQUIREMENTS
+
+Configuration must expose:
+
+AI population limits and ratios
+
+Required route names
+
+Lane merge probabilities and cooldowns
+
+Steering and pursuit tuning
+
+Recovery thresholds
+
+Visualization sampling density
+
+Hot reload should be supported where possible.
+
+CONSTRAINTS AND LIMITATIONS
+
+Must remain within LFS InSim packet limits
+
+Must respect layout object caps
+
+Must tolerate network latency
+
+Must not block the main InSim thread
+
+All behavior constrained by LFS physics

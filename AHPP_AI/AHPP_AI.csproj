@@ -9,6 +9,7 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <RuntimeIdentifiers>win-x86</RuntimeIdentifiers>
     <SelfContained>false</SelfContained>
+    <ManagedDllSubDirectory>dll/</ManagedDllSubDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -30,5 +31,29 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="PlaceManagedDllsInSubfolder" BeforeTargets="GeneratePublishDependencyFile">
+    <ItemGroup>
+      <DllsToRelocate Include="@(ResolvedFileToPublish)"
+                      Condition="'%(ResolvedFileToPublish.Extension)' == '.dll' and '%(ResolvedFileToPublish.FileType)' == 'Managed' and '%(ResolvedFileToPublish.FileName)' != '$(AssemblyName)'"/>
+      <ResolvedFileToPublish Update="@(DllsToRelocate)">
+        <DestinationSubDirectory>$(ManagedDllSubDirectory)</DestinationSubDirectory>
+        <DestinationSubPath>$(ManagedDllSubDirectory)%(FileName)%(Extension)</DestinationSubPath>
+        <RelativePath>$(ManagedDllSubDirectory)%(FileName)%(Extension)</RelativePath>
+        <TargetPath>$(ManagedDllSubDirectory)%(FileName)%(Extension)</TargetPath>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="KeepEntryAssemblyAtRoot" BeforeTargets="GeneratePublishDependencyFile">
+    <ItemGroup>
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.FileName)' == '$(AssemblyName)'">
+        <DestinationSubDirectory></DestinationSubDirectory>
+        <DestinationSubPath>%(FileName)%(Extension)</DestinationSubPath>
+        <RelativePath>%(FileName)%(Extension)</RelativePath>
+        <TargetPath>%(FileName)%(Extension)</TargetPath>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
 </Project>

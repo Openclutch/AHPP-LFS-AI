@@ -35,10 +35,10 @@ namespace AHPP_AI.UI
         private const byte DETAIL_BTN_SPACING = 1;
         private const byte SELECT_ROW = 170;
         private const byte RECORD_ROW = 180;
-        private const byte ROUTE_NAME_ROW = 160;
+        private const byte DEBUG_BUTTON_ROW = 55;
         private const byte HIDE_BUTTON_ROW = 60;
         private const byte INSIM_STATUS_ROW = 85;
-        private const byte REMOVE_BTN_W = 3;
+        private const byte REMOVE_BTN_W = 5;
         private const byte RECORD_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = BTN_W;
         private const byte VISUALIZER_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
@@ -66,6 +66,10 @@ namespace AHPP_AI.UI
         public const byte LayoutAttachIndexId = (byte)(ButtonIds.MainStart + 16);
         public const byte LayoutRejoinIndexId = (byte)(ButtonIds.MainStart + 17);
         public const byte LayoutSelectionLabelId = (byte)(ButtonIds.MainStart + 18);
+        public const byte LayoutDeleteNodeId = (byte)(ButtonIds.MainStart + 66);
+        public const byte LayoutExtendRouteId = (byte)(ButtonIds.MainStart + 67);
+        public const byte LayoutSpawnHereId = (byte)(ButtonIds.MainStart + 68);
+        public const byte ToggleDebugButtonsId = (byte)(ButtonIds.MainStart + 69);
         private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
         private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 20);
         public const byte HideUiButtonId = (byte)(ButtonIds.MainStart + 63);
@@ -74,13 +78,22 @@ namespace AHPP_AI.UI
         public const byte VisualizationDetailPlusId = (byte)(ButtonIds.MainStart + 61);
         public const byte VisualizationDetailLabelId = (byte)(ButtonIds.MainStart + 62);
 
+        private class RouteButtonInfo
+        {
+            public byte Id { get; set; }
+            public string Name { get; set; } = string.Empty;
+            public bool HasRecording { get; set; }
+        }
+
         private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
-        private readonly List<(byte id, string name)> routeButtons = new List<(byte id, string name)>();
+        private readonly List<RouteButtonInfo> routeButtons = new List<RouteButtonInfo>();
         private readonly List<(byte id, string name)> lastAiSnapshot = new List<(byte id, string name)>();
         private const byte ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 21);
         private const byte ROUTE_BUTTON_MAX_COUNT = 8;
         private const byte VISUAL_ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 40);
+        private readonly Dictionary<string, bool> routeRecordingStatus =
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         private string selectedRoute = "main_loop";
         private string selectedVisualizationRoute = "main_loop";
@@ -96,6 +109,7 @@ namespace AHPP_AI.UI
         private byte autoAiButtonRow;
         private bool layoutVisualizationEnabled;
         private byte toggleLayoutRow;
+        private bool debugButtonsVisible = true;
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -112,6 +126,7 @@ namespace AHPP_AI.UI
             uiHidden = false;
 
             byte row = 70;
+            CreateButton(ToggleDebugButtonsId, GetDebugButtonsToggleLabel(), LEFT_COL, DEBUG_BUTTON_ROW);
             CreateButton(HideUiButtonId, "Hide UI", LEFT_COL, HIDE_BUTTON_ROW);
             CreateButton(ReloadRoutesId, "Reload Routes", LEFT_COL, row); row += ROW_HEIGHT;
             toggleLayoutRow = row;
@@ -126,17 +141,22 @@ namespace AHPP_AI.UI
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
             autoAiButtonRow = row;
             CreateButton(StartAutoAisId, GetAutoAiButtonText(), RIGHT_COL, row); row += ROW_HEIGHT;
-            CreateInputButton(RouteNameInputId, RIGHT_COL, ROUTE_NAME_ROW, "Route Name", 24);
             CreateButton(StartAllAisId, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(StopAllAisId, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(PitAllAisId, "Pit All AI", RIGHT_COL, row);
-            var layoutButtonGroupWidth = (byte)(BTN_W * 3 + SELECT_BTN_SPACING * 2);
+            var layoutButtonGroupWidth = (byte)(BTN_W * 6 + SELECT_BTN_SPACING * 5);
             var layoutButtonLeft = (byte)Math.Max(0, (SCREEN_WIDTH - layoutButtonGroupWidth) / 2);
             var nodeSpeedLeft = (byte)(layoutButtonLeft + BTN_W + SELECT_BTN_SPACING);
             var rejoinLeft = (byte)(nodeSpeedLeft + BTN_W + SELECT_BTN_SPACING);
+            var deleteLeft = (byte)(rejoinLeft + BTN_W + SELECT_BTN_SPACING);
+            var extendLeft = (byte)(deleteLeft + BTN_W + SELECT_BTN_SPACING);
+            var spawnLeft = (byte)(extendLeft + BTN_W + SELECT_BTN_SPACING);
             CreateButton(LayoutAttachIndexId, "Set Attach", layoutButtonLeft, LAYOUT_EDIT_ROW);
             CreateInputButton(NodeSpeedInputId, nodeSpeedLeft, LAYOUT_EDIT_ROW, "Node Speed");
             CreateButton(LayoutRejoinIndexId, "Set Rejoin", rejoinLeft, LAYOUT_EDIT_ROW);
+            CreateButton(LayoutDeleteNodeId, "Delete Node", deleteLeft, LAYOUT_EDIT_ROW);
+            CreateButton(LayoutExtendRouteId, "Extend Route", extendLeft, LAYOUT_EDIT_ROW);
+            CreateButton(LayoutSpawnHereId, "Spawn Here", spawnLeft, LAYOUT_EDIT_ROW);
 
             RenderRouteSelectors();
             RenderRecordButton();
@@ -172,6 +192,17 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Reflect debug button visibility state in the toggle control.
+        /// </summary>
+        /// <param name="visible">True when debug buttons are shown.</param>
+        public void SetDebugButtonsVisible(bool visible)
+        {
+            debugButtonsVisible = visible;
+            if (!uiInitialized || uiHidden) return;
+            CreateButton(ToggleDebugButtonsId, GetDebugButtonsToggleLabel(), LEFT_COL, DEBUG_BUTTON_ROW);
+        }
+
+        /// <summary>
         /// Build the auto-population button label based on current state.
         /// </summary>
         private string GetAutoAiButtonText()
@@ -185,6 +216,14 @@ namespace AHPP_AI.UI
         private string GetLayoutToggleLabel()
         {
             return layoutVisualizationEnabled ? "Hide Layout" : "Show Layout";
+        }
+
+        /// <summary>
+        /// Build the label for the debug visibility toggle.
+        /// </summary>
+        private string GetDebugButtonsToggleLabel()
+        {
+            return debugButtonsVisible ? "Hide Debug HUD" : "Show Debug HUD";
         }
 
         /// <summary>
@@ -278,7 +317,7 @@ namespace AHPP_AI.UI
 
             if (routeButtons.Count == 0)
             {
-                SetRouteOptions(new[] { "main_loop", "pit_entry" }, selectedRoute);
+                SetRouteOptions(new[] { ("main_loop", false), ("pit_entry", false) }, selectedRoute);
                 return;
             }
 
@@ -292,19 +331,36 @@ namespace AHPP_AI.UI
             {
                 var option = routeButtons[i];
                 var top = (byte)(startTop + i * ROW_HEIGHT);
-                DeleteButton(option.id);
-                var text = option.name.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)
-                    ? $"[{option.name}]"
-                    : option.name;
-                CreateButton(option.id, text, left, top);
+                DeleteButton(option.Id);
+                var text = FormatRouteLabel(option);
+                CreateButton(option.Id, text, left, top);
             }
 
             // Add a button to create/confirm a new route using the Route Name input at the bottom of the column.
             var bottomRow = (byte)Math.Min(VISUAL_DETAIL_ROW, SELECT_ROW);
             var addTop = (byte)Math.Min(200 - ROW_HEIGHT,
                 Math.Max(startTop + count * ROW_HEIGHT + ROW_HEIGHT, bottomRow + ROW_HEIGHT));
+            var routeNameTop = (byte)Math.Max(VISUAL_ROUTE_START_ROW, addTop - ROW_HEIGHT);
+            DeleteButton(RouteNameInputId);
+            CreateInputButton(RouteNameInputId, left, routeNameTop, "Route Name", 24);
             DeleteButton(AddRouteButtonId);
             CreateButton(AddRouteButtonId, "Add Route", left, addTop);
+        }
+
+        /// <summary>
+        /// Build a labeled route name with color indicating recording state.
+        /// </summary>
+        private string FormatRouteLabel(RouteButtonInfo option)
+        {
+            var color = option.HasRecording ? "^2" : "^1";
+            const string reset = "^7";
+            if (option.Name.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase))
+            {
+                // Keep brackets white while coloring the route name.
+                return $"{reset}[{color}{option.Name}{reset}]";
+            }
+
+            return $"{color}{option.Name}";
         }
 
         /// <summary>
@@ -315,16 +371,6 @@ namespace AHPP_AI.UI
             // Visualization uses the same unified route buttons; no separate rendering needed.
         }
 
-        /// <summary>
-        /// Draw the label that identifies the visualization column.
-        /// </summary>
-        private void RenderVisualizationLabel()
-        {
-            if (!uiInitialized || uiHidden) return;
-
-            DeleteButton(VISUALIZER_LABEL_ID);
-            CreateButton(VISUALIZER_LABEL_ID, "Visualizer", VISUAL_COLUMN_LEFT, VISUALIZER_LABEL_ROW, BTN_W, ROW_HEIGHT, false);
-        }
 
         /// <summary>
         /// Render the detail selector used for visualization sampling.
@@ -403,30 +449,56 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Update the available route buttons to reflect current track/layout.
         /// </summary>
-        public void SetRouteOptions(IEnumerable<string> routeNames, string preferredSelection)
+        public void SetRouteOptions(IEnumerable<(string name, bool recorded)> routeOptions, string preferredSelection)
         {
             selectedRoute = string.IsNullOrWhiteSpace(preferredSelection) ? selectedRoute : preferredSelection;
-            var unique = new List<string>();
+            var unique = new List<(string name, bool recorded)>();
+            routeRecordingStatus.Clear();
 
-            if (routeNames != null)
+            if (routeOptions != null)
             {
-                foreach (var name in routeNames)
+                foreach (var option in routeOptions)
                 {
-                    if (string.IsNullOrWhiteSpace(name)) continue;
-                    if (unique.Exists(r => r.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
-                    unique.Add(name);
+                    if (string.IsNullOrWhiteSpace(option.name)) continue;
+                    var existingIndex = unique.FindIndex(r => r.name.Equals(option.name, StringComparison.OrdinalIgnoreCase));
+                    if (existingIndex >= 0)
+                    {
+                        var mergedRecorded = unique[existingIndex].recorded || option.recorded;
+                        unique[existingIndex] = (unique[existingIndex].name, mergedRecorded);
+                    }
+                    else
+                    {
+                        unique.Add(option);
+                    }
+
+                    if (routeRecordingStatus.TryGetValue(option.name, out var stored))
+                        routeRecordingStatus[option.name] = stored || option.recorded;
+                    else
+                        routeRecordingStatus[option.name] = option.recorded;
                 }
             }
 
-            if (!unique.Exists(r => r.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)))
-                unique.Insert(0, selectedRoute);
+            if (!unique.Exists(r => r.name.Equals(selectedRoute, StringComparison.OrdinalIgnoreCase)))
+            {
+                var recorded = routeRecordingStatus.TryGetValue(selectedRoute, out var hasRecording) && hasRecording;
+                unique.Insert(0, (selectedRoute, recorded));
+                routeRecordingStatus[selectedRoute] = recorded;
+            }
 
             routeButtons.Clear();
             byte id = ROUTE_BUTTON_START_ID;
-            foreach (var name in unique)
+            foreach (var option in unique)
             {
                 if (routeButtons.Count >= ROUTE_BUTTON_MAX_COUNT) break;
-                routeButtons.Add((id, name));
+                var recorded = routeRecordingStatus.TryGetValue(option.name, out var hasRecording)
+                    ? hasRecording
+                    : option.recorded;
+                routeButtons.Add(new RouteButtonInfo
+                {
+                    Id = id,
+                    Name = option.name,
+                    HasRecording = recorded
+                });
                 id++;
             }
 
@@ -455,9 +527,9 @@ namespace AHPP_AI.UI
         {
             foreach (var button in routeButtons)
             {
-                if (button.id == clickId)
+                if (button.Id == clickId)
                 {
-                    routeName = button.name;
+                    routeName = button.Name;
                     return true;
                 }
             }
@@ -518,7 +590,8 @@ namespace AHPP_AI.UI
             if (!uiInitialized || uiHidden) return;
 
             DeleteButton(LayoutSelectionLabelId);
-            CreateButton(LayoutSelectionLabelId, layoutSelectionStatus, RIGHT_COL, LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
+            var left = (byte)Math.Max(0, (SCREEN_WIDTH - LAYOUT_STATUS_W) / 2);
+            CreateButton(LayoutSelectionLabelId, layoutSelectionStatus, left, LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
                 ROW_HEIGHT, false);
         }
 
@@ -604,7 +677,7 @@ namespace AHPP_AI.UI
                 var top = (byte)(row + ROW_HEIGHT * index);
                 var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
 
-                CreateButton(removeId, "X", removeLeft, top);
+                CreateButton(removeId, "X", removeLeft, top, REMOVE_BTN_W);
                 CreateButton(labelId, $"{name}", AI_LIST_COL, top);
 
                 aiListButtons[id] = labelId;
@@ -618,7 +691,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private void EnsureRouteButton(string routeName)
         {
-            if (routeButtons.Exists(b => b.name.Equals(routeName, StringComparison.OrdinalIgnoreCase)))
+            if (routeButtons.Exists(b => b.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase)))
             {
                 RenderRouteSelectors();
                 RenderRecordButton();
@@ -630,11 +703,18 @@ namespace AHPP_AI.UI
                 routeButtons.RemoveAt(routeButtons.Count - 1);
             }
 
-            routeButtons.Insert(0, (ROUTE_BUTTON_START_ID, routeName));
+            var recorded = routeRecordingStatus.TryGetValue(routeName, out var hasRecording) && hasRecording;
+            routeButtons.Insert(0, new RouteButtonInfo
+            {
+                Id = ROUTE_BUTTON_START_ID,
+                Name = routeName,
+                HasRecording = recorded
+            });
             for (var i = 0; i < routeButtons.Count; i++)
             {
-                routeButtons[i] = ((byte)(ROUTE_BUTTON_START_ID + i), routeButtons[i].name);
+                routeButtons[i].Id = (byte)(ROUTE_BUTTON_START_ID + i);
             }
+            routeRecordingStatus[routeName] = recorded;
 
             RenderRouteSelectors();
             RenderRecordButton();

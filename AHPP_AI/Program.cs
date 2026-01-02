@@ -65,7 +65,36 @@ namespace AHPP_AI
         private static readonly double purePursuitWheelbaseMeters;
         private static readonly double purePursuitSteeringGain;
         private static readonly double purePursuitMaxSteerDegrees;
+        private static readonly int throttleBase;
+        private static readonly int brakeBase;
+        private static readonly int minSteering;
+        private static readonly int maxSteering;
+        private static readonly int steeringCenter;
+        private static readonly int shiftDelayMs;
+        private static readonly int gearUpshiftHysteresisKmh;
+        private static readonly int gearDownshiftHysteresisKmh;
+        private static readonly int gearShiftMinIntervalMs;
+        private static readonly double[] gearSpeedThresholdsKmh;
+        private static readonly int clutchFullyPressed;
+        private static readonly int clutchReleased;
+        private static readonly int clutchPressDelayMs;
         private static readonly int clutchHoldAfterShiftMs;
+        private static readonly int clutchReleaseSteps;
+        private static readonly int clutchReleaseIntervalMs;
+        private static readonly int stallPreventionRpm;
+        private static readonly int stallPreventionReleaseRpm;
+        private static readonly int stallPreventionHoldMs;
+        private static readonly bool wallRecoveryEnabled;
+        private static readonly int waypointTimeoutSeconds;
+        private static readonly int progressCheckIntervalMs;
+        private static readonly double minRequiredProgress;
+        private static readonly int maxRecoveryAttempts;
+        private static readonly int maxFailedRecoveryCycles;
+        private static readonly double minSpeedThreshold;
+        private static readonly int stationaryCheckCount;
+        private static readonly double waypointMinThreshold;
+        private static readonly double waypointMaxThreshold;
+        private static readonly double waypointThresholdSpeedFactor;
         private static readonly double collisionDetectionRangeMeters;
         private static readonly double collisionDetectionAngleDegrees;
         private static readonly double minimumSafetyDistanceMeters;
@@ -104,11 +133,20 @@ namespace AHPP_AI
         private static readonly double laneChangeSafetyCheckHalfWidthMeters;
         private static readonly double laneChangeMaxParallelDistanceMeters;
         private static readonly double laneChangeMaxParallelHeadingDegrees;
+        private static readonly double laneChangeParallelLookaheadSeconds;
+        private static readonly double laneChangeParallelLookaheadMinMeters;
         private static readonly double laneChangeMaxMergeSpeedKmh;
         private static readonly double laneChangeSignalLeadTimeSeconds;
         private static readonly double laneChangeSignalMinimumDurationSeconds;
         private static readonly double laneChangeTransitionLengthMeters;
         private static readonly int laneChangeTransitionPointCount;
+        private static readonly int laneChangeTargetAheadWaypoints;
+        private static readonly bool passByReactionEnabled;
+        private static readonly double passByReactionChance;
+        private static readonly double passBySpeedThresholdKmh;
+        private static readonly double passByReactionDurationSeconds;
+        private static readonly double passByReactionDistanceMeters;
+        private static readonly AIConfig.PassByReactionMode passByReactionMode;
         private static readonly string buildVersion;
 
         /// <summary>
@@ -138,6 +176,14 @@ namespace AHPP_AI
             mainAlternateRouteName = string.IsNullOrWhiteSpace(rawAlt)
                 ? string.Empty
                 : routeLibrary.NormalizeRouteName(rawAlt);
+            for (var i = 1; i <= 3; i++)
+            {
+                var detour = appConfig.GetString("Routes", $"Detour{i}", string.Empty);
+                if (string.IsNullOrWhiteSpace(detour)) continue;
+                var normalized = routeLibrary.NormalizeRouteName(detour);
+                if (!branchRouteNames.Exists(n => n.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+                    branchRouteNames.Add(normalized);
+            }
             currentRecordingRoute = routeLibrary.NormalizeRouteName(mainRouteName);
             pendingRouteName = currentRecordingRoute;
 
@@ -154,7 +200,37 @@ namespace AHPP_AI
             purePursuitWheelbaseMeters = appConfig.GetDouble("AI", "PurePursuitWheelbaseMeters", 2.5);
             purePursuitSteeringGain = appConfig.GetDouble("AI", "PurePursuitSteeringGain", 1.0);
             purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
+            throttleBase = appConfig.GetInt("AI", "ThrottleBase", 0);
+            brakeBase = appConfig.GetInt("AI", "BrakeBase", 10000);
+            minSteering = appConfig.GetInt("AI", "MinSteering", 1);
+            maxSteering = appConfig.GetInt("AI", "MaxSteering", 65535);
+            steeringCenter = appConfig.GetInt("AI", "SteeringCenter", 32768);
+            shiftDelayMs = appConfig.GetInt("AI", "ShiftDelayMs", 500);
+            gearUpshiftHysteresisKmh = appConfig.GetInt("AI", "GearUpshiftHysteresisKmh", 5);
+            gearDownshiftHysteresisKmh = appConfig.GetInt("AI", "GearDownshiftHysteresisKmh", 5);
+            gearShiftMinIntervalMs = appConfig.GetInt("AI", "GearShiftMinIntervalMs", 900);
+            gearSpeedThresholdsKmh = ParseGearSpeedThresholds(
+                appConfig.GetString("AI", "GearSpeedThresholdsKmh", string.Empty));
+            clutchFullyPressed = appConfig.GetInt("AI", "ClutchFullyPressed", 65535);
+            clutchReleased = appConfig.GetInt("AI", "ClutchReleased", 0);
+            clutchPressDelayMs = appConfig.GetInt("AI", "ClutchPressDelayMs", 100);
             clutchHoldAfterShiftMs = appConfig.GetInt("AI", "ClutchHoldAfterShiftMs", 75);
+            clutchReleaseSteps = appConfig.GetInt("AI", "ClutchReleaseSteps", 5);
+            clutchReleaseIntervalMs = appConfig.GetInt("AI", "ClutchReleaseIntervalMs", 100);
+            stallPreventionRpm = appConfig.GetInt("AI", "StallPreventionRpm", 500);
+            stallPreventionReleaseRpm = appConfig.GetInt("AI", "StallPreventionReleaseRpm", 900);
+            stallPreventionHoldMs = appConfig.GetInt("AI", "StallPreventionHoldMs", 750);
+            wallRecoveryEnabled = appConfig.GetBool("AI", "WallRecoveryEnabled", true);
+            waypointTimeoutSeconds = appConfig.GetInt("AI", "WaypointTimeoutSeconds", 30);
+            progressCheckIntervalMs = appConfig.GetInt("AI", "ProgressCheckIntervalMs", 5000);
+            minRequiredProgress = appConfig.GetDouble("AI", "MinRequiredProgress", 5.0);
+            maxRecoveryAttempts = appConfig.GetInt("AI", "MaxRecoveryAttempts", 5);
+            maxFailedRecoveryCycles = appConfig.GetInt("AI", "MaxFailedRecoveryCycles", 2);
+            minSpeedThreshold = appConfig.GetDouble("AI", "MinSpeedThreshold", 0.5);
+            stationaryCheckCount = appConfig.GetInt("AI", "StationaryCheckCount", 3);
+            waypointMinThreshold = appConfig.GetDouble("AI", "WaypointMinThreshold", 1.5);
+            waypointMaxThreshold = appConfig.GetDouble("AI", "WaypointMaxThreshold", 5.0);
+            waypointThresholdSpeedFactor = appConfig.GetDouble("AI", "WaypointThresholdSpeedFactor", 0.1);
             collisionDetectionRangeMeters = appConfig.GetDouble("AI", "CollisionDetectionRangeM", 30.0);
             collisionDetectionAngleDegrees = appConfig.GetDouble("AI", "CollisionDetectionAngle", 45.0);
             minimumSafetyDistanceMeters = appConfig.GetDouble("AI", "MinimumSafetyDistanceM", 10.0);
@@ -201,6 +277,10 @@ namespace AHPP_AI
                 appConfig.GetDouble(laneSection, "MaxParallelDistanceMeters", 12.0);
             laneChangeMaxParallelHeadingDegrees =
                 appConfig.GetDouble(laneSection, "MaxParallelHeadingDegrees", 45.0);
+            laneChangeParallelLookaheadSeconds =
+                appConfig.GetDouble(laneSection, "ParallelLookaheadSeconds", 1.5);
+            laneChangeParallelLookaheadMinMeters =
+                appConfig.GetDouble(laneSection, "ParallelLookaheadMinMeters", 20.0);
             laneChangeMaxMergeSpeedKmh = appConfig.GetDouble(laneSection, "MaxMergeSpeedKmh", 60.0);
             laneChangeSignalLeadTimeSeconds = appConfig.GetDouble(laneSection, "SignalLeadTimeSeconds", 3.0);
             laneChangeSignalMinimumDurationSeconds =
@@ -208,6 +288,14 @@ namespace AHPP_AI
             laneChangeTransitionLengthMeters =
                 appConfig.GetDouble(laneSection, "TransitionLengthMeters", 25.0);
             laneChangeTransitionPointCount = appConfig.GetInt(laneSection, "TransitionPointCount", 12);
+            laneChangeTargetAheadWaypoints = appConfig.GetInt(laneSection, "TargetAheadWaypoints", 4);
+            passByReactionEnabled = appConfig.GetBool("AI", "PassByReactionEnabled", true);
+            passByReactionChance = appConfig.GetDouble("AI", "PassByReactionChance", 0.10);
+            passBySpeedThresholdKmh = appConfig.GetDouble("AI", "PassBySpeedThresholdKmh", 120.0);
+            passByReactionDurationSeconds = appConfig.GetDouble("AI", "PassByReactionDurationSeconds", 2.0);
+            passByReactionDistanceMeters = appConfig.GetDouble("AI", "PassByReactionDistanceMeters", 25.0);
+            passByReactionMode = ParsePassByReactionMode(
+                appConfig.GetString("AI", "PassByReactionMode", "FlashAndHorn"));
             buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
 
             // Initialize components in the correct order
@@ -229,8 +317,28 @@ namespace AHPP_AI
             aiController.SetWaypointProximityMultiplier(waypointProximityMultiplier);
             aiController.SetSteeringResponseDamping(steeringResponseDamping);
             aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
+            aiController.ConfigureControlInputs(throttleBase, brakeBase, minSteering, maxSteering, steeringCenter);
+            aiController.ConfigureWaypointThresholds(
+                waypointMinThreshold,
+                waypointMaxThreshold,
+                waypointThresholdSpeedFactor);
             aiController.SetBuildVersion(buildVersion);
-            aiController.SetClutchHoldAfterShiftMs(clutchHoldAfterShiftMs);
+            aiController.ConfigureClutch(
+                clutchFullyPressed,
+                clutchReleased,
+                clutchPressDelayMs,
+                clutchHoldAfterShiftMs,
+                clutchReleaseSteps,
+                clutchReleaseIntervalMs,
+                stallPreventionRpm,
+                stallPreventionReleaseRpm,
+                stallPreventionHoldMs);
+            aiController.ConfigureGearbox(
+                shiftDelayMs,
+                gearUpshiftHysteresisKmh,
+                gearDownshiftHysteresisKmh,
+                gearShiftMinIntervalMs,
+                gearSpeedThresholdsKmh);
             aiController.ConfigureCollisionDetection(
                 collisionDetectionRangeMeters,
                 collisionDetectionAngleDegrees,
@@ -253,11 +361,30 @@ namespace AHPP_AI
                 laneChangeSafetyCheckHalfWidthMeters,
                 laneChangeMaxParallelDistanceMeters,
                 laneChangeMaxParallelHeadingDegrees,
+                laneChangeParallelLookaheadSeconds,
+                laneChangeParallelLookaheadMinMeters,
                 laneChangeMaxMergeSpeedKmh,
                 laneChangeSignalLeadTimeSeconds,
                 laneChangeSignalMinimumDurationSeconds,
                 laneChangeTransitionLengthMeters,
-                laneChangeTransitionPointCount);
+                laneChangeTransitionPointCount,
+                laneChangeTargetAheadWaypoints);
+            aiController.ConfigurePassByReactions(
+                passByReactionEnabled,
+                passByReactionChance,
+                passBySpeedThresholdKmh,
+                passByReactionDurationSeconds,
+                passByReactionDistanceMeters,
+                passByReactionMode);
+            aiController.ConfigureRecoveryLimits(
+                wallRecoveryEnabled,
+                waypointTimeoutSeconds,
+                progressCheckIntervalMs,
+                minRequiredProgress,
+                maxRecoveryAttempts,
+                maxFailedRecoveryCycles,
+                minSpeedThreshold,
+                stationaryCheckCount);
             aiController.ConfigureRecovery(
                 recoveryShortReverseMs,
                 recoveryLongReverseMs,
@@ -531,6 +658,9 @@ namespace AHPP_AI
                 case MainUI.ShowUiButtonId:
                     aiController.ShowUI();
                     break;
+                case MainUI.ToggleDebugButtonsId:
+                    aiController.ToggleDebugButtonsVisibility();
+                    break;
                 case MainUI.RefreshSelectionFeedId:
                     RequestLayoutSelectionFeed();
                     break;
@@ -545,23 +675,14 @@ namespace AHPP_AI
                 case MainUI.LayoutRejoinIndexId:
                     aiController.SetSelectedNodeAsRejoinIndex();
                     break;
-                case DebugUI.SpawnButtonId:
-                    aiController.SpawnAICars();
+                case MainUI.LayoutDeleteNodeId:
+                    aiController.DeleteSelectedNode(currentViewPLID);
                     break;
-                case DebugUI.RemoveButtonId:
-                    aiController.RemoveLastAICar();
+                case MainUI.LayoutExtendRouteId:
+                    aiController.ExtendRecordingFromSelection(currentViewPLID);
                     break;
-                case DebugUI.RemoveAllButtonId:
-                    aiController.RemoveAllAICars();
-                    break;
-                case DebugUI.StopAllButtonId:
-                    aiController.StopAllAIs();
-                    break;
-                case DebugUI.SpecAllButtonId:
-                    aiController.PitAllAIs();
-                    break;
-                case DebugUI.SetSpeedButtonId:
-                    aiController.SetTargetSpeedForAll(50);
+                case MainUI.LayoutSpawnHereId:
+                    aiController.SpawnPlayerAtSelection();
                     break;
                 case MainUI.VisualizationDetailMinusId:
                     aiController.AdjustVisualizationDetail(false, currentViewPLID);
@@ -829,6 +950,44 @@ namespace AHPP_AI
         private static double GetAiManagerDouble(string key, double defaultValue)
         {
             return appConfig.GetDouble("AIManager", key, appConfig.GetDouble("AI", key, defaultValue));
+        }
+
+        /// <summary>
+        /// Parse comma-separated gear speed thresholds (km/h) from configuration.
+        /// </summary>
+        private static double[] ParseGearSpeedThresholds(string rawThresholds)
+        {
+            var defaultThresholds = new[] { 20.0, 40.0, 60.0, 80.0, 100.0 };
+            if (string.IsNullOrWhiteSpace(rawThresholds))
+                return defaultThresholds;
+
+            var values = new List<double>();
+            var parts = rawThresholds.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                if (double.TryParse(part.Trim(), out var value))
+                    values.Add(value);
+            }
+
+            if (values.Count == 0)
+            {
+                logger.LogWarning($"Invalid GearSpeedThresholdsKmh '{rawThresholds}', using defaults.");
+                return defaultThresholds;
+            }
+
+            return values.ToArray();
+        }
+
+        /// <summary>
+        /// Parse pass-by reaction mode text into a supported enum value.
+        /// </summary>
+        private static AIConfig.PassByReactionMode ParsePassByReactionMode(string rawMode)
+        {
+            if (Enum.TryParse(rawMode, true, out AIConfig.PassByReactionMode parsedMode))
+                return parsedMode;
+
+            logger.LogWarning($"Unknown PassByReactionMode '{rawMode}', defaulting to FlashAndHorn.");
+            return AIConfig.PassByReactionMode.FlashAndHorn;
         }
 
         /// <summary>

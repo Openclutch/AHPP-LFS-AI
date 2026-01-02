@@ -176,7 +176,7 @@ namespace AHPP_AI.AI
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
 
-                var progressEvaluation = waypointFollower.EvaluateProgress(plid, distance);
+                var progressEvaluation = waypointFollower.EvaluateProgress(plid, distance, speedKmh);
                 var movementIssue = DetectMovementIssue(plid, carX, carY, (int)currentHeading, speedKmh, distance);
 
                 if (progressEvaluation.ShouldReset)

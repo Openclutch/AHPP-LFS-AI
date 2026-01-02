@@ -43,6 +43,7 @@ namespace AHPP_AI.Waypoint
         // Progress tracking
         private readonly Dictionary<byte, double> lastDistanceToWaypoint = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastProgressCheckTimes = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, int> movingAwayCounts = new Dictionary<byte, int>();
         private readonly Logger logger;
         private readonly Dictionary<byte, int> lookAheadWaypointIndices = new Dictionary<byte, int>();
         private readonly Dictionary<byte, int> recoveryAttempts = new Dictionary<byte, int>();
@@ -126,6 +127,7 @@ namespace AHPP_AI.Waypoint
             headingErrorHistory[plid] = new Queue<int>();
             stationaryChecks[plid] = 0;
             lastProgressCheckTimes[plid] = DateTime.Now;
+            movingAwayCounts[plid] = 0;
             currentApproachPointIndex[plid] = 0;
 
             return true;
@@ -318,7 +320,7 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Check progress toward waypoint and surface recovery recommendations.
         /// </summary>
-        public ProgressEvaluationResult EvaluateProgress(byte plid, double currentDistance)
+        public ProgressEvaluationResult EvaluateProgress(byte plid, double currentDistance, double speedKmh)
         {
             var result = new ProgressEvaluationResult
             {
@@ -339,16 +341,29 @@ namespace AHPP_AI.Waypoint
             if (!recoveryAttempts.ContainsKey(plid))
                 recoveryAttempts[plid] = 0;
 
+            if (!movingAwayCounts.ContainsKey(plid))
+                movingAwayCounts[plid] = 0;
+
             if (!failedRecoveryCycles.ContainsKey(plid))
                 failedRecoveryCycles[plid] = 0;
 
             if (!progressStates.ContainsKey(plid))
                 progressStates[plid] = ProgressState.Progressing;
 
+            // If the stored distance is an uninitialized sentinel value, seed it with the current reading to avoid
+            // overflow-sized progress deltas on the first check.
+            var previousDistance = lastDistanceToWaypoint[plid];
+            if (double.IsNaN(previousDistance) || double.IsInfinity(previousDistance) ||
+                previousDistance == double.MaxValue)
+            {
+                lastDistanceToWaypoint[plid] = currentDistance;
+                lastProgressCheckTimes[plid] = DateTime.Now;
+                return result;
+            }
+
             // Check progress at regular intervals
             if ((DateTime.Now - lastProgressCheckTimes[plid]).TotalMilliseconds >= config.ProgressCheckIntervalMs)
             {
-                var previousDistance = lastDistanceToWaypoint[plid];
                 var progress = previousDistance - currentDistance;
                 result.ProgressDelta = progress;
 
@@ -357,6 +372,7 @@ namespace AHPP_AI.Waypoint
                     previousDistance <= config.ProgressAdvanceResetDistanceMeters &&
                     currentDistance <= config.ProgressAdvanceResetDistanceMeters * 2)
                 {
+                    movingAwayCounts[plid] = 0;
                     recoveryAttempts[plid] = 0;
                     failedRecoveryCycles[plid] = 0;
                     progressStates[plid] = ProgressState.Progressing;
@@ -394,16 +410,33 @@ namespace AHPP_AI.Waypoint
 
                     lastDistanceToWaypoint[plid] = currentDistance;
                     lastProgressCheckTimes[plid] = DateTime.Now;
+                    movingAwayCounts[plid] = 0;
                 }
                 else if (progress < 0)
                 {
-                    // Moving away from waypoint, increment recovery attempt counter and request immediate recovery
-                    recoveryAttempts[plid]++;
-                    progressStates[plid] = ProgressState.MovingAway;
-                    result.IsMovingAway = true;
-                    result.ShouldReverse = true;
-                    logger.Log(
-                        $"PLID={plid} MOVING AWAY: Recovery attempt {recoveryAttempts[plid]} of {config.MaxRecoveryAttempts}");
+                    // Moving away from waypoint; only trigger a reverse when speed is low or the issue persists.
+                    var currentCount = movingAwayCounts.TryGetValue(plid, out var count) ? count + 1 : 1;
+                    movingAwayCounts[plid] = currentCount;
+
+                    var lowSpeed = speedKmh <= config.RecoveryLowSpeedThresholdKmh * 1.5;
+                    var persistent = currentCount >= 2;
+
+                    if (lowSpeed || persistent)
+                    {
+                        recoveryAttempts[plid]++;
+                        progressStates[plid] = ProgressState.MovingAway;
+                        result.IsMovingAway = true;
+                        result.ShouldReverse = true;
+                        logger.Log(
+                            $"PLID={plid} MOVING AWAY: Recovery attempt {recoveryAttempts[plid]} of {config.MaxRecoveryAttempts} (speed={speedKmh:F1}, count={currentCount})");
+                    }
+                    else
+                    {
+                        result.IsMovingAway = true;
+                        progressStates[plid] = ProgressState.MovingAway;
+                        logger.Log(
+                            $"PLID={plid} MOVING AWAY: Deferring recovery while coasting (speed={speedKmh:F1}, count={currentCount})");
+                    }
                 }
                 else if (progress < config.MinRequiredProgress)
                 {
@@ -413,6 +446,7 @@ namespace AHPP_AI.Waypoint
                 else if (progress > config.MinRequiredProgress)
                 {
                     // Good progress, reset recovery attempts
+                    movingAwayCounts[plid] = 0;
                     recoveryAttempts[plid] = 0;
                     failedRecoveryCycles[plid] = 0;
                     progressStates[plid] = ProgressState.Progressing;
@@ -421,6 +455,12 @@ namespace AHPP_AI.Waypoint
                 // Update for next check
                 lastDistanceToWaypoint[plid] = currentDistance;
                 lastProgressCheckTimes[plid] = DateTime.Now;
+            }
+            else
+            {
+                // If we're not due for a full progress check, still clear moving-away streak when distance improves.
+                if (lastDistanceToWaypoint[plid] - currentDistance > 0)
+                    movingAwayCounts[plid] = 0;
             }
 
             result.IsMovingAway |= progressStates[plid] == ProgressState.MovingAway;
@@ -672,6 +712,9 @@ namespace AHPP_AI.Waypoint
             recoveryAttempts[plid] = 0;
             failedRecoveryCycles[plid] = 0;
             progressStates[plid] = ProgressState.Progressing;
+            lastDistanceToWaypoint[plid] = double.MaxValue;
+            lastProgressCheckTimes[plid] = DateTime.Now;
+            movingAwayCounts[plid] = 0;
         }
 
         private void UpdateLookaheadIndex(byte plid)

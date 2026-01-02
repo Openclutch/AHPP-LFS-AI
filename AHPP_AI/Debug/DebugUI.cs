@@ -24,8 +24,8 @@ namespace AHPP_AI.Debug
 
         // Button positioning
         private const byte LEFT_COLUMN = 5;
-        private const byte RIGHT_COLUMN = 50;
-        private const byte STATE_COLUMN = 80;
+        private const byte RIGHT_COLUMN = LEFT_COLUMN;
+        private const byte STATE_COLUMN = LEFT_COLUMN + BUTTON_WIDTH + 5;
         private const byte TOP_ROW = 5;
         private const byte ROW_HEIGHT = 4;
         private const byte BUTTON_WIDTH = 20;
@@ -59,14 +59,7 @@ namespace AHPP_AI.Debug
 
         private readonly InSimClient insim;
         private readonly Logger logger;
-
-        public const byte SpawnButtonId =  (byte)(ButtonIds.DebugStart + 13);
-        public const byte RemoveButtonId = (byte)(ButtonIds.DebugStart + 14);
-        public const byte RemoveAllButtonId = (byte)(ButtonIds.DebugStart + 15);
-        public const byte StopAllButtonId = (byte)(ButtonIds.DebugStart + 16);
-        public const byte StartAllButtonId = (byte)(ButtonIds.DebugStart + 17);
-        public const byte SpecAllButtonId = (byte)(ButtonIds.DebugStart + 18);
-        public const byte SetSpeedButtonId = (byte)(ButtonIds.DebugStart + 19);
+        private bool buttonsVisible = true;
 
         // Button IDs by category and type
         private readonly Dictionary<string, byte> playerButtonIds = new Dictionary<string, byte>
@@ -99,7 +92,6 @@ namespace AHPP_AI.Debug
         };
 
         private byte aiPLID;
-        private byte aiButtonsBaseRow;
 
         private bool debugUIInitialized;
         private DateTime lastDebugUpdate = DateTime.MinValue;
@@ -144,47 +136,7 @@ namespace AHPP_AI.Debug
         /// </summary>
         public void RestoreDebugButtons()
         {
-            CreateAIDebugButtons();
-            ShowAIButtons(true);
-        }
-
-        public void ShowAIButtons(bool show)
-        {
-            var baseRow = aiButtonsBaseRow == 0 ? (byte)(TOP_ROW + ROW_HEIGHT * aiButtonIds.Count) : aiButtonsBaseRow;
-            if (show)
-            {
-                CreateDebugButton(SpawnButtonId, "SPAWN AI", RIGHT_COLUMN, baseRow, BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(RemoveButtonId, "REMOVE AI", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(RemoveAllButtonId, "REMOVE ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 2), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(StopAllButtonId, "STOP ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 3), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(StartAllButtonId, "START ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 4), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(SpecAllButtonId, "SPEC ALL", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 5), BUTTON_WIDTH, ROW_HEIGHT);
-                CreateDebugButton(SetSpeedButtonId, "SET SPEED", RIGHT_COLUMN, (byte)(baseRow + ROW_HEIGHT * 6), BUTTON_WIDTH, ROW_HEIGHT);
-                debugButtonsActive[SpawnButtonId] = 1;
-                debugButtonsActive[RemoveButtonId] = 1;
-                debugButtonsActive[RemoveAllButtonId] = 1;
-                debugButtonsActive[StopAllButtonId] = 1;
-                debugButtonsActive[StartAllButtonId] = 1;
-                debugButtonsActive[SpecAllButtonId] = 1;
-                debugButtonsActive[SetSpeedButtonId] = 1;
-            }
-            else
-            {
-                DeleteButton(SpawnButtonId);
-                DeleteButton(RemoveButtonId);
-                DeleteButton(RemoveAllButtonId);
-                DeleteButton(StopAllButtonId);
-                DeleteButton(StartAllButtonId);
-                DeleteButton(SpecAllButtonId);
-                DeleteButton(SetSpeedButtonId);
-                debugButtonsActive[SpawnButtonId] = 0;
-                debugButtonsActive[RemoveButtonId] = 0;
-                debugButtonsActive[RemoveAllButtonId] = 0;
-                debugButtonsActive[StopAllButtonId] = 0;
-                debugButtonsActive[StartAllButtonId] = 0;
-                debugButtonsActive[SpecAllButtonId] = 0;
-                debugButtonsActive[SetSpeedButtonId] = 0;
-            }
+            if (buttonsVisible) CreateAIDebugButtons();
         }
 
         /// <summary>
@@ -198,7 +150,7 @@ namespace AHPP_AI.Debug
             {
                 logger.Log("Initializing debug UI...");
 
-                CreateAIDebugButtons();
+                if (buttonsVisible) CreateAIDebugButtons();
 
                 // Position the spawn/control buttons below the tallest debug row.
                 insim.SendPrivateMessage("Debug UI initialized - showing info for AI");
@@ -256,6 +208,8 @@ namespace AHPP_AI.Debug
             Dictionary<byte, string>? aiControlInfo = null,
             Dictionary<byte, string>? aiStates = null)
         {
+            if (!buttonsVisible) return;
+
             // Check if we need to update (throttle updates to reduce bandwidth)
             if ((DateTime.Now - lastDebugUpdate).TotalMilliseconds < DEBUG_UPDATE_INTERVAL_MS)
                 return;
@@ -671,10 +625,42 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
+        /// Show or hide the AI debug buttons without changing other UI controls.
+        /// </summary>
+        /// <param name="visible">True to display debug buttons; false to remove them.</param>
+        public void SetDebugButtonsVisible(bool visible)
+        {
+            if (buttonsVisible == visible && debugUIInitialized)
+                return;
+
+            buttonsVisible = visible;
+            if (!debugUIInitialized) return;
+
+            if (visible)
+                CreateAIDebugButtons();
+            else
+                HideAIDebugButtons();
+        }
+
+        /// <summary>
+        /// Remove existing AI debug buttons and mark them inactive.
+        /// </summary>
+        private void HideAIDebugButtons()
+        {
+            foreach (var id in aiButtonIds.Values)
+            {
+                DeleteButton(id);
+                debugButtonsActive[id] = 0;
+            }
+        }
+
+        /// <summary>
         /// Create the AI debug buttons with layout and tracking flags.
         /// </summary>
         private void CreateAIDebugButtons()
         {
+            if (!buttonsVisible) return;
+
             var row = TOP_ROW;
             byte maxBottom = TOP_ROW;
 
@@ -692,8 +678,6 @@ namespace AHPP_AI.Debug
                 row += ROW_HEIGHT;
                 if (bottom > maxBottom) maxBottom = bottom;
             }
-
-            aiButtonsBaseRow = (byte)(maxBottom + ROW_HEIGHT);
         }
 
         private void DeleteButton(byte id)

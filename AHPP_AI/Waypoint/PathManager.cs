@@ -282,8 +282,15 @@ namespace AHPP_AI.Waypoint
         /// </summary>
         private List<string> BuildBranchList(AIConfig config)
         {
-            // Branch routes are now discovered from recorded files only; config entries are ignored.
             var names = new List<string>();
+
+            if (config?.BranchRouteNames != null)
+            {
+                foreach (var configured in config.BranchRouteNames)
+                {
+                    TryAddUnique(names, configured, "config");
+                }
+            }
 
             try
             {

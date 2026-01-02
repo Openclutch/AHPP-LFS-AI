@@ -1,5 +1,28 @@
 # Changelog
 
+- Added full AI driving tuning coverage in `config.ini` (steering range, throttle/brake, clutch/gearbox, waypoint/recovery thresholds, collision scan, lane-change lookahead).
+- Main assignment no longer forces an immediate return from main_alt, so the alternate lane can cycle via cooldown/chance; added throttled assignment decision logs for visibility.
+
+- Stopped false reverse recoveries after path changes by resetting progress baselines on new routes and only reversing when moving away at low speed or after repeated regressions, preventing neutral-plus-throttle coasting.
+
+- Seeded waypoint progress tracking with the first real distance reading so initial checks no longer log overflow-sized numbers from uninitialized state.
+- Moved the AI debug HUD into the left column and added a Show/Hide Debug HUD toggle that remembers its state via `DebugAI.ShowDebugButtons` in `config.ini`.
+- Lane-change transitions now aim at a target lane waypoint several nodes ahead (tunable with `LaneChange.TargetAheadWaypoints` in `config.ini`) to keep merges on the alternate lane from snapping to a point behind the car.
+- Centered the layout selection status label ("No node selected") in the AI debug UI so it sits in the middle of the screen.
+- Lane-change targeting now penalizes behind-car waypoints and only uses lane heading alignment when the target is ahead, stopping highway merges from snapping to a point behind and bouncing back to main.
+- Added configurable pass-by reactions so AI can flash headlights and/or honk for ~2s when fast human drivers zip past, with chance/speed/mode/distance tuning in `config.ini`.
+- Kept AI on the alternate main lane after a merge by skipping branch-end rejoins for looped inner lanes, relying on explicit lane-change checks to swap back.
+- Narrowed the AI list remove “X” button width to 5 so the label column has more room while keeping the delete control aligned.
+- Moved the Route Name input above the Add Route control in the AI debug UI so you can name a route immediately before adding it.
+- Clamped spawn coordinate conversion to short when resetting the player at a selected route node so the layout reset packet uses valid ObjectInfo types.
+- Selected route brackets now stay white while only the route name shows red/green status in the selector.
+- Added a “Spawn Here” layout editor button that resets the tracked player car to the selected node for quick testing.
+- Route selector now shows configured main/spawn/alternate/detour routes, coloring buttons green when a recording exists for the current track/layout and red when it does not.
+- Added layout editor buttons to delete a selected node or extend a recording from that point so routes can be tweaked without restarting from scratch.
+- Removed the AI debug overlay control buttons (spawn/stop/pit/set speed) so spectating views stay uncluttered; equivalent controls remain on the main UI.
+- Publish now drops managed DLLs into a `dll/` subfolder during `dotnet publish` to keep the release output tidy without changing the build command.
+- Lane changes between main and main_alt now require a speed-scaled parallel window (configurable lookahead distance/angle) before merging; the AI system manual documents the new detection and tuning knobs.
+- Added an AI system manual describing configuration, routing, driving behaviors, lane changes, population management, and operational requirements derived from the current code.
 - Enforced main_alt rejoin safety by gating branch-end merges with distance/heading/speed checks and indicator lead time before switching back to the main lane.
 - Cleared nullable warnings across layout visualization, route loading, path validation, and debug UI by marking optional inputs nullable and guarding missing AI/route data.
 - Relaxed branch validation so looped/alternate lanes can use the same attach/rejoin index without spurious warnings when both lanes form closed loops.
@@ -289,3 +312,4 @@
 - Added real brand names for the brand deals!
 - Routes: Branch/detour names are now discovered from recorded route files only; detour entries no longer come from config defaults to avoid duplicate-name warnings.
 - Routes: Configured branch route names are ignored so only JSON files drive branch detection during route reloads.
+- Stopped auto-creating placeholder route files (UnknownTrack/DefaultLayout templates) when routes are missing; missing routes now log a warning without writing default layouts.

@@ -47,20 +47,44 @@ namespace AHPP_AI.Waypoint
 
             currentRoute = new RecordedRoute
             {
-                Metadata = CloneMetadata(metadata),
+                Metadata = PrepareMetadata(metadata),
                 Nodes = new List<RoutePoint>()
             };
-
-            if (currentRoute.Metadata.Type == RouteType.Unknown)
-                currentRoute.Metadata.Type = routeLibrary.GuessRouteType(currentRoute.Metadata.Name);
-            if (currentRoute.Metadata.Type == RouteType.MainLoop || currentRoute.Metadata.Type == RouteType.AlternateMain)
-                currentRoute.Metadata.IsLoop = true;
-            if (!currentRoute.Metadata.DefaultSpeedLimit.HasValue) currentRoute.Metadata.DefaultSpeedLimit = 60;
 
             lastPos = null;
             pointCount = 0;
             IsRecording = true;
             logger.Log($"Started route recording: {currentRoute.Metadata.Name} ({currentRoute.Metadata.Type})");
+            debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
+            mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, true);
+        }
+
+        /// <summary>
+        /// Start recording from an existing route by trimming after a selected node so new points extend the path.
+        /// </summary>
+        /// <param name="baseRoute">Existing route to extend.</param>
+        /// <param name="startIndex">Index of the node to keep as the last preserved point.</param>
+        public void StartFromExisting(RecordedRoute baseRoute, int startIndex)
+        {
+            if (baseRoute == null) throw new ArgumentNullException(nameof(baseRoute));
+            if (IsRecording) Stop();
+
+            var preparedMetadata = PrepareMetadata(baseRoute.Metadata ?? new RouteMetadata());
+            var trimmedNodes = TrimNodes(baseRoute.Nodes, startIndex);
+
+            baseRoute.Metadata = preparedMetadata;
+            baseRoute.Nodes = trimmedNodes;
+
+            currentRoute = baseRoute;
+            pointCount = trimmedNodes.Count;
+            lastPos = pointCount > 0
+                ? Vec.FromMeters(trimmedNodes[pointCount - 1].X, trimmedNodes[pointCount - 1].Y,
+                    trimmedNodes[pointCount - 1].Z)
+                : (Vec?)null;
+            IsRecording = true;
+
+            logger.Log(
+                $"Extending route {preparedMetadata.Name} from node {Math.Min(startIndex, Math.Max(0, pointCount - 1))} ({pointCount} nodes kept)");
             debugUI?.UpdateRecordingButton(currentRoute.Metadata.Name, pointCount, true);
             mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, true);
         }
@@ -134,6 +158,25 @@ namespace AHPP_AI.Waypoint
             mainUI?.UpdateRecordStatus(currentRoute.Metadata.Name, pointCount, true);
         }
 
+        /// <summary>
+        /// Normalize metadata for recording, filling defaults and current track/layout.
+        /// </summary>
+        private RouteMetadata PrepareMetadata(RouteMetadata? metadata)
+        {
+            var prepared = CloneMetadata(metadata ?? new RouteMetadata());
+            if (string.IsNullOrWhiteSpace(prepared.Name)) prepared.Name = "route";
+
+            if (prepared.Type == RouteType.Unknown)
+                prepared.Type = routeLibrary.GuessRouteType(prepared.Name);
+            if (prepared.Type == RouteType.MainLoop || prepared.Type == RouteType.AlternateMain)
+                prepared.IsLoop = true;
+            if (!prepared.DefaultSpeedLimit.HasValue) prepared.DefaultSpeedLimit = 60;
+
+            prepared.Track = routeLibrary.TrackCode;
+            prepared.Layout = routeLibrary.LayoutName;
+            return prepared;
+        }
+
         private static RouteMetadata CloneMetadata(RouteMetadata metadata)
         {
             return new RouteMetadata
@@ -146,7 +189,42 @@ namespace AHPP_AI.Waypoint
                 IsLoop = metadata.IsLoop,
                 AttachMainIndex = metadata.AttachMainIndex,
                 RejoinMainIndex = metadata.RejoinMainIndex,
-                DefaultSpeedLimit = metadata.DefaultSpeedLimit
+                DefaultSpeedLimit = metadata.DefaultSpeedLimit,
+                AiTargetCount = metadata.AiTargetCount,
+                AiTargetPercent = metadata.AiTargetPercent,
+                AiWeight = metadata.AiWeight,
+                AiEnabled = metadata.AiEnabled
+            };
+        }
+
+        private List<RoutePoint> TrimNodes(List<RoutePoint>? nodes, int startIndex)
+        {
+            var trimmed = new List<RoutePoint>();
+            if (nodes == null || nodes.Count == 0) return trimmed;
+
+            var endIndex = Math.Max(0, Math.Min(startIndex, nodes.Count - 1));
+            for (var i = 0; i <= endIndex; i++)
+            {
+                trimmed.Add(CloneRoutePoint(nodes[i]));
+            }
+
+            return trimmed;
+        }
+
+        private static RoutePoint CloneRoutePoint(RoutePoint source)
+        {
+            return new RoutePoint
+            {
+                X = source.X,
+                Y = source.Y,
+                Z = source.Z,
+                Speed = source.Speed,
+                SpeedLimit = source.SpeedLimit,
+                Throttle = source.Throttle,
+                Brake = source.Brake,
+                Steering = source.Steering,
+                Heading = source.Heading,
+                Note = source.Note
             };
         }
     }

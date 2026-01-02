@@ -80,12 +80,11 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
-        /// Load a recorded route from disk, creating a template file if none exists.
+        /// Load a recorded route from disk, returning an in-memory template if none exists without writing files.
         /// </summary>
         public RecordedRoute Load(string name)
         {
             var contextPath = GetContextPath();
-            EnsureContextPath(contextPath);
             var file = GetRoutePath(name);
             if (!File.Exists(file))
             {
@@ -106,10 +105,8 @@ namespace AHPP_AI.Waypoint
                     }
                 }
 
-                var template = CreateTemplate(name);
-                Save(template, file);
-                logger.Log($"Created new route template at {file}");
-                return template;
+                logger.LogWarning($"Route {name} not found in {contextPath} or legacy locations; returning empty route without creating a template.");
+                return CreateTemplate(name);
             }
 
             try
@@ -418,16 +415,17 @@ namespace AHPP_AI.Waypoint
         public List<RecordedRoute> ListRoutes(out List<string> duplicateNames)
         {
             var contextPath = GetContextPath();
-            EnsureContextPath(contextPath);
             var routes = new List<RecordedRoute>();
             var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             duplicateNames = new List<string>();
-            LoadRoutesFromDirectory(contextPath, routes, seenNames, duplicateNames);
+            if (Directory.Exists(contextPath))
+                LoadRoutesFromDirectory(contextPath, routes, seenNames, duplicateNames);
 
             var legacyPath = routesRoot;
             if (!contextPath.Equals(legacyPath, StringComparison.OrdinalIgnoreCase))
             {
-                LoadRoutesFromDirectory(legacyPath, routes, seenNames, duplicateNames);
+                if (Directory.Exists(legacyPath))
+                    LoadRoutesFromDirectory(legacyPath, routes, seenNames, duplicateNames);
             }
 
             return routes;
