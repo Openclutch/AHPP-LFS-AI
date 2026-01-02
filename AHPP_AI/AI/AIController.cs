@@ -68,6 +68,8 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, LaneChangeSkipInfo> laneChangeSkipLog = new Dictionary<byte, LaneChangeSkipInfo>();
         private readonly Dictionary<byte, RouteAssignmentLogInfo> routeAssignmentLog = new Dictionary<byte, RouteAssignmentLogInfo>();
         private readonly Dictionary<byte, DateTime> passByCooldowns = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, PassByProximityState> passByProximityStates =
+            new Dictionary<byte, PassByProximityState>();
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
@@ -107,6 +109,15 @@ namespace AHPP_AI.AI
             OnTime,
             Slowing,
             RunningSlow
+        }
+
+        /// <summary>
+        ///     Tracks the last nearby human target for pass-by reactions per AI.
+        /// </summary>
+        private class PassByProximityState
+        {
+            public byte TargetPlid { get; set; }
+            public DateTime LastSeen { get; set; }
         }
 
         /// <summary>
@@ -851,7 +862,10 @@ namespace AHPP_AI.AI
             double speedThresholdKmh,
             double durationSeconds,
             double distanceMeters,
-            AIConfig.PassByReactionMode mode)
+            AIConfig.PassByReactionMode mode,
+            double cooldownMinSeconds,
+            double cooldownMaxSeconds,
+            double proximityResetSeconds)
         {
             config.PassByReactionEnabled = enabled;
             config.PassByReactionChance = Math.Max(0.0, Math.Min(1.0, chance));
@@ -859,6 +873,9 @@ namespace AHPP_AI.AI
             config.PassByReactionDurationSeconds = Math.Max(0.1, durationSeconds);
             config.PassByReactionDistanceMeters = Math.Max(1.0, distanceMeters);
             config.PassByMode = mode;
+            config.PassByCooldownMinSeconds = Math.Max(0.0, cooldownMinSeconds);
+            config.PassByCooldownMaxSeconds = Math.Max(config.PassByCooldownMinSeconds, cooldownMaxSeconds);
+            config.PassByProximityResetSeconds = Math.Max(0.1, proximityResetSeconds);
         }
 
         /// <summary>
@@ -2513,6 +2530,7 @@ namespace AHPP_AI.AI
             laneChangeSignalStart.Remove(plid);
             laneChangeSkipLog.Remove(plid);
             passByCooldowns.Remove(plid);
+            passByProximityStates.Remove(plid);
             RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
@@ -3180,6 +3198,12 @@ namespace AHPP_AI.AI
                 if (passByCooldowns.TryGetValue(aiPlid, out var cooldownUntil) && cooldownUntil > now)
                     continue;
 
+                if (passByProximityStates.TryGetValue(aiPlid, out var staleState) &&
+                    (now - staleState.LastSeen).TotalSeconds >= config.PassByProximityResetSeconds)
+                {
+                    passByProximityStates.Remove(aiPlid);
+                }
+
                 var aiCar = Array.Find(allCars, c => c.PLID == aiPlid);
                 if (aiCar == null || aiCar.PLID == 0) continue;
 
@@ -3188,6 +3212,7 @@ namespace AHPP_AI.AI
 
                 var foundTarget = false;
                 double targetDistance = double.MaxValue;
+                byte targetPlid = 0;
 
                 foreach (var car in allCars)
                 {
@@ -3206,16 +3231,27 @@ namespace AHPP_AI.AI
                     if (distance < targetDistance)
                     {
                         targetDistance = distance;
+                        targetPlid = car.PLID;
                         foundTarget = true;
                     }
                 }
 
                 if (!foundTarget) continue;
+                var isNewTarget = !passByProximityStates.TryGetValue(aiPlid, out var proximityState) ||
+                                  proximityState.TargetPlid != targetPlid ||
+                                  (now - proximityState.LastSeen).TotalSeconds >= config.PassByProximityResetSeconds;
+
+                passByProximityStates[aiPlid] = new PassByProximityState
+                {
+                    TargetPlid = targetPlid,
+                    LastSeen = now
+                };
+
+                if (!isNewTarget) continue;
                 if (passByRandom.NextDouble() > config.PassByReactionChance) continue;
 
                 TriggerPassByReaction(aiPlid);
-                var cooldownSeconds = Math.Max(config.PassByReactionDurationSeconds, 0.5) + 1.0;
-                passByCooldowns[aiPlid] = now.AddSeconds(cooldownSeconds);
+                passByCooldowns[aiPlid] = now.AddSeconds(GetPassByCooldownSeconds());
             }
         }
 
@@ -3248,6 +3284,19 @@ namespace AHPP_AI.AI
         {
             var durationHundredths = (int)Math.Round(config.PassByReactionDurationSeconds * 100.0);
             return (byte)Math.Max(1, Math.Min(255, durationHundredths));
+        }
+
+        /// <summary>
+        ///     Get a randomized cooldown between configured limits for pass-by reactions.
+        /// </summary>
+        private double GetPassByCooldownSeconds()
+        {
+            var min = Math.Max(0.0, config.PassByCooldownMinSeconds);
+            var max = Math.Max(min, config.PassByCooldownMaxSeconds);
+            if (Math.Abs(max - min) < 0.01) return min;
+
+            var window = max - min;
+            return min + passByRandom.NextDouble() * window;
         }
 
         /// <summary>

@@ -161,6 +161,9 @@ namespace AHPP_AI
         private static readonly double passBySpeedThresholdKmh;
         private static readonly double passByReactionDurationSeconds;
         private static readonly double passByReactionDistanceMeters;
+        private static readonly double passByCooldownMinSeconds;
+        private static readonly double passByCooldownMaxSeconds;
+        private static readonly double passByProximityResetSeconds;
         private static readonly AIConfig.PassByReactionMode passByReactionMode;
         private static readonly string buildVersion;
 
@@ -324,6 +327,9 @@ namespace AHPP_AI
             passBySpeedThresholdKmh = appConfig.GetDouble("AI", "PassBySpeedThresholdKmh", 120.0);
             passByReactionDurationSeconds = appConfig.GetDouble("AI", "PassByReactionDurationSeconds", 2.0);
             passByReactionDistanceMeters = appConfig.GetDouble("AI", "PassByReactionDistanceMeters", 25.0);
+            passByCooldownMinSeconds = appConfig.GetDouble("AI", "PassByCooldownMinSeconds", 60.0);
+            passByCooldownMaxSeconds = appConfig.GetDouble("AI", "PassByCooldownMaxSeconds", 120.0);
+            passByProximityResetSeconds = appConfig.GetDouble("AI", "PassByProximityResetSeconds", 5.0);
             passByReactionMode = ParsePassByReactionMode(
                 appConfig.GetString("AI", "PassByReactionMode", "FlashAndHorn"));
             buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
@@ -421,7 +427,10 @@ namespace AHPP_AI
                 passBySpeedThresholdKmh,
                 passByReactionDurationSeconds,
                 passByReactionDistanceMeters,
-                passByReactionMode);
+                passByReactionMode,
+                passByCooldownMinSeconds,
+                passByCooldownMaxSeconds,
+                passByProximityResetSeconds);
             aiController.ConfigureRecoveryLimits(
                 wallRecoveryEnabled,
                 waypointTimeoutSeconds,

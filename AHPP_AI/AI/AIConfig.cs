@@ -73,6 +73,9 @@ namespace AHPP_AI.AI
         public double PassBySpeedThresholdKmh { get; set; } = 120.0;
         public double PassByReactionDurationSeconds { get; set; } = 2.0;
         public double PassByReactionDistanceMeters { get; set; } = 25.0;
+        public double PassByCooldownMinSeconds { get; set; } = 60.0;
+        public double PassByCooldownMaxSeconds { get; set; } = 120.0;
+        public double PassByProximityResetSeconds { get; set; } = 5.0;
         public PassByReactionMode PassByMode { get; set; } = PassByReactionMode.FlashAndHorn;
 
         // Traffic awareness settings
