@@ -63,6 +63,9 @@ namespace AHPP_AI.AI
         public double LaneChangeTransitionLengthMeters { get; set; } = 25.0;
         public int LaneChangeTransitionPointCount { get; set; } = 12;
         public int LaneChangeTargetAheadWaypoints { get; set; } = 4;
+        public double LaneChangeRearCheckDistanceMeters { get; set; } = 35.0;
+        public double LaneChangeRearCheckTtcSeconds { get; set; } = 2.5;
+        public double LaneChangeMergeGapFactor { get; set; } = 1.2;
 
         // Player interaction settings
         public bool PassByReactionEnabled { get; set; } = true;
@@ -71,6 +74,20 @@ namespace AHPP_AI.AI
         public double PassByReactionDurationSeconds { get; set; } = 2.0;
         public double PassByReactionDistanceMeters { get; set; } = 25.0;
         public PassByReactionMode PassByMode { get; set; } = PassByReactionMode.FlashAndHorn;
+
+        // Traffic awareness settings
+        public double PathLoopClosureDistanceMeters { get; set; } = 5.0;
+        public double TrafficLaneHalfWidthMeters { get; set; } = 3.0;
+        public double TrafficBaseGapMeters { get; set; } = 4.0;
+        public double TrafficTimeHeadwaySeconds { get; set; } = 1.5;
+        public double TrafficAiSpacingFactor { get; set; } = 1.0;
+        public double TrafficHumanSpacingFactor { get; set; } = 1.4;
+        public double TrafficLookaheadSeconds { get; set; } = 3.0;
+        public double TrafficLookaheadMinMeters { get; set; } = 15.0;
+        public double TrafficBrakeTtcSeconds { get; set; } = 2.5;
+        public double TrafficEmergencyTtcSeconds { get; set; } = 1.0;
+        public int SpawnMergeHoldLookaheadWaypoints { get; set; } = 3;
+        public double SpawnMergeHoldDistanceMeters { get; set; } = 15.0;
 
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;

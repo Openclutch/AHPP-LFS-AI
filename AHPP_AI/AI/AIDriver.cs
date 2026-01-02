@@ -41,6 +41,16 @@ namespace AHPP_AI.AI
             StuckLowSpeed
         }
 
+        private struct TrafficLeadInfo
+        {
+            public byte TargetPlid;
+            public bool TargetIsAi;
+            public double GapMeters;
+            public double ClosingSpeedMps;
+            public double TtcSeconds;
+            public double DesiredGapMeters;
+        }
+
         private class RecoveryContext
         {
             public RecoveryState State = RecoveryState.Driving;
@@ -146,10 +156,12 @@ namespace AHPP_AI.AI
             byte plid,
             CompCar car,
             CompCar[] allCars,
+            TrafficCarSnapshot[] trafficSnapshot,
             WaypointManager waypointManager,
             AIConfig config,
             List<ObjectInfo> layoutObjects,
-            float currentRpm)
+            float currentRpm,
+            bool holdForMerge)
         {
             try
             {
@@ -176,6 +188,15 @@ namespace AHPP_AI.AI
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
 
+                // Calculate steering early so merge holds can keep the car aligned to the lane.
+                var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
+
+                if (holdForMerge)
+                {
+                    ApplyMergeHold(plid, steering, speedKmh, currentRpm);
+                    return;
+                }
+
                 var progressEvaluation = waypointFollower.EvaluateProgress(plid, distance, speedKmh);
                 var movementIssue = DetectMovementIssue(plid, carX, carY, (int)currentHeading, speedKmh, distance);
 
@@ -200,9 +221,6 @@ namespace AHPP_AI.AI
                 {
                     return;
                 }
-
-                // Calculate steering, throttle and brake
-                var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
 
                 // Log debugging info periodically
                 if (DateTime.Now.Millisecond < 50 && DateTime.Now.Second % 2 == 0)
@@ -274,14 +292,18 @@ namespace AHPP_AI.AI
 
                 // Update gearbox (gears and clutch)
                 gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
-                gearboxController.ApplyBrakingClutch(plid, brake);
 
-                // Get current gearbox state
-                var (gear, clutchValue, clutchState) = gearboxController.GetGearboxInfo(plid);
                 var lowRpmClutchActive = gearboxController.IsLowRpmClutchActive(plid);
 
                 // Check if we should apply throttle based on clutch state
                 if (!gearboxController.ShouldApplyThrottle(plid, speedKmh)) throttle = 0;
+
+                var forceClutch = false;
+                if (ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot,
+                        ref throttle, ref brake, out var trafficStatus, ref forceClutch))
+                {
+                    controlStatuses[plid] = trafficStatus;
+                }
 
                 // Check for potential collisions
                 var collisionDanger = DetectPotentialCollision(plid, car, allCars);
@@ -290,9 +312,15 @@ namespace AHPP_AI.AI
                     // Override controls - stop the car
                     throttle = 0;
                     brake = 65535; // Full brake
-                    clutchValue = 65535;
+                    forceClutch = true;
                     controlStatuses[plid] = "COLLISION AVOIDANCE: Stopping";
                 }
+
+                gearboxController.ApplyBrakingClutch(plid, brake);
+
+                // Get current gearbox state after braking adjustments
+                var (gear, clutchValue, clutchState) = gearboxController.GetGearboxInfo(plid);
+                if (forceClutch) clutchValue = 65535;
 
                 // Update control info for debug display
                 controlInputs[plid] =
@@ -305,6 +333,206 @@ namespace AHPP_AI.AI
             catch (Exception ex)
             {
                 logger.LogException(ex, $"Error processing AI control for PLID={plid}");
+            }
+        }
+
+        /// <summary>
+        /// Apply full braking to hold position while waiting for a safe merge.
+        /// </summary>
+        private void ApplyMergeHold(byte plid, int steering, double speedKmh, float currentRpm)
+        {
+            const int throttle = 0;
+            const int brake = 65535;
+
+            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
+            gearboxController.ApplyBrakingClutch(plid, brake);
+
+            var (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+            clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+
+            controlInputs[plid] =
+                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+            controlStatuses[plid] = "MERGE YIELD: Waiting";
+
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+        }
+
+        /// <summary>
+        /// Adjust throttle and braking to maintain safe spacing on the current lane.
+        /// </summary>
+        private bool ApplyTrafficSpacing(
+            byte plid,
+            double carX,
+            double carY,
+            double speedKmh,
+            int carDirection,
+            TrafficCarSnapshot[] trafficSnapshot,
+            ref int throttle,
+            ref int brake,
+            out string status,
+            ref bool forceClutch)
+        {
+            status = string.Empty;
+            if (trafficSnapshot == null || trafficSnapshot.Length == 0) return false;
+
+            var path = waypointFollower.GetPath(plid);
+            if (path == null || path.Count < 2) return false;
+
+            var speedMps = speedKmh / 3.6;
+            if (!TryGetLeadInfo(plid, carX, carY, speedMps, carDirection, trafficSnapshot, path, out var leadInfo))
+                return false;
+
+            var spacingFactor = GetSpacingFactor(leadInfo.TargetIsAi);
+            var emergencyTtc = Math.Max(0.1, config.TrafficEmergencyTtcSeconds * spacingFactor);
+            var brakeTtc = Math.Max(0.1, config.TrafficBrakeTtcSeconds * spacingFactor);
+
+            if (leadInfo.GapMeters <= config.MinimumSafetyDistanceM ||
+                (leadInfo.ClosingSpeedMps > 0 && leadInfo.TtcSeconds <= emergencyTtc))
+            {
+                throttle = 0;
+                brake = 65535;
+                forceClutch = true;
+                status = $"TRAFFIC STOP: PLID {leadInfo.TargetPlid}";
+                LogTrafficWarning(plid,
+                    $"TRAFFIC EMERGENCY: lead {leadInfo.TargetPlid} gap={leadInfo.GapMeters:F1}m ttc={leadInfo.TtcSeconds:F1}s");
+                return true;
+            }
+
+            var updated = false;
+            if (leadInfo.ClosingSpeedMps > 0 && leadInfo.TtcSeconds <= brakeTtc)
+            {
+                var intensity = (brakeTtc - leadInfo.TtcSeconds) / brakeTtc;
+                intensity = Math.Max(0.0, Math.Min(1.0, intensity));
+                var targetBrake = config.BrakeBase + (int)Math.Round(intensity * (65535 - config.BrakeBase));
+                brake = Math.Max(brake, targetBrake);
+                throttle = 0;
+                status = $"TRAFFIC BRAKE: PLID {leadInfo.TargetPlid}";
+                LogTrafficWarning(plid,
+                    $"TRAFFIC BRAKE: lead {leadInfo.TargetPlid} gap={leadInfo.GapMeters:F1}m ttc={leadInfo.TtcSeconds:F1}s");
+                updated = true;
+            }
+            else if (leadInfo.GapMeters < leadInfo.DesiredGapMeters)
+            {
+                var ratio = leadInfo.GapMeters / Math.Max(0.1, leadInfo.DesiredGapMeters);
+                ratio = Math.Max(0.0, Math.Min(1.0, ratio));
+                var throttleLimit = (int)Math.Round(throttle * ratio);
+                if (throttleLimit < throttle)
+                {
+                    throttle = throttleLimit;
+                    status = $"TRAFFIC FOLLOW: PLID {leadInfo.TargetPlid}";
+                    updated = true;
+                }
+            }
+
+            return updated;
+        }
+
+        /// <summary>
+        /// Find the nearest lead car on the current path and compute spacing metrics.
+        /// </summary>
+        private bool TryGetLeadInfo(
+            byte plid,
+            double carX,
+            double carY,
+            double speedMps,
+            int carDirection,
+            TrafficCarSnapshot[] trafficSnapshot,
+            List<Util.Waypoint> path,
+            out TrafficLeadInfo leadInfo)
+        {
+            leadInfo = default;
+
+            var geometry = PathProjection.GetGeometry(path, config.PathLoopClosureDistanceMeters);
+            if (geometry == null) return false;
+
+            if (!PathProjection.TryProjectToPath(path, geometry, carX, carY, out var selfProjection))
+                return false;
+
+            var selfDir = GetDirectionVector(carDirection);
+            var selfForwardSpeed =
+                speedMps * (selfDir.x * selfProjection.DirectionX + selfDir.y * selfProjection.DirectionY);
+            if (selfForwardSpeed < 0) selfForwardSpeed = 0;
+
+            var lookahead = Math.Max(config.TrafficLookaheadMinMeters, speedMps * config.TrafficLookaheadSeconds);
+            var laneHalfWidth = Math.Max(0.1, config.TrafficLaneHalfWidthMeters);
+
+            var bestGap = double.MaxValue;
+
+            foreach (var snapshot in trafficSnapshot)
+            {
+                if (snapshot.PLID == 0 || snapshot.PLID == plid) continue;
+
+                if (!PathProjection.TryProjectToPath(path, geometry, snapshot.XMeters, snapshot.YMeters,
+                        out var otherProjection))
+                    continue;
+
+                if (Math.Abs(otherProjection.LateralOffsetMeters) > laneHalfWidth) continue;
+
+                var forwardDistance = PathProjection.GetForwardDistance(
+                    geometry,
+                    selfProjection.DistanceAlongPathMeters,
+                    otherProjection.DistanceAlongPathMeters);
+
+                if (!geometry.IsLoop && forwardDistance < 0) continue;
+                if (forwardDistance <= 0.1 || forwardDistance > lookahead) continue;
+
+                if (forwardDistance < bestGap)
+                {
+                    var otherDir = GetDirectionVector(snapshot.Direction);
+                    var otherForwardSpeed =
+                        snapshot.SpeedMps *
+                        (otherDir.x * otherProjection.DirectionX + otherDir.y * otherProjection.DirectionY);
+                    if (otherForwardSpeed < 0) otherForwardSpeed = 0;
+
+                    var closingSpeed = selfForwardSpeed - otherForwardSpeed;
+                    var ttc = closingSpeed > 0.1 ? forwardDistance / closingSpeed : double.PositiveInfinity;
+                    var spacingFactor = GetSpacingFactor(snapshot.IsAi);
+                    var desiredGap =
+                        (config.TrafficBaseGapMeters + speedMps * config.TrafficTimeHeadwaySeconds) * spacingFactor;
+
+                    bestGap = forwardDistance;
+                    leadInfo = new TrafficLeadInfo
+                    {
+                        TargetPlid = snapshot.PLID,
+                        TargetIsAi = snapshot.IsAi,
+                        GapMeters = forwardDistance,
+                        ClosingSpeedMps = closingSpeed,
+                        TtcSeconds = ttc,
+                        DesiredGapMeters = desiredGap
+                    };
+                }
+            }
+
+            return bestGap < double.MaxValue;
+        }
+
+        /// <summary>
+        /// Resolve a spacing multiplier based on whether the target is AI or human.
+        /// </summary>
+        private double GetSpacingFactor(bool targetIsAi)
+        {
+            return targetIsAi ? config.TrafficAiSpacingFactor : config.TrafficHumanSpacingFactor;
+        }
+
+        /// <summary>
+        /// Convert an LFS heading to a normalized 2D direction vector.
+        /// </summary>
+        private (double x, double y) GetDirectionVector(int heading)
+        {
+            var radians = (heading + CoordinateUtils.QUARTER_CIRCLE) * 2 * Math.PI / CoordinateUtils.FULL_CIRCLE;
+            return (Math.Cos(radians), Math.Sin(radians));
+        }
+
+        /// <summary>
+        /// Emit throttled traffic warnings to the log.
+        /// </summary>
+        private void LogTrafficWarning(byte plid, string message)
+        {
+            if (!lastCollisionLogTime.ContainsKey(plid) ||
+                (DateTime.Now - lastCollisionLogTime[plid]).TotalSeconds >= 2)
+            {
+                logger.Log($"PLID={plid} {message}");
+                lastCollisionLogTime[plid] = DateTime.Now;
             }
         }
 

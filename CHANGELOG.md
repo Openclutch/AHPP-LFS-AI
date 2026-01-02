@@ -1,5 +1,9 @@
 # Changelog
 
+- Added collision logging that records AI/human identities, control inputs, and path projection details (route, distance along, lateral offset) for post-incident review.
+- Added path-aware traffic snapshots so AI maintain time-headway spacing, brake earlier, and yield more to humans; lane-change and pit merges now check rear TTC and configurable gap targets before merging.
+- Added new traffic/merge tuning knobs in `config.ini` for spacing, lookahead, TTC thresholds, and spawn-merge hold distances.
+
 - Added full AI driving tuning coverage in `config.ini` (steering range, throttle/brake, clutch/gearbox, waypoint/recovery thresholds, collision scan, lane-change lookahead).
 - Main assignment no longer forces an immediate return from main_alt, so the alternate lane can cycle via cooldown/chance; added throttled assignment decision logs for visibility.
 

@@ -141,6 +141,21 @@ namespace AHPP_AI
         private static readonly double laneChangeTransitionLengthMeters;
         private static readonly int laneChangeTransitionPointCount;
         private static readonly int laneChangeTargetAheadWaypoints;
+        private static readonly double laneChangeRearCheckDistanceMeters;
+        private static readonly double laneChangeRearCheckTtcSeconds;
+        private static readonly double laneChangeMergeGapFactor;
+        private static readonly double pathLoopClosureDistanceMeters;
+        private static readonly double trafficLaneHalfWidthMeters;
+        private static readonly double trafficBaseGapMeters;
+        private static readonly double trafficTimeHeadwaySeconds;
+        private static readonly double trafficAiSpacingFactor;
+        private static readonly double trafficHumanSpacingFactor;
+        private static readonly double trafficLookaheadSeconds;
+        private static readonly double trafficLookaheadMinMeters;
+        private static readonly double trafficBrakeTtcSeconds;
+        private static readonly double trafficEmergencyTtcSeconds;
+        private static readonly int spawnMergeHoldLookaheadWaypoints;
+        private static readonly double spawnMergeHoldDistanceMeters;
         private static readonly bool passByReactionEnabled;
         private static readonly double passByReactionChance;
         private static readonly double passBySpeedThresholdKmh;
@@ -235,6 +250,18 @@ namespace AHPP_AI
             collisionDetectionAngleDegrees = appConfig.GetDouble("AI", "CollisionDetectionAngle", 45.0);
             minimumSafetyDistanceMeters = appConfig.GetDouble("AI", "MinimumSafetyDistanceM", 10.0);
             collisionDetectionHalfWidthMeters = appConfig.GetDouble("AI", "CollisionDetectionHalfWidthM", 2.5);
+            pathLoopClosureDistanceMeters = appConfig.GetDouble("AI", "PathLoopClosureDistanceMeters", 5.0);
+            trafficLaneHalfWidthMeters = appConfig.GetDouble("AI", "TrafficLaneHalfWidthMeters", 3.0);
+            trafficBaseGapMeters = appConfig.GetDouble("AI", "TrafficBaseGapMeters", 4.0);
+            trafficTimeHeadwaySeconds = appConfig.GetDouble("AI", "TrafficTimeHeadwaySeconds", 1.5);
+            trafficAiSpacingFactor = appConfig.GetDouble("AI", "TrafficAiSpacingFactor", 1.0);
+            trafficHumanSpacingFactor = appConfig.GetDouble("AI", "TrafficHumanSpacingFactor", 1.4);
+            trafficLookaheadSeconds = appConfig.GetDouble("AI", "TrafficLookaheadSeconds", 3.0);
+            trafficLookaheadMinMeters = appConfig.GetDouble("AI", "TrafficLookaheadMinMeters", 15.0);
+            trafficBrakeTtcSeconds = appConfig.GetDouble("AI", "TrafficBrakeTtcSeconds", 2.5);
+            trafficEmergencyTtcSeconds = appConfig.GetDouble("AI", "TrafficEmergencyTtcSeconds", 1.0);
+            spawnMergeHoldLookaheadWaypoints = appConfig.GetInt("AI", "SpawnMergeHoldLookaheadWaypoints", 3);
+            spawnMergeHoldDistanceMeters = appConfig.GetDouble("AI", "SpawnMergeHoldDistanceMeters", 15.0);
             recoveryShortReverseMs = appConfig.GetInt("AI", "RecoveryShortReverseMs", 1200);
             recoveryLongReverseMs = appConfig.GetInt("AI", "RecoveryLongReverseMs", 2000);
             recoveryCooldownMs = appConfig.GetInt("AI", "RecoveryCooldownMs", 750);
@@ -289,6 +316,9 @@ namespace AHPP_AI
                 appConfig.GetDouble(laneSection, "TransitionLengthMeters", 25.0);
             laneChangeTransitionPointCount = appConfig.GetInt(laneSection, "TransitionPointCount", 12);
             laneChangeTargetAheadWaypoints = appConfig.GetInt(laneSection, "TargetAheadWaypoints", 4);
+            laneChangeRearCheckDistanceMeters = appConfig.GetDouble(laneSection, "RearCheckDistanceMeters", 35.0);
+            laneChangeRearCheckTtcSeconds = appConfig.GetDouble(laneSection, "RearCheckTtcSeconds", 2.5);
+            laneChangeMergeGapFactor = appConfig.GetDouble(laneSection, "MergeGapFactor", 1.2);
             passByReactionEnabled = appConfig.GetBool("AI", "PassByReactionEnabled", true);
             passByReactionChance = appConfig.GetDouble("AI", "PassByReactionChance", 0.10);
             passBySpeedThresholdKmh = appConfig.GetDouble("AI", "PassBySpeedThresholdKmh", 120.0);
@@ -368,7 +398,23 @@ namespace AHPP_AI
                 laneChangeSignalMinimumDurationSeconds,
                 laneChangeTransitionLengthMeters,
                 laneChangeTransitionPointCount,
-                laneChangeTargetAheadWaypoints);
+                laneChangeTargetAheadWaypoints,
+                laneChangeRearCheckDistanceMeters,
+                laneChangeRearCheckTtcSeconds,
+                laneChangeMergeGapFactor);
+            aiController.ConfigureTrafficAwareness(
+                pathLoopClosureDistanceMeters,
+                trafficLaneHalfWidthMeters,
+                trafficBaseGapMeters,
+                trafficTimeHeadwaySeconds,
+                trafficAiSpacingFactor,
+                trafficHumanSpacingFactor,
+                trafficLookaheadSeconds,
+                trafficLookaheadMinMeters,
+                trafficBrakeTtcSeconds,
+                trafficEmergencyTtcSeconds,
+                spawnMergeHoldLookaheadWaypoints,
+                spawnMergeHoldDistanceMeters);
             aiController.ConfigurePassByReactions(
                 passByReactionEnabled,
                 passByReactionChance,
@@ -596,6 +642,7 @@ namespace AHPP_AI
             // Car telemetry
             insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
             insim.IS_MCI += (sender, e) => aiController.OnMCI(e.Packet);
+            insim.IS_CON += (sender, e) => aiController.OnCollision(e.Packet);
 
             // Button clicks
             insim.IS_BTC += (sender, e) => OnButtonClick(e.Packet);

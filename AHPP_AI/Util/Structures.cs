@@ -125,6 +125,47 @@ namespace AHPP_AI.Util
     }
 
     /// <summary>
+    ///     Snapshot of a car's telemetry used for traffic-aware AI decisions.
+    /// </summary>
+    public struct TrafficCarSnapshot
+    {
+        /// <summary>
+        ///     Player ID for the car.
+        /// </summary>
+        public byte PLID;
+
+        /// <summary>
+        ///     Whether the car is AI-controlled.
+        /// </summary>
+        public bool IsAi;
+
+        /// <summary>
+        ///     X position in meters.
+        /// </summary>
+        public double XMeters;
+
+        /// <summary>
+        ///     Y position in meters.
+        /// </summary>
+        public double YMeters;
+
+        /// <summary>
+        ///     Speed in meters per second.
+        /// </summary>
+        public double SpeedMps;
+
+        /// <summary>
+        ///     Direction of travel in LFS heading units.
+        /// </summary>
+        public int Direction;
+
+        /// <summary>
+        ///     Direction the car is facing in LFS heading units.
+        /// </summary>
+        public int Heading;
+    }
+
+    /// <summary>
     ///     Represents a 3D vector with floating point coordinates
     /// </summary>
     public struct Vector

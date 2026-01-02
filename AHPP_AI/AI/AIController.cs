@@ -23,6 +23,7 @@ namespace AHPP_AI.AI
     {
         private readonly List<byte> aiPLIDs = new List<byte>();
         private readonly Dictionary<byte, Vec> aiSpawnPositions = new Dictionary<byte, Vec>();
+        private readonly Dictionary<byte, string> playerNames = new Dictionary<byte, string>();
         private readonly AIConfig config;
 
         // Debug UI
@@ -92,6 +93,7 @@ namespace AHPP_AI.AI
         private readonly object carStateLock = new object();
         private readonly Dictionary<byte, CompCar> carStates = new Dictionary<byte, CompCar>();
         private CompCar[] allCars = Array.Empty<CompCar>();
+        private volatile TrafficCarSnapshot[] trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
         private bool debugUIInitialized;
 
         /// <summary>
@@ -769,7 +771,10 @@ namespace AHPP_AI.AI
             double signalMinimumDurationSeconds,
             double transitionLengthMeters,
             int transitionPointCount,
-            int targetAheadWaypoints)
+            int targetAheadWaypoints,
+            double rearCheckDistanceMeters,
+            double rearCheckTtcSeconds,
+            double mergeGapFactor)
         {
             config.LaneChangeInitialCheckIntervalSeconds = Math.Max(1.0, initialCheckIntervalSeconds);
             config.LaneChangePostCooldownIntervalSeconds = Math.Max(1.0, postCooldownIntervalSeconds);
@@ -787,6 +792,40 @@ namespace AHPP_AI.AI
             config.LaneChangeTransitionLengthMeters = Math.Max(1.0, transitionLengthMeters);
             config.LaneChangeTransitionPointCount = Math.Max(4, transitionPointCount);
             config.LaneChangeTargetAheadWaypoints = Math.Max(1, targetAheadWaypoints);
+            config.LaneChangeRearCheckDistanceMeters = Math.Max(1.0, rearCheckDistanceMeters);
+            config.LaneChangeRearCheckTtcSeconds = Math.Max(0.1, rearCheckTtcSeconds);
+            config.LaneChangeMergeGapFactor = Math.Max(0.1, mergeGapFactor);
+        }
+
+        /// <summary>
+        /// Configure traffic-aware spacing and pit merge yielding behavior.
+        /// </summary>
+        public void ConfigureTrafficAwareness(
+            double pathLoopClosureMeters,
+            double laneHalfWidthMeters,
+            double baseGapMeters,
+            double timeHeadwaySeconds,
+            double aiSpacingFactor,
+            double humanSpacingFactor,
+            double lookaheadSeconds,
+            double lookaheadMinMeters,
+            double brakeTtcSeconds,
+            double emergencyTtcSeconds,
+            int spawnMergeHoldLookaheadWaypoints,
+            double spawnMergeHoldDistanceMeters)
+        {
+            config.PathLoopClosureDistanceMeters = Math.Max(0.1, pathLoopClosureMeters);
+            config.TrafficLaneHalfWidthMeters = Math.Max(0.1, laneHalfWidthMeters);
+            config.TrafficBaseGapMeters = Math.Max(0.1, baseGapMeters);
+            config.TrafficTimeHeadwaySeconds = Math.Max(0.1, timeHeadwaySeconds);
+            config.TrafficAiSpacingFactor = Math.Max(0.1, aiSpacingFactor);
+            config.TrafficHumanSpacingFactor = Math.Max(0.1, humanSpacingFactor);
+            config.TrafficLookaheadSeconds = Math.Max(0.1, lookaheadSeconds);
+            config.TrafficLookaheadMinMeters = Math.Max(0.1, lookaheadMinMeters);
+            config.TrafficBrakeTtcSeconds = Math.Max(0.1, brakeTtcSeconds);
+            config.TrafficEmergencyTtcSeconds = Math.Max(0.1, emergencyTtcSeconds);
+            config.SpawnMergeHoldLookaheadWaypoints = Math.Max(1, spawnMergeHoldLookaheadWaypoints);
+            config.SpawnMergeHoldDistanceMeters = Math.Max(1.0, spawnMergeHoldDistanceMeters);
         }
 
         /// <summary>
@@ -1438,40 +1477,130 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Verify that the target lane segment is free of nearby cars before merging.
         /// </summary>
-        private bool IsTargetLaneClear(byte plid, List<Util.Waypoint> targetPath, int targetIndex)
+        private bool IsTargetLaneClear(
+            byte plid,
+            CompCar mergingCar,
+            List<Util.Waypoint> targetPath,
+            int targetIndex,
+            TrafficCarSnapshot[] snapshot)
         {
             if (targetPath == null || targetPath.Count == 0) return false;
 
-            var checkDistance = Math.Max(1.0, config.LaneChangeSafetyCheckDistanceMeters);
-            var halfWidth = Math.Max(0.1, config.LaneChangeSafetyCheckHalfWidthMeters);
+            var geometry = PathProjection.GetGeometry(targetPath, config.PathLoopClosureDistanceMeters);
+            if (geometry == null) return false;
+
             var targetPoint = GetWaypointPosition(targetPath, targetIndex);
-            var targetDirection = GetDirectionVector(targetPath, targetIndex);
-            if (Math.Abs(targetDirection.x) < 0.001 && Math.Abs(targetDirection.y) < 0.001)
-                targetDirection = (1, 0);
+            if (!PathProjection.TryProjectToPath(targetPath, geometry, targetPoint.x, targetPoint.y,
+                    out var mergeProjection))
+                return false;
 
-            foreach (var other in allCars)
+            var checkDistance = Math.Max(1.0, config.LaneChangeSafetyCheckDistanceMeters);
+            var rearCheckDistance = Math.Max(checkDistance, config.LaneChangeRearCheckDistanceMeters);
+            var halfWidth = Math.Max(config.TrafficLaneHalfWidthMeters, config.LaneChangeSafetyCheckHalfWidthMeters);
+
+            var mergeSpeedMps = (100.0 * mergingCar.Speed) / 32768.0;
+            var mergeDir = GetHeadingVector(mergingCar.Direction);
+            var mergeForwardSpeed =
+                mergeSpeedMps * (mergeDir.x * mergeProjection.DirectionX + mergeDir.y * mergeProjection.DirectionY);
+            if (mergeForwardSpeed < 0) mergeForwardSpeed = 0;
+
+            if (snapshot == null || snapshot.Length == 0) return true;
+
+            foreach (var car in snapshot)
             {
-                if (other.PLID == 0 || other.PLID == plid) continue;
-                var otherX = other.X / 65536.0;
-                var otherY = other.Y / 65536.0;
-                var dx = otherX - targetPoint.x;
-                var dy = otherY - targetPoint.y;
-                var distance = Math.Sqrt(dx * dx + dy * dy);
-                if (distance > checkDistance) continue;
+                if (car.PLID == 0 || car.PLID == plid) continue;
 
-                var lateral = Math.Abs(Cross(targetDirection, (dx, dy)));
-                var longitudinal = dx * targetDirection.x + dy * targetDirection.y;
-                if (lateral <= halfWidth &&
-                    longitudinal >= -halfWidth &&
-                    longitudinal <= checkDistance)
+                if (!PathProjection.TryProjectToPath(targetPath, geometry, car.XMeters, car.YMeters,
+                        out var otherProjection))
+                    continue;
+
+                if (Math.Abs(otherProjection.LateralOffsetMeters) > halfWidth) continue;
+
+                var forwardDistance = PathProjection.GetForwardDistance(
+                    geometry,
+                    mergeProjection.DistanceAlongPathMeters,
+                    otherProjection.DistanceAlongPathMeters);
+                var backwardDistance = PathProjection.GetBackwardDistance(
+                    geometry,
+                    mergeProjection.DistanceAlongPathMeters,
+                    otherProjection.DistanceAlongPathMeters);
+
+                var spacingFactor = car.IsAi ? config.TrafficAiSpacingFactor : config.TrafficHumanSpacingFactor;
+                var desiredGap =
+                    (config.TrafficBaseGapMeters + mergeSpeedMps * config.TrafficTimeHeadwaySeconds) *
+                    spacingFactor * Math.Max(0.1, config.LaneChangeMergeGapFactor);
+
+                if (forwardDistance >= 0 &&
+                    forwardDistance <= checkDistance &&
+                    forwardDistance < desiredGap)
                 {
                     logger.Log(
-                        $"PLID={plid} Lane change blocked: car near target lane (distance={distance:F1}m, lateral={lateral:F1}m)");
+                        $"PLID={plid} Lane change blocked: car ahead (gap={forwardDistance:F1}m < {desiredGap:F1}m)");
                     return false;
+                }
+
+                if (backwardDistance >= 0 && backwardDistance <= rearCheckDistance)
+                {
+                    var otherDir = GetHeadingVector(car.Direction);
+                    var otherForwardSpeed =
+                        car.SpeedMps *
+                        (otherDir.x * otherProjection.DirectionX + otherDir.y * otherProjection.DirectionY);
+                    if (otherForwardSpeed < 0) otherForwardSpeed = 0;
+
+                    var closingSpeed = otherForwardSpeed - mergeForwardSpeed;
+                    var rearTtc = closingSpeed > 0.1 ? backwardDistance / closingSpeed : double.PositiveInfinity;
+                    var rearTtcLimit = config.LaneChangeRearCheckTtcSeconds * spacingFactor;
+
+                    if (backwardDistance < desiredGap || rearTtc < rearTtcLimit)
+                    {
+                        logger.Log(
+                            $"PLID={plid} Lane change blocked: car behind (gap={backwardDistance:F1}m, ttc={rearTtc:F1}s)");
+                        return false;
+                    }
                 }
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Determine whether the AI should stop on the spawn route until a safe merge opens.
+        /// </summary>
+        private bool ShouldHoldForSpawnMerge(byte plid, CompCar car, int targetIndex, TrafficCarSnapshot[] snapshot)
+        {
+            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
+            if (pathManager.MainRoute == null || pathManager.MainRoute.Count < 2) return false;
+            if (!IsSpawnMergeWindow(car, targetIndex)) return false;
+
+            var mergeIndex = FindClosestIndex(pathManager.MainRoute, car);
+            return !IsTargetLaneClear(plid, car, pathManager.MainRoute, mergeIndex, snapshot);
+        }
+
+        /// <summary>
+        /// Check whether the car is within the configured hold window near the end of the spawn route.
+        /// </summary>
+        private bool IsSpawnMergeWindow(CompCar car, int targetIndex)
+        {
+            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
+
+            var holdLookahead = Math.Max(1, config.SpawnMergeHoldLookaheadWaypoints);
+            if (targetIndex >= pathManager.SpawnRoute.Count - holdLookahead) return true;
+
+            var geometry = PathProjection.GetGeometry(pathManager.SpawnRoute, config.PathLoopClosureDistanceMeters);
+            if (geometry == null || geometry.TotalLength <= 0) return false;
+
+            if (!PathProjection.TryProjectToPath(
+                    pathManager.SpawnRoute,
+                    geometry,
+                    car.X / 65536.0,
+                    car.Y / 65536.0,
+                    out var projection))
+                return false;
+
+            if (geometry.IsLoop) return false;
+
+            var distanceToEnd = geometry.TotalLength - projection.DistanceAlongPathMeters;
+            return distanceToEnd <= config.SpawnMergeHoldDistanceMeters;
         }
 
         /// <summary>
@@ -1807,7 +1936,7 @@ namespace AHPP_AI.AI
                 return false;
             }
 
-            if (!IsTargetLaneClear(plid, innerBranch.Path, entryIndex))
+            if (!IsTargetLaneClear(plid, car, innerBranch.Path, entryIndex, trafficSnapshot))
                 return false;
 
             var request = new LaneChangeRequest
@@ -1871,7 +2000,7 @@ namespace AHPP_AI.AI
                 return false;
             }
 
-            if (!IsTargetLaneClear(plid, pathManager.MainRoute, mainIndex))
+            if (!IsTargetLaneClear(plid, car, pathManager.MainRoute, mainIndex, trafficSnapshot))
                 return false;
 
             var request = new LaneChangeRequest
@@ -1955,7 +2084,7 @@ namespace AHPP_AI.AI
                 return false;
             }
 
-            if (!IsTargetLaneClear(plid, pathManager.MainRoute, mainIndex))
+            if (!IsTargetLaneClear(plid, car, pathManager.MainRoute, mainIndex, trafficSnapshot))
                 return false;
 
             var request = new LaneChangeRequest
@@ -2020,6 +2149,15 @@ namespace AHPP_AI.AI
             var durationSeconds = Math.Max(3.0, config.LaneChangeSignalMinimumDurationSeconds);
             lightController.SetIndicators(plid, indicator, TimeSpan.FromSeconds(durationSeconds));
             logger.Log($"PLID={plid} ROUTE CHANGE: {description} using indicator {indicator}");
+        }
+
+        /// <summary>
+        /// Convert a car heading into a normalized 2D direction vector.
+        /// </summary>
+        private static (double x, double y) GetHeadingVector(int heading)
+        {
+            var radians = (heading + CoordinateUtils.QUARTER_CIRCLE) * 2 * Math.PI / CoordinateUtils.FULL_CIRCLE;
+            return (Math.Cos(radians), Math.Sin(radians));
         }
 
         private static (double x, double y) GetDirectionVector(List<Util.Waypoint> path, int index)
@@ -2504,6 +2642,7 @@ namespace AHPP_AI.AI
         /// </summary>
         public void OnNewPlayer(IS_NPL npl)
         {
+            playerNames[npl.PLID] = npl.PName;
             if ((npl.PType & PlayerTypes.PLT_AI) == PlayerTypes.PLT_AI &&
                 !npl.PName.Contains("Track")) // and not tracks
             {
@@ -2573,6 +2712,8 @@ namespace AHPP_AI.AI
         {
             if (pll == null) return;
 
+            playerNames.Remove(pll.PLID);
+
             bool isAi;
             lock (aiPlidLock)
             {
@@ -2640,6 +2781,7 @@ namespace AHPP_AI.AI
 
                     allCars = carStates.Values.ToArray();
                 }
+                UpdateTrafficSnapshot();
                 ApplyPendingRouteAssignments();
 
                 // Record player route if active
@@ -2721,6 +2863,274 @@ namespace AHPP_AI.AI
                 stopwatch.Stop();
                 mciPerformanceTracker.Record(stopwatch.Elapsed);
                 LogPerformanceSnapshots();
+            }
+        }
+
+        /// <summary>
+        /// Capture a lightweight traffic snapshot for path-aware spacing checks.
+        /// </summary>
+        private void UpdateTrafficSnapshot()
+        {
+            if (allCars == null || allCars.Length == 0)
+            {
+                trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
+                return;
+            }
+
+            var aiPlids = GetActiveAiPlids();
+            var aiSet = new HashSet<byte>(aiPlids);
+            var snapshots = new TrafficCarSnapshot[allCars.Length];
+            var count = 0;
+
+            foreach (var car in allCars)
+            {
+                if (car.PLID == 0) continue;
+
+                snapshots[count++] = new TrafficCarSnapshot
+                {
+                    PLID = car.PLID,
+                    IsAi = aiSet.Contains(car.PLID),
+                    XMeters = car.X / 65536.0,
+                    YMeters = car.Y / 65536.0,
+                    SpeedMps = (100.0 * car.Speed) / 32768.0,
+                    Direction = car.Direction,
+                    Heading = car.Heading
+                };
+            }
+
+            if (count == 0)
+            {
+                trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
+                return;
+            }
+
+            if (count < snapshots.Length)
+                Array.Resize(ref snapshots, count);
+
+            trafficSnapshot = snapshots;
+        }
+
+        /// <summary>
+        /// Record a collision event with pathing context for later review.
+        /// </summary>
+        public void OnCollision(IS_CON collision)
+        {
+            if (collision == null) return;
+
+            var closingSpeed = (collision.SpClose & 0x0FFF) / 10.0;
+            var timestampSeconds = collision.Time.TotalSeconds;
+
+            var aDetails = BuildCollisionParticipantLog(collision.A);
+            var bDetails = BuildCollisionParticipantLog(collision.B);
+
+            logger.Log(
+                $"COLLISION t={timestampSeconds:F2}s close={closingSpeed:F1}m/s {aDetails} | {bDetails}");
+        }
+
+        /// <summary>
+        /// Build a detailed collision log entry for a car contact.
+        /// </summary>
+        private string BuildCollisionParticipantLog(CarContact contact)
+        {
+            if (contact == null) return "PLID=0";
+
+            var plid = contact.PLID;
+            var name = playerNames.TryGetValue(plid, out var storedName) ? storedName : $"PLID {plid}";
+            var isAi = IsAiPlid(plid);
+
+            var posX = contact.X / 16.0;
+            var posY = contact.Y / 16.0;
+            var speedMps = contact.Speed;
+            var speedKmh = speedMps * 3.6;
+            var directionDeg = contact.Direction * 360.0 / 256.0;
+            var headingDeg = contact.Heading * 360.0 / 256.0;
+
+            var throttle = (contact.ThrBrk >> 4) & 0x0F;
+            var brake = contact.ThrBrk & 0x0F;
+            var clutch = (contact.CluHan >> 4) & 0x0F;
+            var handbrake = contact.CluHan & 0x0F;
+            var gear = (contact.GearSp >> 4) & 0x0F;
+
+            var routeName = isAi ? ResolveAiRouteName(plid) : "human";
+
+            var projectionLabel = "path=unknown";
+            if (TryGetCollisionPathProjection(plid, posX, posY, isAi, out var pathName, out var projection,
+                    out var pathSource))
+            {
+                projectionLabel =
+                    $"path={pathName} src={pathSource} s={projection.DistanceAlongPathMeters:F1}m lat={projection.LateralOffsetMeters:F1}m off={projection.DistanceToPathMeters:F1}m";
+            }
+
+            var aiDetails = string.Empty;
+            if (isAi)
+            {
+                var (targetIndex, waypointCount, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
+                var recoveryLabel = inRecovery ? " recovery" : string.Empty;
+                aiDetails =
+                    $" route={routeName} target={targetIndex}/{waypointCount} tSpeed={targetSpeed:F0}km/h{recoveryLabel}";
+            }
+
+            return
+                $"PLID={plid} name=\"{name}\" {(isAi ? "AI" : "H")} pos=({posX:F1},{posY:F1}) spd={speedKmh:F1}km/h dir={directionDeg:F0}° head={headingDeg:F0}° thr={throttle} brk={brake} clu={clutch} hbk={handbrake} gear={gear} info={contact.Info}{aiDetails} {projectionLabel}";
+        }
+
+        /// <summary>
+        /// Determine whether a PLID belongs to an AI car.
+        /// </summary>
+        private bool IsAiPlid(byte plid)
+        {
+            lock (aiPlidLock)
+            {
+                return aiPLIDs.Contains(plid);
+            }
+        }
+
+        /// <summary>
+        /// Resolve the most likely route name for an AI based on its current state.
+        /// </summary>
+        private string ResolveAiRouteName(byte plid)
+        {
+            if (!currentRoute.TryGetValue(plid, out var routeName))
+                return "unknown";
+
+            switch (routeName)
+            {
+                case "spawn":
+                    return config.SpawnRouteName;
+                case "main":
+                    return config.MainRouteName;
+                case "branch":
+                    return activeBranchSelections.TryGetValue(plid, out var branch) && branch != null
+                        ? branch.Name
+                        : "branch";
+                default:
+                    return routeName;
+            }
+        }
+
+        /// <summary>
+        /// Project the collision position onto the most relevant path for logging.
+        /// </summary>
+        private bool TryGetCollisionPathProjection(
+            byte plid,
+            double posX,
+            double posY,
+            bool isAi,
+            out string pathName,
+            out PathProjectionResult projection,
+            out string source)
+        {
+            pathName = string.Empty;
+            source = string.Empty;
+            projection = default;
+
+            if (isAi)
+            {
+                if (activeLaneChanges.TryGetValue(plid, out var activeChange))
+                {
+                    pathName = activeChange.ToAlternate
+                        ? activeChange.TargetRoute?.Name ?? config.MainAlternateRouteName
+                        : config.MainRouteName;
+                    source = "transition";
+
+                    var transitionPath = waypointFollower.GetPath(plid);
+                    if (TryProjectOnPath(transitionPath, posX, posY, out projection))
+                        return true;
+                }
+                else
+                {
+                    pathName = ResolveAiRouteName(plid);
+                    source = "ai_path";
+
+                    var aiPath = waypointFollower.GetPath(plid);
+                    if (TryProjectOnPath(aiPath, posX, posY, out projection))
+                        return true;
+                }
+            }
+
+            if (TryProjectToBestRoutePath(posX, posY, out var bestPath, out projection))
+            {
+                pathName = bestPath;
+                source = "nearest_route";
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Project a position onto a specific path if possible.
+        /// </summary>
+        private bool TryProjectOnPath(List<Util.Waypoint> path, double posX, double posY,
+            out PathProjectionResult projection)
+        {
+            projection = default;
+            if (path == null || path.Count < 2) return false;
+
+            var geometry = PathProjection.GetGeometry(path, config.PathLoopClosureDistanceMeters);
+            if (geometry == null) return false;
+
+            return PathProjection.TryProjectToPath(path, geometry, posX, posY, out projection);
+        }
+
+        /// <summary>
+        /// Find the closest known route path to a collision position.
+        /// </summary>
+        private bool TryProjectToBestRoutePath(double posX, double posY, out string pathName,
+            out PathProjectionResult projection)
+        {
+            pathName = string.Empty;
+            projection = default;
+
+            var bestDistance = double.MaxValue;
+            var bestProjection = default(PathProjectionResult);
+            var bestName = string.Empty;
+
+            foreach (var candidate in GetCollisionPathCandidates())
+            {
+                if (candidate.path == null || candidate.path.Count < 2) continue;
+
+                var geometry = PathProjection.GetGeometry(candidate.path, config.PathLoopClosureDistanceMeters);
+                if (geometry == null) continue;
+
+                if (!PathProjection.TryProjectToPath(candidate.path, geometry, posX, posY, out var candidateProjection))
+                    continue;
+
+                if (candidateProjection.DistanceToPathMeters < bestDistance)
+                {
+                    bestDistance = candidateProjection.DistanceToPathMeters;
+                    bestProjection = candidateProjection;
+                    bestName = candidate.name;
+                }
+            }
+
+            if (bestDistance == double.MaxValue) return false;
+
+            pathName = bestName;
+            projection = bestProjection;
+            return true;
+        }
+
+        /// <summary>
+        /// Enumerate the known route paths for collision logging.
+        /// </summary>
+        private IEnumerable<(string name, List<Util.Waypoint> path)> GetCollisionPathCandidates()
+        {
+            if (pathManager.SpawnRoute != null && pathManager.SpawnRoute.Count > 0)
+                yield return (config.SpawnRouteName, pathManager.SpawnRoute);
+
+            if (pathManager.MainRoute != null && pathManager.MainRoute.Count > 0)
+                yield return (config.MainRouteName, pathManager.MainRoute);
+
+            if (pathManager.MainAlternateRoute != null &&
+                pathManager.MainAlternateRoute.Path != null &&
+                pathManager.MainAlternateRoute.Path.Count > 0)
+                yield return (pathManager.MainAlternateRoute.Name, pathManager.MainAlternateRoute.Path);
+
+            foreach (var branch in pathManager.GetBranches())
+            {
+                if (branch.Path == null || branch.Path.Count == 0) continue;
+                yield return (branch.Name, branch.Path);
             }
         }
 
@@ -3097,19 +3507,29 @@ namespace AHPP_AI.AI
                     return;
                 }
 
+                var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+                var routeName = currentRoute.TryGetValue(plid, out var currentName) ? currentName : string.Empty;
+                var holdForMerge = !string.IsNullOrWhiteSpace(routeName) &&
+                                   routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase) &&
+                                   ShouldHoldForSpawnMerge(plid, car, targetIndex, trafficSnapshot);
+
                 // Update AI controls based on current state
-                driver.UpdateControls(plid, car, allCars, waypointManager, config, lfsLayout.layoutObjects, aii.RPM);
+                driver.UpdateControls(plid, car, allCars, trafficSnapshot, waypointManager, config,
+                    lfsLayout.layoutObjects, aii.RPM, holdForMerge);
 
                 // Route management
-                var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+                var (updatedTargetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
                 var laneChangeActive = HandleLaneChangeState(plid);
-                if (currentRoute.TryGetValue(plid, out var routeName))
+                if (!string.IsNullOrWhiteSpace(routeName))
                 {
                     if (laneChangeActive)
                         return;
 
-                    if (routeName == "spawn" && targetIndex >= pathManager.SpawnRoute.Count - 1)
+                    if (routeName == "spawn" && updatedTargetIndex >= pathManager.SpawnRoute.Count - 1)
                     {
+                        if (holdForMerge)
+                            return;
+
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
                         waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
                         currentRoute[plid] = "main";
