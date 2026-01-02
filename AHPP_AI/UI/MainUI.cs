@@ -38,6 +38,7 @@ namespace AHPP_AI.UI
         private const byte DEBUG_BUTTON_ROW = 55;
         private const byte HIDE_BUTTON_ROW = 60;
         private const byte INSIM_STATUS_ROW = 85;
+        private const byte PERFORMANCE_STATUS_ROW = 100;
         private const byte REMOVE_BTN_W = 5;
         private const byte RECORD_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = BTN_W;
@@ -70,6 +71,7 @@ namespace AHPP_AI.UI
         public const byte LayoutExtendRouteId = (byte)(ButtonIds.MainStart + 67);
         public const byte LayoutSpawnHereId = (byte)(ButtonIds.MainStart + 68);
         public const byte ToggleDebugButtonsId = (byte)(ButtonIds.MainStart + 69);
+        public const byte PerformanceStatusId = (byte)(ButtonIds.MainStart + 70);
         private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
         private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 20);
         public const byte HideUiButtonId = (byte)(ButtonIds.MainStart + 63);
@@ -110,6 +112,7 @@ namespace AHPP_AI.UI
         private bool layoutVisualizationEnabled;
         private byte toggleLayoutRow;
         private bool debugButtonsVisible = true;
+        private string performanceStatusLabel = "AI Perf: waiting";
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -134,6 +137,7 @@ namespace AHPP_AI.UI
             CreateButton(ResetLayoutId, "Reset Layout", LEFT_COL, row);
             RenderInSimStatus();
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
+            RenderPerformanceStatus();
 
             row = 70;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
@@ -606,6 +610,15 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Update the performance status indicator shown beneath the Refresh AXM control.
+        /// </summary>
+        public void UpdatePerformanceStatus(string label)
+        {
+            performanceStatusLabel = string.IsNullOrWhiteSpace(label) ? "AI Perf: waiting" : label;
+            RenderPerformanceStatus();
+        }
+
+        /// <summary>
         /// Render the InSim connection status and host labels.
         /// </summary>
         private void RenderInSimStatus()
@@ -617,6 +630,18 @@ namespace AHPP_AI.UI
 
             CreateButton(InSimStatusLabelId, insimStatus, LEFT_COL, INSIM_STATUS_ROW, LAYOUT_STATUS_W, ROW_HEIGHT, false);
             CreateButton(InSimHostLabelId, insimHost, LEFT_COL, (byte)(INSIM_STATUS_ROW + ROW_HEIGHT), LAYOUT_STATUS_W,
+                ROW_HEIGHT, false);
+        }
+
+        /// <summary>
+        /// Render the current AI performance status label.
+        /// </summary>
+        private void RenderPerformanceStatus()
+        {
+            if (!uiInitialized || uiHidden) return;
+
+            DeleteButton(PerformanceStatusId);
+            CreateButton(PerformanceStatusId, performanceStatusLabel, LEFT_COL, PERFORMANCE_STATUS_ROW, LAYOUT_STATUS_W,
                 ROW_HEIGHT, false);
         }
 

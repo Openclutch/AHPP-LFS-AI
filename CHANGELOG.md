@@ -1,5 +1,11 @@
 # Changelog
 
+- Throttled InSim send calls with a rolling per-second cap to prevent buffer-size disconnects when many AIs are active.
+- Layout visualization now uses the recorded node heading on the last point of non-loop routes so end-of-path rotations stick.
+- Added an AI performance status indicator under Refresh AXM with green/yellow/red health and windowed load percent.
+- Saved layout editor heading adjustments back into the route JSON when a node marker is rotated or moved.
+- Added `DebugAI.LaneChangeDetailedLogging` to toggle lane-change detail logs in `config.ini`.
+- Fixed Spawn Here so the player reset faces the route direction instead of backwards.
 - Added collision logging that records AI/human identities, control inputs, and path projection details (route, distance along, lateral offset) for post-incident review.
 - Added path-aware traffic snapshots so AI maintain time-headway spacing, brake earlier, and yield more to humans; lane-change and pit merges now check rear TTC and configurable gap targets before merging.
 - Added new traffic/merge tuning knobs in `config.ini` for spacing, lookahead, TTC thresholds, and spawn-merge hold distances.

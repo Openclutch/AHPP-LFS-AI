@@ -321,7 +321,12 @@ namespace AHPP_AI.Debug
             var nextIndex = index + 1;
             if (nextIndex >= nodes.Count)
             {
-                if (!isLoop) return 0;
+                if (!isLoop)
+                {
+                    // For non-loop routes, use the stored node heading on the final node so manual edits show up.
+                    var normalizedHeading = CoordinateUtils.NormalizeHeading(current.Heading);
+                    return (byte)((normalizedHeading / 256 + 128) % 256);
+                }
                 nextIndex = 0;
             }
 

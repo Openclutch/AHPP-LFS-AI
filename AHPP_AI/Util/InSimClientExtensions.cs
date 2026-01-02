@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using InSimDotNet;
 using InSimDotNet.Packets;
 
@@ -9,6 +11,9 @@ namespace AHPP_AI.Util
     /// </summary>
     public static class InSimClientExtensions
     {
+        private static readonly PacketRateLimiter PacketLimiter =
+            new PacketRateLimiter(200, TimeSpan.FromSeconds(1));
+
         public static void Initialize(this InSimClient client, InSimSettings settings)
         {
             client.InitializeAsync(settings).GetAwaiter().GetResult();
@@ -16,16 +21,19 @@ namespace AHPP_AI.Util
 
         public static void Send(this InSimClient client, ISendable packet)
         {
+            PacketLimiter.WaitForAvailability();
             client.SendAsync(packet).GetAwaiter().GetResult();
         }
 
         public static void Send(this InSimClient client, params ISendable[] packets)
         {
+            PacketLimiter.WaitForAvailability();
             client.SendAsync(packets).GetAwaiter().GetResult();
         }
 
         public static void Send(this InSimClient client, string message, params object[] args)
         {
+            PacketLimiter.WaitForAvailability();
             client.SendAsync(message, args).GetAwaiter().GetResult();
         }
 
@@ -68,6 +76,57 @@ namespace AHPP_AI.Util
             catch (Exception)
             {
                 // Ignore shutdown race conditions
+            }
+        }
+
+        /// <summary>
+        ///     Simple rolling-window rate limiter to avoid overwhelming LFS with bursts of packets.
+        /// </summary>
+        private sealed class PacketRateLimiter
+        {
+            private readonly int maxPackets;
+            private readonly TimeSpan window;
+            private readonly Queue<DateTime> sendTimes = new Queue<DateTime>();
+            private readonly object gate = new object();
+
+            public PacketRateLimiter(int maxPackets, TimeSpan window)
+            {
+                this.maxPackets = maxPackets;
+                this.window = window;
+            }
+
+            /// <summary>
+            /// Block until a send slot is available inside the configured window.
+            /// </summary>
+            public void WaitForAvailability()
+            {
+                while (true)
+                {
+                    DateTime? waitUntil = null;
+                    lock (gate)
+                    {
+                        var now = DateTime.UtcNow;
+                        while (sendTimes.Count > 0 && now - sendTimes.Peek() >= window)
+                        {
+                            sendTimes.Dequeue();
+                        }
+
+                        if (sendTimes.Count < maxPackets)
+                        {
+                            sendTimes.Enqueue(now);
+                            return;
+                        }
+
+                        waitUntil = sendTimes.Peek().Add(window);
+                    }
+
+                    var delay = waitUntil.GetValueOrDefault() - DateTime.UtcNow;
+                    if (delay <= TimeSpan.Zero)
+                        continue;
+
+                    var sleep = delay > TimeSpan.FromMilliseconds(5) ? TimeSpan.FromMilliseconds(5) : delay;
+                    Thread.Sleep(sleep);
+                }
             }
         }
     }

@@ -49,6 +49,7 @@ namespace AHPP_AI.AI
         private readonly bool insimDebugLogging;
         private readonly bool activeWaypointMarkersEnabled;
         private readonly int activeWaypointIntervalMs;
+        private readonly bool laneChangeDetailedLogging;
         private readonly Dictionary<byte, string> aiAssignedRoutes = new Dictionary<byte, string>();
         private readonly object assignmentLock = new object();
         private readonly Queue<string> plannedSpawnRoutes = new Queue<string>();
@@ -88,6 +89,10 @@ namespace AHPP_AI.AI
         private byte playerPLID;
         private DateTime lastPerformanceLog = DateTime.UtcNow;
         private static readonly TimeSpan PerformanceLogWindow = TimeSpan.FromSeconds(5);
+        private const double PerformanceOnTimeMaxLoad = 0.20;
+        private const double PerformanceSlowingMaxLoad = 0.35;
+        private PerformanceHealth lastPerformanceHealth = PerformanceHealth.Waiting;
+        private double lastPerformanceLoad;
 
         // Car tracking
         private readonly object carStateLock = new object();
@@ -95,6 +100,14 @@ namespace AHPP_AI.AI
         private CompCar[] allCars = Array.Empty<CompCar>();
         private volatile TrafficCarSnapshot[] trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
         private bool debugUIInitialized;
+
+        private enum PerformanceHealth
+        {
+            Waiting,
+            OnTime,
+            Slowing,
+            RunningSlow
+        }
 
         /// <summary>
         ///     Initialize the AI controller with dependencies
@@ -125,6 +138,7 @@ namespace AHPP_AI.AI
             this.activeWaypointIntervalMs = activeWaypointIntervalMs;
             performanceLogging = performanceLoggingEnabled;
             debugButtonsVisible = appConfig?.GetBool("DebugAI", "ShowDebugButtons", true) ?? true;
+            laneChangeDetailedLogging = appConfig?.GetBool("DebugAI", "LaneChangeDetailedLogging", true) ?? true;
 
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
@@ -1534,8 +1548,9 @@ namespace AHPP_AI.AI
                     forwardDistance <= checkDistance &&
                     forwardDistance < desiredGap)
                 {
-                    logger.Log(
-                        $"PLID={plid} Lane change blocked: car ahead (gap={forwardDistance:F1}m < {desiredGap:F1}m)");
+                    if (laneChangeDetailedLogging)
+                        logger.Log(
+                            $"PLID={plid} Lane change blocked: car ahead (gap={forwardDistance:F1}m < {desiredGap:F1}m)");
                     return false;
                 }
 
@@ -1553,8 +1568,9 @@ namespace AHPP_AI.AI
 
                     if (backwardDistance < desiredGap || rearTtc < rearTtcLimit)
                     {
-                        logger.Log(
-                            $"PLID={plid} Lane change blocked: car behind (gap={backwardDistance:F1}m, ttc={rearTtc:F1}s)");
+                        if (laneChangeDetailedLogging)
+                            logger.Log(
+                                $"PLID={plid} Lane change blocked: car behind (gap={backwardDistance:F1}m, ttc={rearTtc:F1}s)");
                         return false;
                     }
                 }
@@ -1909,10 +1925,13 @@ namespace AHPP_AI.AI
 
             var speedKmh = 360.0 * car.Speed / 32768.0;
             var checkLabel = $"PLID={plid} Lane change main->alt";
-            logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
+            if (laneChangeDetailedLogging)
+                logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
             if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
             {
-                logger.Log($"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
                 return false;
             }
 
@@ -1931,8 +1950,9 @@ namespace AHPP_AI.AI
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
             {
-                logger.Log(
-                    $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
                 return false;
             }
 
@@ -1987,16 +2007,18 @@ namespace AHPP_AI.AI
 
             if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
             {
-                logger.Log(
-                    $"{checkLabel}: holding - speed {speedKmh:F1} km/h above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: holding - speed {speedKmh:F1} km/h above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
                 return false;
             }
 
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
             {
-                logger.Log(
-                    $"{checkLabel}: holding - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: holding - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
                 return false;
             }
 
@@ -2057,10 +2079,13 @@ namespace AHPP_AI.AI
 
             var speedKmh = 360.0 * car.Speed / 32768.0;
             var checkLabel = $"PLID={plid} Lane change alt->main";
-            logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
+            if (laneChangeDetailedLogging)
+                logger.Log($"{checkLabel}: checking (speed={speedKmh:F1} km/h)");
             if (speedKmh > config.LaneChangeMaxMergeSpeedKmh)
             {
-                logger.Log($"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: blocked - speed above limit {config.LaneChangeMaxMergeSpeedKmh:F1} km/h");
                 return false;
             }
 
@@ -2079,8 +2104,9 @@ namespace AHPP_AI.AI
             if (distance > config.LaneChangeMaxParallelDistanceMeters ||
                 headingError > config.LaneChangeMaxParallelHeadingDegrees)
             {
-                logger.Log(
-                    $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
+                if (laneChangeDetailedLogging)
+                    logger.Log(
+                        $"{checkLabel}: blocked - distance {distance:F1}m or heading {headingError:F1}° exceeds thresholds (max {config.LaneChangeMaxParallelDistanceMeters:F1}m / {config.LaneChangeMaxParallelHeadingDegrees:F1}°)");
                 return false;
             }
 
@@ -2198,6 +2224,8 @@ namespace AHPP_AI.AI
         /// </summary>
         private void LogLaneChangeSkip(byte plid, string reason)
         {
+            if (!laneChangeDetailedLogging) return;
+
             var now = DateTime.Now;
             if (laneChangeSkipLog.TryGetValue(plid, out var info))
             {
@@ -3633,7 +3661,9 @@ namespace AHPP_AI.AI
                                     return;
                             }
 
-                            logger.Log($"PLID={plid} Holding rejoin from {branchInfo?.Name ?? "branch"} until lane change safety conditions pass");
+                            if (laneChangeDetailedLogging)
+                                logger.Log(
+                                    $"PLID={plid} Holding rejoin from {branchInfo?.Name ?? "branch"} until lane change safety conditions pass");
                         }
                     }
                 }
@@ -3655,30 +3685,108 @@ namespace AHPP_AI.AI
         /// </summary>
         private void LogPerformanceSnapshots()
         {
-            if (!performanceLogging) return;
-
             var now = DateTime.UtcNow;
             if (now - lastPerformanceLog < PerformanceLogWindow) return;
 
-            var parts = new List<string>();
-            if (aiiPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var aiiSnapshot))
+            var hasAii = aiiPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var aiiSnapshot);
+            var hasMci = mciPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var mciSnapshot);
+            if (!hasAii && !hasMci) return;
+
+            UpdatePerformanceStatusUi(
+                hasAii ? (PerformanceSnapshot?)aiiSnapshot : null,
+                hasMci ? (PerformanceSnapshot?)mciSnapshot : null);
+
+            if (performanceLogging)
             {
-                parts.Add(
-                    $"AII count={aiiSnapshot.Count} avg={aiiSnapshot.AverageMs:F2}ms max={aiiSnapshot.MaxMs:F2}ms total={aiiSnapshot.TotalMs:F1}ms rate={aiiSnapshot.RatePerSecond:F1}/s");
+                var parts = new List<string>();
+                if (hasAii)
+                {
+                    parts.Add(
+                        $"AII count={aiiSnapshot.Count} avg={aiiSnapshot.AverageMs:F2}ms max={aiiSnapshot.MaxMs:F2}ms total={aiiSnapshot.TotalMs:F1}ms rate={aiiSnapshot.RatePerSecond:F1}/s");
+                }
+
+                if (hasMci)
+                {
+                    parts.Add(
+                        $"MCI count={mciSnapshot.Count} avg={mciSnapshot.AverageMs:F2}ms max={mciSnapshot.MaxMs:F2}ms total={mciSnapshot.TotalMs:F1}ms rate={mciSnapshot.RatePerSecond:F1}/s");
+                }
+
+                if (parts.Count > 0)
+                {
+                    var activeAiCount = GetActiveAiCount();
+                    logger.Log(
+                        $"PERF ({PerformanceLogWindow.TotalSeconds}s): activeAI={activeAiCount} | {string.Join(" | ", parts)}");
+                }
             }
 
-            if (mciPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var mciSnapshot))
-            {
-                parts.Add(
-                    $"MCI count={mciSnapshot.Count} avg={mciSnapshot.AverageMs:F2}ms max={mciSnapshot.MaxMs:F2}ms total={mciSnapshot.TotalMs:F1}ms rate={mciSnapshot.RatePerSecond:F1}/s");
-            }
+            lastPerformanceLog = now;
+        }
 
-            if (parts.Count > 0)
+        /// <summary>
+        /// Update the main UI with a traffic-safe performance health indicator.
+        /// </summary>
+        private void UpdatePerformanceStatusUi(PerformanceSnapshot? aiiSnapshot, PerformanceSnapshot? mciSnapshot)
+        {
+            var load = GetWorstPerformanceLoad(aiiSnapshot, mciSnapshot);
+            var health = EvaluatePerformanceHealth(aiiSnapshot.HasValue || mciSnapshot.HasValue, load);
+            if (health == lastPerformanceHealth && Math.Abs(load - lastPerformanceLoad) < 0.01) return;
+
+            lastPerformanceHealth = health;
+            lastPerformanceLoad = load;
+            mainUI.UpdatePerformanceStatus(BuildPerformanceStatusLabel(health, load));
+        }
+
+        /// <summary>
+        /// Determine the worst handler load ratio across recent snapshots.
+        /// </summary>
+        private static double GetWorstPerformanceLoad(
+            PerformanceSnapshot? aiiSnapshot,
+            PerformanceSnapshot? mciSnapshot)
+        {
+            var worst = 0.0;
+            if (aiiSnapshot.HasValue)
+                worst = Math.Max(worst, GetSnapshotLoad(aiiSnapshot.Value));
+            if (mciSnapshot.HasValue)
+                worst = Math.Max(worst, GetSnapshotLoad(mciSnapshot.Value));
+            return Math.Max(0.0, worst);
+        }
+
+        /// <summary>
+        /// Convert a snapshot to a normalized load ratio for the window.
+        /// </summary>
+        private static double GetSnapshotLoad(PerformanceSnapshot snapshot)
+        {
+            var elapsedMs = Math.Max(1.0, snapshot.Elapsed.TotalMilliseconds);
+            return snapshot.TotalMs / elapsedMs;
+        }
+
+        /// <summary>
+        /// Map load ratio to a health label for the UI.
+        /// </summary>
+        private static PerformanceHealth EvaluatePerformanceHealth(bool hasSamples, double load)
+        {
+            if (!hasSamples) return PerformanceHealth.Waiting;
+            if (load <= PerformanceOnTimeMaxLoad) return PerformanceHealth.OnTime;
+            if (load <= PerformanceSlowingMaxLoad) return PerformanceHealth.Slowing;
+            return PerformanceHealth.RunningSlow;
+        }
+
+        /// <summary>
+        /// Build the color-coded UI label for the performance indicator.
+        /// </summary>
+        private static string BuildPerformanceStatusLabel(PerformanceHealth health, double load)
+        {
+            var percent = Math.Max(0, Math.Min(999, (int)Math.Round(load * 100)));
+            switch (health)
             {
-                var activeAiCount = GetActiveAiCount();
-                logger.Log(
-                    $"PERF ({PerformanceLogWindow.TotalSeconds}s): activeAI={activeAiCount} | {string.Join(" | ", parts)}");
-                lastPerformanceLog = now;
+                case PerformanceHealth.OnTime:
+                    return $"^2AI Perf: On Time ({percent}%)";
+                case PerformanceHealth.Slowing:
+                    return $"^3AI Perf: Slowing ({percent}%)";
+                case PerformanceHealth.RunningSlow:
+                    return $"^1AI Perf: Running Slow ({percent}%)";
+                default:
+                    return "^7AI Perf: waiting";
             }
         }
 
@@ -3887,11 +3995,23 @@ namespace AHPP_AI.AI
             route.Nodes[index].X = movedObject.X / 16.0;
             route.Nodes[index].Y = movedObject.Y / 16.0;
             route.Nodes[index].Z = movedObject.Zbyte / 4.0;
+            route.Nodes[index].Heading = ConvertLayoutHeadingToRouteHeading(movedObject.Heading);
             routeLibrary.Save(route);
 
-            var status = $"Node {index} moved to ({route.Nodes[index].X:F1}, {route.Nodes[index].Y:F1})";
+            var headingDeg = CoordinateUtils.HeadingToDegrees(route.Nodes[index].Heading);
+            var status =
+                $"Node {index} moved to ({route.Nodes[index].X:F1}, {route.Nodes[index].Y:F1}) @ {headingDeg:F0}°";
             mainUI?.UpdateLayoutSelectionStatus(status);
             insim.SendPrivateMessage($"{route.Metadata.Name}: saved moved node {index}.");
+        }
+
+        /// <summary>
+        /// Convert a layout object heading byte into the LFS heading stored on route nodes.
+        /// </summary>
+        private static int ConvertLayoutHeadingToRouteHeading(byte headingByte)
+        {
+            var normalizedByte = (headingByte - 128 + 256) % 256;
+            return CoordinateUtils.NormalizeHeading(normalizedByte * 256);
         }
 
         /// <summary>
@@ -4139,7 +4259,8 @@ namespace AHPP_AI.AI
             var xShort = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, x));
             var yShort = (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, y));
             var zByte = (byte)Math.Max(0, Math.Min(255, Math.Round(node.Z * 4.0)));
-            var headingByte = (byte)Math.Max(0, Math.Min(255, node.Heading / 256));
+            var normalizedHeading = CoordinateUtils.NormalizeHeading(node.Heading);
+            var headingByte = (byte)((normalizedHeading / 256 + 128) % 256);
 
             var startPos = new ObjectInfo
             {
