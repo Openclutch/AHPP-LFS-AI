@@ -53,6 +53,7 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<byte, double> manualTargetSpeeds = new Dictionary<byte, double>();
         private readonly Dictionary<byte, int> targetWaypointIndices = new Dictionary<byte, int>();
         private readonly Dictionary<byte, DateTime> waypointTimers = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, int> lastBrakeValues = new Dictionary<byte, int>();
 
         public WaypointFollower(AIConfig config, Logger logger, SteeringCalculator steeringCalculator)
         {
@@ -129,6 +130,7 @@ namespace AHPP_AI.Waypoint
             lastProgressCheckTimes[plid] = DateTime.Now;
             movingAwayCounts[plid] = 0;
             currentApproachPointIndex[plid] = 0;
+            lastBrakeValues[plid] = 0;
 
             return true;
         }
@@ -612,27 +614,53 @@ namespace AHPP_AI.Waypoint
 
             int throttle, brake;
 
-            if (speedError > 1)
+            if (speedError > config.BrakeCoastSpeedErrorKmh)
             {
                 var factor = Math.Min(1.0, speedError / 20.0);
                 throttle = config.ThrottleBase + (int)(factor * (65535 - config.ThrottleBase));
                 throttle = Math.Max(config.ThrottleBase, Math.Min(65535, throttle));
-                brake = 0;
+                brake = SmoothBrake(plid, 0);
             }
-            else if (speedError < -1)
+            else if (speedError < -config.BrakeApplySpeedErrorKmh)
             {
                 var factor = Math.Min(1.0, -speedError / 20.0);
                 throttle = 0;
-                brake = config.BrakeBase + (int)(factor * (65535 - config.BrakeBase));
-                brake = Math.Max(config.BrakeBase, Math.Min(65535, brake));
+                var desiredBrake = config.BrakeBase + (int)(factor * (65535 - config.BrakeBase));
+                desiredBrake = Math.Max(config.BrakeBase, Math.Min(65535, desiredBrake));
+                brake = SmoothBrake(plid, desiredBrake);
+            }
+            else if (speedError < -config.BrakeCoastSpeedErrorKmh)
+            {
+                throttle = 0;
+                brake = SmoothBrake(plid, 0);
             }
             else
             {
-                throttle = config.ThrottleBase / 2;
-                brake = 0;
+                throttle = speedError >= 0 ? config.ThrottleBase / 2 : 0;
+                brake = SmoothBrake(plid, 0);
             }
 
             return (throttle, brake);
+        }
+
+        /// <summary>
+        ///     Smooth brake application and release to avoid rapid taps.
+        /// </summary>
+        private int SmoothBrake(byte plid, int desiredBrake)
+        {
+            if (!lastBrakeValues.ContainsKey(plid))
+                lastBrakeValues[plid] = 0;
+
+            var currentBrake = lastBrakeValues[plid];
+            int updatedBrake;
+
+            if (desiredBrake > currentBrake)
+                updatedBrake = Math.Min(desiredBrake, currentBrake + config.BrakeRiseStep);
+            else
+                updatedBrake = Math.Max(desiredBrake, currentBrake - config.BrakeReleaseStep);
+
+            lastBrakeValues[plid] = updatedBrake;
+            return updatedBrake;
         }
 
         /// <summary>

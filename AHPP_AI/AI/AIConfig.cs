@@ -95,6 +95,10 @@ namespace AHPP_AI.AI
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;
         public int BrakeBase { get; set; } = 10000;
+        public double BrakeCoastSpeedErrorKmh { get; set; } = 1.0;
+        public double BrakeApplySpeedErrorKmh { get; set; } = 4.0;
+        public int BrakeRiseStep { get; set; } = 2500;
+        public int BrakeReleaseStep { get; set; } = 4000;
 
         // Steering settings
         public int MaxSteering { get; set; } = 65535;
