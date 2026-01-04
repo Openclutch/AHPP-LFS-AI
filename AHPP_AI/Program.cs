@@ -174,6 +174,8 @@ namespace AHPP_AI
         {
             var basePath = AppDomain.CurrentDomain.BaseDirectory;
             appConfig = AppConfig.Load(Path.Combine(basePath, "config.ini"), logger);
+            var logLevelText = appConfig.GetString("Logging", "Level", "Warn");
+            logger.SetMinimumLevel(Logger.ParseLogLevel(logLevelText, Logger.LogLevel.Warn));
 
             onlineHost = appConfig.GetString("InSim", "HostOnline",
                 appConfig.GetString("InSim", "Host", "10.211.55.4"));
