@@ -657,6 +657,21 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Configure brake smoothing thresholds and ramp steps.
+        /// </summary>
+        public void ConfigureBrakeSmoothing(double coastSpeedErrorKmh, double brakeSpeedErrorKmh, int riseStep,
+            int releaseStep)
+        {
+            var clampedCoast = Math.Max(0.0, coastSpeedErrorKmh);
+            var clampedBrake = Math.Max(clampedCoast, brakeSpeedErrorKmh);
+
+            config.BrakeCoastSpeedErrorKmh = clampedCoast;
+            config.BrakeApplySpeedErrorKmh = clampedBrake;
+            config.BrakeRiseStep = Math.Max(0, riseStep);
+            config.BrakeReleaseStep = Math.Max(0, releaseStep);
+        }
+
+        /// <summary>
         /// Configure gearbox timing, hysteresis, and speed thresholds for shifts.
         /// </summary>
         public void ConfigureGearbox(int shiftDelayMs, int upshiftHysteresisKmh, int downshiftHysteresisKmh,

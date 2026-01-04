@@ -67,6 +67,10 @@ namespace AHPP_AI
         private static readonly double purePursuitMaxSteerDegrees;
         private static readonly int throttleBase;
         private static readonly int brakeBase;
+        private static readonly double brakeCoastSpeedErrorKmh;
+        private static readonly double brakeApplySpeedErrorKmh;
+        private static readonly int brakeRiseStep;
+        private static readonly int brakeReleaseStep;
         private static readonly int minSteering;
         private static readonly int maxSteering;
         private static readonly int steeringCenter;
@@ -220,6 +224,10 @@ namespace AHPP_AI
             purePursuitMaxSteerDegrees = appConfig.GetDouble("AI", "PurePursuitMaxSteerDegrees", 25.0);
             throttleBase = appConfig.GetInt("AI", "ThrottleBase", 0);
             brakeBase = appConfig.GetInt("AI", "BrakeBase", 10000);
+            brakeCoastSpeedErrorKmh = appConfig.GetDouble("AI", "BrakeCoastSpeedErrorKmh", 1.0);
+            brakeApplySpeedErrorKmh = appConfig.GetDouble("AI", "BrakeApplySpeedErrorKmh", 4.0);
+            brakeRiseStep = appConfig.GetInt("AI", "BrakeRiseStep", 2500);
+            brakeReleaseStep = appConfig.GetInt("AI", "BrakeReleaseStep", 4000);
             minSteering = appConfig.GetInt("AI", "MinSteering", 1);
             maxSteering = appConfig.GetInt("AI", "MaxSteering", 65535);
             steeringCenter = appConfig.GetInt("AI", "SteeringCenter", 32768);
@@ -354,6 +362,11 @@ namespace AHPP_AI
             aiController.SetSteeringResponseDamping(steeringResponseDamping);
             aiController.SetSteeringDeadzoneDegrees(steeringDeadzoneDegrees);
             aiController.ConfigureControlInputs(throttleBase, brakeBase, minSteering, maxSteering, steeringCenter);
+            aiController.ConfigureBrakeSmoothing(
+                brakeCoastSpeedErrorKmh,
+                brakeApplySpeedErrorKmh,
+                brakeRiseStep,
+                brakeReleaseStep);
             aiController.ConfigureWaypointThresholds(
                 waypointMinThreshold,
                 waypointMaxThreshold,
