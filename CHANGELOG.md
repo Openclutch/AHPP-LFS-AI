@@ -1,5 +1,6 @@
 # Changelog
 
+- Added `InSim.AdminPassword` to `config.ini` so the AI connects with the multiplayer admin password when required.
 - Added configurable AI brake smoothing thresholds and ramp steps in `config.ini`.
 - Smoothed AI braking by coasting on minor slowdowns and ramping brake pressure instead of tapping.
 - Added configurable logging levels for the AI logger to reduce production log noise or enable verbose testing output.

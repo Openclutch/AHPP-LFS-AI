@@ -42,6 +42,7 @@ namespace AHPP_AI
         private static string currentHost;
         private static readonly int port;
         private static readonly int outGaugePort;
+        private static readonly string adminPassword;
         private static byte currentViewPLID = 0;
         private static string currentRecordingRoute = "main_loop";
         private static string pendingRouteName = "main_loop";
@@ -187,6 +188,7 @@ namespace AHPP_AI
             currentHost = onlineHost;
             port = appConfig.GetInt("InSim", "Port", 29999);
             outGaugePort = appConfig.GetInt("InSim", "OutGaugePort", 30000);
+            adminPassword = appConfig.GetString("InSim", "AdminPassword", string.Empty);
 
             debugEnabled = appConfig.GetBool("DebugAI", "Enabled", true);
             autoSpawnAI = appConfig.GetBool("DebugAI", "AutoSpawnAI", true);
@@ -853,7 +855,7 @@ namespace AHPP_AI
                 {
                     Host = currentHost,
                     Port = port,
-                    Admin = "", // No admin password
+                    Admin = adminPassword ?? string.Empty,
                     Interval = 100, // Send NLI packet every 100ms
                     Flags = InSimFlags.ISF_MCI | InSimFlags.ISF_AXM_LOAD | InSimFlags.ISF_AXM_EDIT |
                             InSimFlags.ISF_LOCAL | InSimFlags.ISF_CON
