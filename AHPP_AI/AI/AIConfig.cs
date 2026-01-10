@@ -36,6 +36,13 @@ namespace AHPP_AI.AI
         public int RemoveBatchSize { get; set; } = 1;
         public bool AutoManagePopulation { get; set; } = true;
 
+        // Packet pacing settings
+        public int AiiIntervalHundredthsMin { get; set; } = 20;
+        public int AiiIntervalHundredthsMax { get; set; } = 80;
+        public int PacketRateBudgetPerSecond { get; set; } = 220;
+        public int PacketRateReservePerSecond { get; set; } = 80;
+        public int PacketsPerAiiUpdate { get; set; } = 2;
+
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
         public string TrafficRouteName { get; set; } = "main_loop";

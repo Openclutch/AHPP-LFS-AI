@@ -169,6 +169,11 @@ namespace AHPP_AI
         private static readonly double passByCooldownMinSeconds;
         private static readonly double passByCooldownMaxSeconds;
         private static readonly double passByProximityResetSeconds;
+        private static readonly int aiiBaseIntervalHundredths;
+        private static readonly int aiiMaxIntervalHundredths;
+        private static readonly int packetRateBudgetPerSecond;
+        private static readonly int packetRateReservePerSecond;
+        private static readonly int packetsPerAiiUpdate;
         private static readonly AIConfig.PassByReactionMode passByReactionMode;
         private static readonly string buildVersion;
 
@@ -342,6 +347,12 @@ namespace AHPP_AI
             passByCooldownMinSeconds = appConfig.GetDouble("AI", "PassByCooldownMinSeconds", 60.0);
             passByCooldownMaxSeconds = appConfig.GetDouble("AI", "PassByCooldownMaxSeconds", 120.0);
             passByProximityResetSeconds = appConfig.GetDouble("AI", "PassByProximityResetSeconds", 5.0);
+            aiiBaseIntervalHundredths = Math.Max(1, appConfig.GetInt("AI", "AIIBaseIntervalHundredths", 20));
+            aiiMaxIntervalHundredths = Math.Max(aiiBaseIntervalHundredths,
+                appConfig.GetInt("AI", "AIIMaxIntervalHundredths", 80));
+            packetRateBudgetPerSecond = Math.Max(50, appConfig.GetInt("AI", "PacketRateBudgetPerSecond", 220));
+            packetRateReservePerSecond = Math.Max(0, appConfig.GetInt("AI", "PacketRateReservePerSecond", 80));
+            packetsPerAiiUpdate = Math.Max(1, appConfig.GetInt("AI", "PacketsPerAIIUpdate", 2));
             passByReactionMode = ParsePassByReactionMode(
                 appConfig.GetString("AI", "PassByReactionMode", "FlashAndHorn"));
             buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
@@ -397,6 +408,14 @@ namespace AHPP_AI
                 collisionDetectionAngleDegrees,
                 minimumSafetyDistanceMeters,
                 collisionDetectionHalfWidthMeters);
+            aiController.ConfigureAiiRefreshBudget(
+                aiiBaseIntervalHundredths,
+                aiiMaxIntervalHundredths,
+                packetRateBudgetPerSecond,
+                packetRateReservePerSecond,
+                packetsPerAiiUpdate);
+            var sendLimit = Math.Max(10, packetRateBudgetPerSecond - packetRateReservePerSecond);
+            InSimClientExtensions.SetPacketRateLimit(sendLimit);
             aiController.ConfigurePurePursuit(
                 purePursuitEnabled,
                 purePursuitLookaheadMinMeters,

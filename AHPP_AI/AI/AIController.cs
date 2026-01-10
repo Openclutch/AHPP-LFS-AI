@@ -71,6 +71,8 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, DateTime> passByCooldowns = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, PassByProximityState> passByProximityStates =
             new Dictionary<byte, PassByProximityState>();
+        private readonly object aiiIntervalLock = new object();
+        private int currentAiiIntervalHundredths;
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
         private readonly OutGauge outGauge;
@@ -693,6 +695,28 @@ namespace AHPP_AI.AI
                 if (cleaned.Length > 0)
                     config.GearSpeedThresholds = cleaned;
             }
+        }
+
+        /// <summary>
+        /// Configure the AI info refresh cadence based on packet budget limits.
+        /// </summary>
+        public void ConfigureAiiRefreshBudget(
+            int baseIntervalHundredths,
+            int maxIntervalHundredths,
+            int packetBudgetPerSecond,
+            int packetReservePerSecond,
+            int packetsPerUpdate)
+        {
+            var clampedBase = Math.Max(1, Math.Min(255, baseIntervalHundredths));
+            var clampedMax = Math.Max(clampedBase, Math.Min(255, maxIntervalHundredths));
+
+            config.AiiIntervalHundredthsMin = clampedBase;
+            config.AiiIntervalHundredthsMax = clampedMax;
+            config.PacketRateBudgetPerSecond = Math.Max(10, packetBudgetPerSecond);
+            config.PacketRateReservePerSecond = Math.Max(0, packetReservePerSecond);
+            config.PacketsPerAiiUpdate = Math.Max(1, packetsPerUpdate);
+
+            UpdateAiiRefreshInterval(true);
         }
 
         /// <summary>
@@ -2557,6 +2581,8 @@ namespace AHPP_AI.AI
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
                 populationManager?.OnAiLeft(plid);
+
+            UpdateAiiRefreshInterval();
         }
 
         public void StopAllAIs()
@@ -2737,8 +2763,7 @@ namespace AHPP_AI.AI
                     // Initialize the driver
                     driver.InitializeDriver(plid);
 
-                    // Request AI info
-                    RequestAIInfo(plid);
+                    UpdateAiiRefreshInterval(true);
 
                     logger.Log($"New AI player spawned: PLID={plid}, Type={npl.PType}, Name={npl.PName}");
 
@@ -2818,16 +2843,92 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Get the currently applied AI info refresh interval in hundredths of a second.
+        /// </summary>
+        private int GetCurrentAiiIntervalHundredths()
+        {
+            lock (aiiIntervalLock)
+            {
+                if (currentAiiIntervalHundredths <= 0)
+                    currentAiiIntervalHundredths = config.AiiIntervalHundredthsMin;
+
+                return currentAiiIntervalHundredths;
+            }
+        }
+
+        /// <summary>
+        /// Clamp the provided interval to valid byte and configured bounds.
+        /// </summary>
+        private byte ClampAiiIntervalToByte(int intervalHundredths)
+        {
+            var clamped = Math.Max(config.AiiIntervalHundredthsMin,
+                Math.Min(config.AiiIntervalHundredthsMax, intervalHundredths));
+            clamped = Math.Max(1, Math.Min(255, clamped));
+            return (byte)clamped;
+        }
+
+        /// <summary>
+        /// Adjust AI info request interval based on active AI count and packet budget.
+        /// </summary>
+        private int UpdateAiiRefreshInterval(bool forceBroadcast = false)
+        {
+            var activeCount = GetActiveAiCount();
+            var baseInterval = Math.Max(1, config.AiiIntervalHundredthsMin);
+            var availableBudget = Math.Max(1, config.PacketRateBudgetPerSecond - config.PacketRateReservePerSecond);
+            var updatesPerSecondBudget = availableBudget / (double)Math.Max(1, config.PacketsPerAiiUpdate);
+            var perAiRate = activeCount > 0 ? updatesPerSecondBudget / activeCount : updatesPerSecondBudget;
+            var intervalHundredths = perAiRate <= 0.001
+                ? config.AiiIntervalHundredthsMax
+                : (int)Math.Ceiling(100.0 / perAiRate);
+
+            intervalHundredths = Math.Max(baseInterval, intervalHundredths);
+            intervalHundredths = Math.Min(config.AiiIntervalHundredthsMax, intervalHundredths);
+
+            int previousInterval;
+            lock (aiiIntervalLock)
+            {
+                previousInterval = currentAiiIntervalHundredths;
+                if (!forceBroadcast && previousInterval == intervalHundredths && previousInterval > 0)
+                    return previousInterval;
+
+                currentAiiIntervalHundredths = intervalHundredths;
+            }
+
+            foreach (var plid in GetActiveAiPlids())
+            {
+                RequestAIInfo(plid, intervalHundredths);
+            }
+
+            if (previousInterval != intervalHundredths)
+            {
+                var intervalSeconds = intervalHundredths / 100.0;
+                logger.Log(
+                    $"Adjusted AI info repeat to {intervalSeconds:F2}s for {activeCount} AI(s) (packet budget {availableBudget}/s, reserve {config.PacketRateReservePerSecond}/s)");
+            }
+
+            return intervalHundredths;
+        }
+
+        /// <summary>
+        /// Send the AI info repeat request for a specific AI.
+        /// </summary>
+        private void SendAiiRefreshInterval(byte plid, int intervalHundredths)
+        {
+            var clamped = ClampAiiIntervalToByte(intervalHundredths);
+
+            insim.Send(new IS_AIC(new List<AIInputVal>
+            {
+                new AIInputVal { Input = AicInputType.CS_REPEAT_AI_INFO, Time = clamped, Value = 0 }
+            }) { PLID = plid });
+        }
+
+        /// <summary>
         ///     Request AI information from the game
         /// </summary>
-        private void RequestAIInfo(byte plid)
+        private void RequestAIInfo(byte plid, int? intervalOverrideHundredths = null)
         {
-            var inputs = new List<AIInputVal>
-            {
-                new AIInputVal { Input = AicInputType.CS_REPEAT_AI_INFO, Time = 10, Value = 0 }
-            };
-
-            insim.Send(new IS_AIC(inputs) { PLID = plid });
+            var intervalHundredths = intervalOverrideHundredths ?? GetCurrentAiiIntervalHundredths();
+            SendAiiRefreshInterval(plid, intervalHundredths);
         }
 
         /// <summary>

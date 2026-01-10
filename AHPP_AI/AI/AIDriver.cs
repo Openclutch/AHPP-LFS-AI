@@ -1284,7 +1284,14 @@ namespace AHPP_AI.AI
 
             // Request periodic info updates
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_REPEAT_AI_INFO, Time = 10, Value = 0 } }) { PLID = plid });
+            {
+                new AIInputVal
+                {
+                    Input = AicInputType.CS_REPEAT_AI_INFO,
+                    Time = (byte)Math.Max(1, Math.Min(255, config.AiiIntervalHundredthsMin)),
+                    Value = 0
+                }
+            }) { PLID = plid });
         }
 
         /// <summary>

@@ -99,6 +99,7 @@ namespace AHPP_AI.UI
 
         private string selectedRoute = "main_loop";
         private string selectedVisualizationRoute = "main_loop";
+        private int currentAiCount;
         private int visualizationDetailStep = 2;
         private bool isRecording;
         private int recordedPoints;
@@ -109,6 +110,7 @@ namespace AHPP_AI.UI
         private string insimHost = "Host: pending";
         private bool autoPopulationEnabled = true;
         private byte autoAiButtonRow;
+        private byte startAllAisRow;
         private bool layoutVisualizationEnabled;
         private byte toggleLayoutRow;
         private bool debugButtonsVisible = true;
@@ -145,7 +147,8 @@ namespace AHPP_AI.UI
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
             autoAiButtonRow = row;
             CreateButton(StartAutoAisId, GetAutoAiButtonText(), RIGHT_COL, row); row += ROW_HEIGHT;
-            CreateButton(StartAllAisId, "Start All AI", RIGHT_COL, row); row += ROW_HEIGHT;
+            startAllAisRow = row;
+            CreateButton(StartAllAisId, GetStartAllAiLabel(), RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(StopAllAisId, "Stop All AI", RIGHT_COL, row); row += ROW_HEIGHT;
             CreateButton(PitAllAisId, "Pit All AI", RIGHT_COL, row);
             var layoutButtonGroupWidth = (byte)(BTN_W * 6 + SELECT_BTN_SPACING * 5);
@@ -179,10 +182,12 @@ namespace AHPP_AI.UI
             {
                 lastAiSnapshot.AddRange(ai);
             }
+            currentAiCount = lastAiSnapshot.Count;
 
             if (!uiInitialized || uiHidden) return;
 
             RenderAIList(lastAiSnapshot);
+            RenderAiCountLabel();
         }
 
         /// <summary>
@@ -212,6 +217,14 @@ namespace AHPP_AI.UI
         private string GetAutoAiButtonText()
         {
             return autoPopulationEnabled ? "Auto AI: On" : "Start Auto AI";
+        }
+
+        /// <summary>
+        /// Build the label for the Start All AI button with the current AI count.
+        /// </summary>
+        private string GetStartAllAiLabel()
+        {
+            return $"Start All AI ({currentAiCount})";
         }
 
         /// <summary>
@@ -709,6 +722,15 @@ namespace AHPP_AI.UI
                 aiRemoveButtons[removeId] = id;
                 index++;
             }
+        }
+
+        /// <summary>
+        /// Refresh the Start All AI button to display the current AI count.
+        /// </summary>
+        private void RenderAiCountLabel()
+        {
+            if (!uiInitialized || uiHidden || startAllAisRow == 0) return;
+            CreateButton(StartAllAisId, GetStartAllAiLabel(), RIGHT_COL, startAllAisRow);
         }
 
         /// <summary>

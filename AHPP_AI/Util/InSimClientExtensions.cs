@@ -14,6 +14,14 @@ namespace AHPP_AI.Util
         private static readonly PacketRateLimiter PacketLimiter =
             new PacketRateLimiter(200, TimeSpan.FromSeconds(1));
 
+        /// <summary>
+        /// Override the per-second send limit used to throttle outbound InSim packets.
+        /// </summary>
+        public static void SetPacketRateLimit(int maxPacketsPerSecond)
+        {
+            PacketLimiter.SetLimit(Math.Max(10, maxPacketsPerSecond));
+        }
+
         public static void Initialize(this InSimClient client, InSimSettings settings)
         {
             client.InitializeAsync(settings).GetAwaiter().GetResult();
@@ -84,7 +92,7 @@ namespace AHPP_AI.Util
         /// </summary>
         private sealed class PacketRateLimiter
         {
-            private readonly int maxPackets;
+            private int maxPackets;
             private readonly TimeSpan window;
             private readonly Queue<DateTime> sendTimes = new Queue<DateTime>();
             private readonly object gate = new object();
@@ -93,6 +101,14 @@ namespace AHPP_AI.Util
             {
                 this.maxPackets = maxPackets;
                 this.window = window;
+            }
+
+            public void SetLimit(int maxPacketsPerWindow)
+            {
+                lock (gate)
+                {
+                    maxPackets = Math.Max(1, maxPacketsPerWindow);
+                }
             }
 
             /// <summary>

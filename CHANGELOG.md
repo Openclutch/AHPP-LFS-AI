@@ -1,5 +1,8 @@
 # Changelog
 
+- Added a packet-budget-aware AI info refresh rate that stretches the AII/AIC interval as more bots join, keeping total packets under the configured per-second cap so larger fleets stay connected.
+- Lowered default packet budgets and tied the InSim send limiter to the configured budget/reserve so outbound traffic stays below the server cap by default.
+- Start All AI button now shows the current AI count so you can see how many bots are active at a glance.
 - Spawn lane merges now pick a heading-aligned point on the base `pit_entry` route so cars join mid-route instead of pivoting back toward the start of the recording.
 - Stopped spawn approach curves from reactivating every frame; once an approach is finished the AI hands off to normal waypoints instead of looping into recovery near pit_entry.
 - Added multi-lane pit entry support: load all recorded pit/spawn routes and auto-select the nearest heading-aligned lane per AI before merging onto the main route.
