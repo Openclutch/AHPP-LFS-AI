@@ -93,12 +93,27 @@ namespace AHPP_AI.Waypoint
         /// Find the waypoint that is both near the car and aligns with its current heading.
         /// Returns the index and whether the path should be used in its recorded (clockwise) order.
         /// </summary>
-        public (int waypointIndex, bool clockwise) FindBestWaypointForDirection(Vec position, int heading, List<Util.Waypoint> path)
+        public (int waypointIndex, bool clockwise) FindBestWaypointForDirection(Vec position, int heading, List<Util.Waypoint> path, bool isLoop)
+        {
+            var (_, bestIndex, clockwise) = ScoreRouteFit(position, heading, path, isLoop, true);
+            return (bestIndex, clockwise);
+        }
+
+        /// <summary>
+        /// Score how well a path fits a given position/heading so callers can choose between routes.
+        /// Lower scores are better; includes distance and heading alignment penalties.
+        /// </summary>
+        public (double score, int waypointIndex, bool clockwise) ScoreRouteFit(
+            Vec position,
+            int heading,
+            List<Util.Waypoint> path,
+            bool isLoop,
+            bool logReversal = true)
         {
             if (path == null || path.Count < 2)
             {
                 logger.LogError("Cannot find best waypoint: path too short");
-                return (0, true);
+                return (double.MaxValue, 0, true);
             }
 
             var posX = position.X / 65536.0;
@@ -117,8 +132,8 @@ namespace AHPP_AI.Waypoint
                 var distance = Math.Sqrt(Math.Pow(wpX - posX, 2) + Math.Pow(wpY - posY, 2));
 
                 // Forward direction uses the next waypoint; reverse uses the previous waypoint.
-                var next = path[(i + 1) % path.Count];
-                var prev = path[(i - 1 + path.Count) % path.Count];
+                var next = path[isLoop ? (i + 1) % path.Count : Math.Min(i + 1, path.Count - 1)];
+                var prev = path[isLoop ? (i - 1 + path.Count) % path.Count : Math.Max(i - 1, 0)];
 
                 var forwardHeading = CoordinateUtils.CalculateHeadingToTarget(
                     next.Position.X / 65536.0 - wpX,
@@ -149,12 +164,14 @@ namespace AHPP_AI.Waypoint
 
             var useForward = bestForwardScore <= bestReverseScore;
 
-            if (!useForward)
+            if (!useForward && logReversal)
             {
                 logger.Log($"Path reversed to match heading at index {bestReverseIndex} (forward score {bestForwardScore:F2}, reverse score {bestReverseScore:F2})");
             }
 
-            return (useForward ? bestForwardIndex : bestReverseIndex, useForward);
+            var bestIndex = useForward ? bestForwardIndex : bestReverseIndex;
+            var bestScore = useForward ? bestForwardScore : bestReverseScore;
+            return (bestScore, bestIndex, useForward);
         }
 
         /// <summary>

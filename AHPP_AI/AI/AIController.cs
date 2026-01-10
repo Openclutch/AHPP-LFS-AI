@@ -56,6 +56,7 @@ namespace AHPP_AI.AI
         private readonly object plannedSpawnLock = new object();
         private readonly object aiPlidLock = new object();
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, string> spawnRouteSelections = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastActiveWaypointUpdate = new Dictionary<byte, DateTime>();
@@ -1616,9 +1617,11 @@ namespace AHPP_AI.AI
         /// </summary>
         private bool ShouldHoldForSpawnMerge(byte plid, CompCar car, int targetIndex, TrafficCarSnapshot[] snapshot)
         {
-            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
+            var spawnPath = waypointFollower.GetPath(plid);
+            if (spawnPath == null || spawnPath.Count < 2) spawnPath = pathManager.SpawnRoute;
+            if (spawnPath == null || spawnPath.Count < 2) return false;
             if (pathManager.MainRoute == null || pathManager.MainRoute.Count < 2) return false;
-            if (!IsSpawnMergeWindow(car, targetIndex)) return false;
+            if (!IsSpawnMergeWindow(spawnPath, car, targetIndex)) return false;
 
             var mergeIndex = FindClosestIndex(pathManager.MainRoute, car);
             return !IsTargetLaneClear(plid, car, pathManager.MainRoute, mergeIndex, snapshot);
@@ -1627,18 +1630,18 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Check whether the car is within the configured hold window near the end of the spawn route.
         /// </summary>
-        private bool IsSpawnMergeWindow(CompCar car, int targetIndex)
+        private bool IsSpawnMergeWindow(List<Util.Waypoint> spawnPath, CompCar car, int targetIndex)
         {
-            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
+            if (spawnPath == null || spawnPath.Count < 2) return false;
 
             var holdLookahead = Math.Max(1, config.SpawnMergeHoldLookaheadWaypoints);
-            if (targetIndex >= pathManager.SpawnRoute.Count - holdLookahead) return true;
+            if (targetIndex >= spawnPath.Count - holdLookahead) return true;
 
-            var geometry = PathProjection.GetGeometry(pathManager.SpawnRoute, config.PathLoopClosureDistanceMeters);
+            var geometry = PathProjection.GetGeometry(spawnPath, config.PathLoopClosureDistanceMeters);
             if (geometry == null || geometry.TotalLength <= 0) return false;
 
             if (!PathProjection.TryProjectToPath(
-                    pathManager.SpawnRoute,
+                    spawnPath,
                     geometry,
                     car.X / 65536.0,
                     car.Y / 65536.0,
@@ -1842,7 +1845,7 @@ namespace AHPP_AI.AI
                 return;
             }
 
-            waypointFollower.SetPath(plid, transitionPath, 0);
+            waypointFollower.SetPath(plid, transitionPath, 0, false);
             var transitionSpeed = Math.Min(
                 config.LaneChangeMaxMergeSpeedKmh,
                 Math.Min(GetWaypointSpeedLimit(currentPath, fromIndex), GetWaypointSpeedLimit(targetPath, entryIndex)));
@@ -1874,7 +1877,10 @@ namespace AHPP_AI.AI
             if (targetPath == null || targetPath.Count == 0) return;
 
             var startIndex = ClampIndex(targetPath, activeChange.TargetEntryIndex);
-            waypointFollower.SetPath(plid, targetPath, startIndex);
+            var targetIsLoop = activeChange.ToAlternate
+                ? activeChange.TargetRoute?.Metadata?.IsLoop ?? false
+                : pathManager.MainRouteMetadata?.IsLoop ?? true;
+            waypointFollower.SetPath(plid, targetPath, startIndex, targetIsLoop);
 
             if (activeChange.ToAlternate)
             {
@@ -2530,6 +2536,7 @@ namespace AHPP_AI.AI
                 aiPLIDs.Remove(plid);
             }
             aiSpawnPositions.Remove(plid);
+            spawnRouteSelections.Remove(plid);
             engineStateMap.Remove(plid);
             currentRoute.Remove(plid);
             activeBranchSelections.Remove(plid);
@@ -2632,7 +2639,7 @@ namespace AHPP_AI.AI
                 $"Manual lane change to {branchName}");
 
             var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
-            waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+            waypointFollower.SetPath(plid, branchInfo.Path, bestIndex, branchInfo.Metadata?.IsLoop ?? false);
             currentRoute[plid] = "branch";
             activeBranchSelections[plid] = branchInfo;
             return true;
@@ -2740,7 +2747,7 @@ namespace AHPP_AI.AI
                     //Thread.Sleep(1000);
 
                     // Assign spawn path (start at closest point once MCI data is available)
-                    waypointFollower.SetPath(plid, pathManager.SpawnRoute);
+                    waypointFollower.SetPath(plid, pathManager.SpawnRoute, null, pathManager.SpawnRouteMetadata?.IsLoop ?? false);
                     currentRoute[plid] = "spawn";
                     SetAssignedRoute(plid, assignedRoute);
                     populationManager?.UnregisterHuman(0, npl.UCID);
@@ -3425,7 +3432,7 @@ namespace AHPP_AI.AI
                 branchInfo.StartIndex == targetIndex)
             {
                 var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
-                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex, branchInfo.Metadata?.IsLoop ?? false);
                 currentRoute[plid] = "branch";
                 activeBranchSelections[plid] = branchInfo;
             }
@@ -3443,7 +3450,7 @@ namespace AHPP_AI.AI
             if (car == null || car.PLID == 0) return;
 
             var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex, pathManager.MainRouteMetadata?.IsLoop ?? true);
             activeBranchSelections.Remove(plid);
             laneChangeLastMerge[plid] = DateTime.Now;
             laneChangeLastCheck[plid] = DateTime.Now;
@@ -3599,6 +3606,8 @@ namespace AHPP_AI.AI
                     return;
                 }
 
+                EnsureSpawnRouteChosen(plid, car);
+
                 var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
                 var routeName = currentRoute.TryGetValue(plid, out var currentName) ? currentName : string.Empty;
                 var holdForMerge = !string.IsNullOrWhiteSpace(routeName) &&
@@ -3617,13 +3626,19 @@ namespace AHPP_AI.AI
                     if (laneChangeActive)
                         return;
 
-                    if (routeName == "spawn" && updatedTargetIndex >= pathManager.SpawnRoute.Count - 1)
+                    var activeSpawnPath = waypointFollower.GetPath(plid);
+                    var activeSpawnLength = activeSpawnPath?.Count > 0
+                        ? activeSpawnPath.Count
+                        : pathManager.SpawnRoute.Count;
+
+                    if (routeName == "spawn" && activeSpawnLength > 0 &&
+                        updatedTargetIndex >= activeSpawnLength - 1)
                     {
                         if (holdForMerge)
                             return;
 
                         var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-                        waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex);
+                        waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex, pathManager.MainRouteMetadata?.IsLoop ?? true);
                         currentRoute[plid] = "main";
                     }
                     else if (routeName == "main")
@@ -3666,7 +3681,7 @@ namespace AHPP_AI.AI
                                     $"Taking branch {branchInfo.Name}");
 
                                 var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
-                                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex);
+                                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex, branchInfo.Metadata?.IsLoop ?? false);
                                 currentRoute[plid] = "branch";
                                 activeBranchSelections[plid] = branchInfo;
                             }
@@ -3682,7 +3697,7 @@ namespace AHPP_AI.AI
                         if (path == null || path.Count == 0)
                         {
                             logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
-                            waypointFollower.SetPath(plid, pathManager.MainRoute);
+                            waypointFollower.SetPath(plid, pathManager.MainRoute, null, pathManager.MainRouteMetadata?.IsLoop ?? true);
                             activeBranchSelections.Remove(plid);
                             currentRoute[plid] = "main";
                             return;
@@ -3742,6 +3757,37 @@ namespace AHPP_AI.AI
                 aiiPerformanceTracker.Record(stopwatch.Elapsed);
                 LogPerformanceSnapshots();
             }
+        }
+
+        /// <summary>
+        /// Choose the nearest heading-aligned spawn lane for an AI and apply it once.
+        /// </summary>
+        private void EnsureSpawnRouteChosen(byte plid, CompCar car)
+        {
+            if (!currentRoute.TryGetValue(plid, out var routeName) ||
+                !routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (spawnRouteSelections.ContainsKey(plid)) return;
+
+            var position = new Vec(car.X, car.Y, car.Z);
+            if (!pathManager.TrySelectSpawnRoute(position, car.Heading, out var selectedName, out var path,
+                    out var startIndex, out var clockwise, out var isLoop))
+                return;
+
+            var appliedPath = path;
+            var appliedIndex = startIndex;
+            if (!clockwise)
+            {
+                appliedPath = new List<Util.Waypoint>(path);
+                appliedPath.Reverse();
+                appliedIndex = appliedPath.Count - 1 - startIndex;
+            }
+
+            waypointFollower.SetPath(plid, appliedPath, appliedIndex, isLoop);
+            spawnRouteSelections[plid] = selectedName;
+            logger.Log(
+                $"PLID={plid} selected spawn route {selectedName} starting at index {appliedIndex} (clockwise={clockwise})");
         }
 
         /// <summary>
@@ -3891,17 +3937,17 @@ namespace AHPP_AI.AI
                 switch (routeName)
                 {
                     case "spawn":
-                        waypointFollower.SetPath(plid, pathManager.SpawnRoute);
+                        waypointFollower.SetPath(plid, pathManager.SpawnRoute, null, pathManager.SpawnRouteMetadata?.IsLoop ?? false);
                         break;
                     case "main":
-                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        waypointFollower.SetPath(plid, pathManager.MainRoute, null, pathManager.MainRouteMetadata?.IsLoop ?? true);
                         break;
                     case "branch":
-                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        waypointFollower.SetPath(plid, pathManager.MainRoute, null, pathManager.MainRouteMetadata?.IsLoop ?? true);
                         currentRoute[plid] = "main";
                         break;
                     default:
-                        waypointFollower.SetPath(plid, pathManager.MainRoute);
+                        waypointFollower.SetPath(plid, pathManager.MainRoute, null, pathManager.MainRouteMetadata?.IsLoop ?? true);
                         currentRoute[plid] = "main";
                         break;
                 }

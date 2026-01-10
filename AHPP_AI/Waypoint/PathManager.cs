@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AHPP_AI.AI;
 using AHPP_AI.Debug;
+using AHPP_AI.Util;
 
 namespace AHPP_AI.Waypoint
 {
@@ -28,6 +29,10 @@ namespace AHPP_AI.Waypoint
         private readonly Random random = new Random();
         private readonly RouteLibrary routeLibrary;
         private readonly List<RouteValidationIssue> validationIssues = new List<RouteValidationIssue>();
+        private readonly Dictionary<string, List<Util.Waypoint>> spawnRoutes =
+            new Dictionary<string, List<Util.Waypoint>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, bool> spawnRouteLoops =
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         public List<Util.Waypoint> SpawnRoute { get; private set; } = new List<Util.Waypoint>();
         public List<Util.Waypoint> MainRoute { get; private set; } = new List<Util.Waypoint>();
@@ -39,6 +44,7 @@ namespace AHPP_AI.Waypoint
 
         public RouteMetadata SpawnRouteMetadata { get; private set; } = new RouteMetadata();
         public RouteMetadata MainRouteMetadata { get; private set; } = new RouteMetadata();
+        public IReadOnlyDictionary<string, List<Util.Waypoint>> SpawnRoutes => spawnRoutes;
 
         public PathManager(WaypointManager waypointManager, Logger logger, RouteLibrary routeLibrary)
         {
@@ -60,6 +66,8 @@ namespace AHPP_AI.Waypoint
             MainAlternateRoute = null;
             branches.Clear();
             validationIssues.Clear();
+            spawnRoutes.Clear();
+            spawnRouteLoops.Clear();
 
             waypointManager.LoadTrafficRoute(config.SpawnRouteName);
             SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
@@ -77,6 +85,10 @@ namespace AHPP_AI.Waypoint
             SpawnRouteMetadata = spawnMeta;
             logger.Log(
                 $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta.Type}) with {SpawnRoute.Count} points");
+            spawnRoutes[config.SpawnRouteName] = SpawnRoute;
+            spawnRouteLoops[config.SpawnRouteName] = spawnMeta?.IsLoop ?? false;
+
+            DiscoverAdditionalSpawnRoutes(config);
 
             waypointManager.LoadTrafficRoute(config.MainRouteName);
             MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
@@ -207,6 +219,51 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        /// Add any recorded pit/spawn routes beyond the configured default so multi-lane spawns can be chosen dynamically.
+        /// </summary>
+        private void DiscoverAdditionalSpawnRoutes(AIConfig config)
+        {
+            try
+            {
+                var recorded = routeLibrary.ListRoutes(out var duplicates);
+                foreach (var duplicate in duplicates)
+                {
+                    AddValidationIssue(RouteValidationSeverity.Warning,
+                        $"Duplicate recorded route name \"{duplicate}\" detected. Only the first instance is used.");
+                }
+
+                foreach (var route in recorded)
+                {
+                    if (route?.Metadata == null) continue;
+                    var name = route.Metadata.Name;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (spawnRoutes.ContainsKey(name)) continue;
+                    var type = route.Metadata.Type == RouteType.Unknown
+                        ? routeLibrary.GuessRouteType(name)
+                        : route.Metadata.Type;
+                    if (type != RouteType.PitEntry) continue;
+
+                    waypointManager.LoadTrafficRoute(name);
+                    var path = waypointManager.GetTrafficRoute(name);
+                    if (path.Count == 0)
+                    {
+                        AddValidationIssue(RouteValidationSeverity.Warning,
+                            $"Spawn route candidate {name} has no points and will be skipped.");
+                        continue;
+                    }
+
+                    spawnRoutes[name] = path;
+                    spawnRouteLoops[name] = route.Metadata?.IsLoop ?? false;
+                    logger.Log($"Discovered additional spawn route {name} with {path.Count} points");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to discover additional spawn routes");
+            }
+        }
+
+        /// <summary>
         /// Find the nearest waypoint index on a path to the given waypoint.
         /// </summary>
         private static int FindNearestIndex(List<Util.Waypoint> path, Util.Waypoint point)
@@ -325,6 +382,47 @@ namespace AHPP_AI.Waypoint
             }
 
             return names;
+        }
+
+        /// <summary>
+        /// Choose the best-fit spawn route for a given position/heading among all recorded pit-entry routes.
+        /// Returns the path, start index and direction that should be used.
+        /// </summary>
+        public bool TrySelectSpawnRoute(Vec position, int heading, out string routeName, out List<Util.Waypoint> path,
+            out int startIndex, out bool clockwise, out bool isLoop)
+        {
+            routeName = SpawnRouteMetadata?.Name ?? string.Empty;
+            path = SpawnRoute;
+            startIndex = 0;
+            clockwise = true;
+            isLoop = SpawnRouteMetadata?.IsLoop ?? false;
+
+            if (spawnRoutes.Count == 0)
+                return false;
+
+            var bestScore = double.MaxValue;
+            var found = false;
+
+            foreach (var kvp in spawnRoutes)
+            {
+                var candidatePath = kvp.Value;
+                if (candidatePath == null || candidatePath.Count < 2) continue;
+
+                var loop = spawnRouteLoops.TryGetValue(kvp.Key, out var recordedLoop) && recordedLoop;
+                var (score, index, forward) = waypointManager.ScoreRouteFit(position, heading, candidatePath, loop, false);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    routeName = kvp.Key;
+                    path = candidatePath;
+                    startIndex = index;
+                    clockwise = forward;
+                    isLoop = loop;
+                    found = true;
+                }
+            }
+
+            return found;
         }
 
         /// <summary>

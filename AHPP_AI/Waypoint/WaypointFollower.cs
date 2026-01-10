@@ -100,8 +100,9 @@ namespace AHPP_AI.Waypoint
             }
 
             // Find best starting waypoint based on car position and heading
+            var isLoop = pathIsLoop.TryGetValue(plid, out var loopFlag) ? loopFlag : true;
             var (bestIndex, clockwise) = waypointManager.FindBestWaypointForDirection(
-                currentPos, car.Heading, aiPaths[plid]);
+                currentPos, car.Heading, aiPaths[plid], isLoop);
 
             if (!clockwise)
             {
@@ -112,7 +113,7 @@ namespace AHPP_AI.Waypoint
             // Initialize waypoint indices
             targetWaypointIndices[plid] = bestIndex;
             var lookahead = Math.Max(1, config.LookaheadWaypoints);
-            lookAheadWaypointIndices[plid] = (bestIndex + lookahead) % aiPaths[plid].Count;
+            lookAheadWaypointIndices[plid] = GetAdvanceIndex(plid, bestIndex, lookahead);
 
             // IMPORTANT: Default to not using approach curve
             isFirstApproach[plid] = false;
@@ -183,7 +184,7 @@ namespace AHPP_AI.Waypoint
             var targetWaypoint = aiPaths[plid][targetIndex];
 
             // Look-ahead waypoint (use 3 waypoints ahead for smoother approach)
-            var lookAheadIndex = (targetIndex + 3) % aiPaths[plid].Count;
+            var lookAheadIndex = GetAdvanceIndex(plid, targetIndex, 3);
             lookAheadWaypointIndices[plid] = lookAheadIndex;
             var lookAheadWaypoint = aiPaths[plid][lookAheadIndex];
 
@@ -263,12 +264,8 @@ namespace AHPP_AI.Waypoint
                 logger.LogWarning($"PLID={plid} Target waypoint index not found, defaulting to 0");
             }
 
-            var targetIndex = targetWaypointIndices[plid];
-            if (targetIndex >= aiPaths[plid].Count)
-            {
-                targetIndex = 0;
-                targetWaypointIndices[plid] = targetIndex;
-            }
+            var targetIndex = ClampIndex(plid, targetWaypointIndices[plid]);
+            targetWaypointIndices[plid] = targetIndex;
 
             return aiPaths[plid][targetIndex];
         }
@@ -285,9 +282,9 @@ namespace AHPP_AI.Waypoint
                 targetWaypointIndices[plid] = 0;
 
             var path = aiPaths[plid];
-            var currentIndex = targetWaypointIndices[plid] % path.Count;
+            var currentIndex = ClampIndex(plid, targetWaypointIndices[plid]);
             var lookaheadOffset = Math.Max(1, config.LookaheadWaypoints);
-            var lookaheadIndex = (currentIndex + lookaheadOffset) % path.Count;
+            var lookaheadIndex = GetAdvanceIndex(plid, currentIndex, lookaheadOffset);
 
             return path[lookaheadIndex];
         }
@@ -304,7 +301,7 @@ namespace AHPP_AI.Waypoint
                 return 0;
 
             var targetIndex = targetWaypointIndices[plid];
-            return (targetIndex + 1) % aiPaths[plid].Count;
+            return GetAdvanceIndex(plid, targetIndex, 1);
         }
 
         /// <summary>
@@ -557,7 +554,7 @@ namespace AHPP_AI.Waypoint
                 progressStates[plid] = ProgressState.Progressing;
 
             var currentIndex = targetWaypointIndices[plid];
-            var nextIndex = (currentIndex + 1) % aiPaths[plid].Count;
+            var nextIndex = GetAdvanceIndex(plid, currentIndex, 1);
 
             logger.Log($"PLID={plid} {reason}: Moving from {currentIndex} to {nextIndex}");
 
@@ -721,9 +718,12 @@ namespace AHPP_AI.Waypoint
             };
         }
 
-        public void SetPath(byte plid, List<Util.Waypoint> path, int? startIndex = null)
+        private readonly Dictionary<byte, bool> pathIsLoop = new Dictionary<byte, bool>();
+
+        public void SetPath(byte plid, List<Util.Waypoint> path, int? startIndex = null, bool isLoop = true)
         {
             aiPaths[plid] = path;
+            pathIsLoop[plid] = isLoop;
             if (path == null || path.Count == 0)
             {
                 targetWaypointIndices[plid] = 0;
@@ -754,8 +754,38 @@ namespace AHPP_AI.Waypoint
                 targetWaypointIndices[plid] = 0;
 
             var lookaheadOffset = Math.Max(1, config.LookaheadWaypoints);
-            lookAheadWaypointIndices[plid] =
-                (targetWaypointIndices[plid] + lookaheadOffset) % aiPaths[plid].Count;
+            lookAheadWaypointIndices[plid] = GetAdvanceIndex(plid, targetWaypointIndices[plid], lookaheadOffset);
+        }
+
+        /// <summary>
+        /// Advance an index by offset, wrapping only if the current path is looped; otherwise clamp at the end.
+        /// </summary>
+        private int GetAdvanceIndex(byte plid, int currentIndex, int offset)
+        {
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0) return 0;
+            var path = aiPaths[plid];
+            var loop = pathIsLoop.TryGetValue(plid, out var isLoop) ? isLoop : true;
+            if (path.Count == 0) return 0;
+
+            if (loop)
+                return (currentIndex + offset) % path.Count;
+
+            return Math.Min(path.Count - 1, Math.Max(0, currentIndex + offset));
+        }
+
+        /// <summary>
+        /// Clamp an index to the bounds of the path for non-looped routes.
+        /// </summary>
+        private int ClampIndex(byte plid, int index)
+        {
+            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count == 0) return 0;
+            var path = aiPaths[plid];
+            var loop = pathIsLoop.TryGetValue(plid, out var isLoop) ? isLoop : true;
+            if (path.Count == 0) return 0;
+
+            if (loop) return ((index % path.Count) + path.Count) % path.Count;
+
+            return Math.Max(0, Math.Min(path.Count - 1, index));
         }
 
         /// <summary>
@@ -772,7 +802,7 @@ namespace AHPP_AI.Waypoint
 
             var lookaheadDistance = CalculateLookaheadDistance(speedKmh);
             var path = aiPaths[plid];
-            var startIndex = targetWaypointIndices[plid] % path.Count;
+            var startIndex = ClampIndex(plid, targetWaypointIndices[plid]);
             var remaining = lookaheadDistance;
 
             var previousX = carX;
@@ -780,7 +810,7 @@ namespace AHPP_AI.Waypoint
 
             for (var i = 0; i < path.Count; i++)
             {
-                var idx = (startIndex + i) % path.Count;
+                var idx = GetAdvanceIndex(plid, startIndex, i);
                 var waypoint = path[idx];
                 var wpX = waypoint.Position.X / 65536.0;
                 var wpY = waypoint.Position.Y / 65536.0;
@@ -882,11 +912,12 @@ namespace AHPP_AI.Waypoint
                 targetWaypointIndices[plid] = 0;
 
             var path = aiPaths[plid];
-            var currentIndex = targetWaypointIndices[plid] % path.Count;
+            var loop = pathIsLoop.TryGetValue(plid, out var loopFlag) ? loopFlag : true;
+            var currentIndex = ClampIndex(plid, targetWaypointIndices[plid]);
             var lookaheadCount = Math.Max(1, config.LookaheadWaypoints);
 
             var currentWaypoint = path[currentIndex];
-            var primaryLookaheadIndex = (currentIndex + lookaheadCount) % path.Count;
+            var primaryLookaheadIndex = GetAdvanceIndex(plid, currentIndex, lookaheadCount);
             var primaryLookaheadWaypoint = path[primaryLookaheadIndex];
 
             // Distance to current waypoint drives progress/advancement.
@@ -901,7 +932,7 @@ namespace AHPP_AI.Waypoint
             double blendedDx = 0, blendedDy = 0, totalWeight = 0;
             for (var i = 1; i <= lookaheadCount; i++)
             {
-                var idx = (currentIndex + i) % path.Count;
+                var idx = GetAdvanceIndex(plid, currentIndex, i);
                 var wp = path[idx];
                 var dx = wp.Position.X / 65536.0 - carX;
                 var dy = wp.Position.Y / 65536.0 - carY;

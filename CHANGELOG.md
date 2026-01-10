@@ -1,5 +1,7 @@
 # Changelog
 
+- Added multi-lane pit entry support: load all recorded pit/spawn routes and auto-select the nearest heading-aligned lane per AI before merging onto the main route.
+- Spawn lane paths now clamp lookahead indices instead of wrapping, so mid-lane spawns join forward without arcing back to the start of the pit-entry recording.
 - Added `InSim.AdminPassword` to `config.ini` so the AI connects with the multiplayer admin password when required.
 - Added configurable AI brake smoothing thresholds and ramp steps in `config.ini`.
 - Smoothed AI braking by coasting on minor slowdowns and ramping brake pressure instead of tapping.
