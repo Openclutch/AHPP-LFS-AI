@@ -1,7 +1,12 @@
 # Changelog
 
+- Spawn lane merges now pick a heading-aligned point on the base `pit_entry` route so cars join mid-route instead of pivoting back toward the start of the recording.
+- Stopped spawn approach curves from reactivating every frame; once an approach is finished the AI hands off to normal waypoints instead of looping into recovery near pit_entry.
 - Added multi-lane pit entry support: load all recorded pit/spawn routes and auto-select the nearest heading-aligned lane per AI before merging onto the main route.
 - Spawn lane paths now clamp lookahead indices instead of wrapping, so mid-lane spawns join forward without arcing back to the start of the pit-entry recording.
+- Re-enabled approach curves for spawn paths so cars can arc from their spawn point onto the nearest pit-entry lane using local lookahead instead of driving back to the route start.
+- Hardened spawn approach-curve setup to skip missing path/index data so AIs no longer throw key lookup errors when spawning.
+- Spawn routing now hops from a lane-specific pit_entry_lane onto the base pit_entry route before switching to main, keeping the correct merge sequence.
 - Added `InSim.AdminPassword` to `config.ini` so the AI connects with the multiplayer admin password when required.
 - Added configurable AI brake smoothing thresholds and ramp steps in `config.ini`.
 - Smoothed AI braking by coasting on minor slowdowns and ramping brake pressure instead of tapping.

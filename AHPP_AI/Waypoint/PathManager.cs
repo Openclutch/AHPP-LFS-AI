@@ -241,7 +241,13 @@ namespace AHPP_AI.Waypoint
                     var type = route.Metadata.Type == RouteType.Unknown
                         ? routeLibrary.GuessRouteType(name)
                         : route.Metadata.Type;
-                    if (type != RouteType.PitEntry) continue;
+                    if (type != RouteType.PitEntry)
+                    {
+                        // Allow routes that look like spawn/pit by name even if metadata is missing.
+                        if (!(name.Contains("pit", StringComparison.OrdinalIgnoreCase) ||
+                              name.Contains("spawn", StringComparison.OrdinalIgnoreCase)))
+                            continue;
+                    }
 
                     waypointManager.LoadTrafficRoute(name);
                     var path = waypointManager.GetTrafficRoute(name);
@@ -398,7 +404,7 @@ namespace AHPP_AI.Waypoint
             isLoop = SpawnRouteMetadata?.IsLoop ?? false;
 
             if (spawnRoutes.Count == 0)
-                return false;
+                return path != null && path.Count > 0;
 
             var bestScore = double.MaxValue;
             var found = false;

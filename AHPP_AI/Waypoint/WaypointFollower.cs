@@ -36,6 +36,7 @@ namespace AHPP_AI.Waypoint
         private readonly Dictionary<byte, bool> inRecoveryMode = new Dictionary<byte, bool>();
         private readonly Dictionary<byte, int> failedRecoveryCycles = new Dictionary<byte, int>();
         private readonly Dictionary<byte, ProgressState> progressStates = new Dictionary<byte, ProgressState>();
+        private readonly Dictionary<byte, bool> approachFinished = new Dictionary<byte, bool>();
 
         // Path entry handling
         private readonly Dictionary<byte, bool> isFirstApproach = new Dictionary<byte, bool>();
@@ -138,20 +139,30 @@ namespace AHPP_AI.Waypoint
 
         public void CheckAndUpdateApproachCurve(byte plid, CompCar car)
         {
-            if (!aiPaths.ContainsKey(plid) || !targetWaypointIndices.ContainsKey(plid))
+            if (approachFinished.TryGetValue(plid, out var finished) && finished)
+                return;
+
+            if (!aiPaths.TryGetValue(plid, out var path) || path == null || path.Count == 0)
+                return;
+
+            if (!targetWaypointIndices.TryGetValue(plid, out var storedIndex))
                 return;
 
             var currentPos = new Vec(car.X, car.Y, car.Z);
-            var targetWaypoint = aiPaths[plid][targetWaypointIndices[plid]];
+            var targetIndex = ClampIndex(plid, storedIndex);
+            targetWaypointIndices[plid] = targetIndex;
+            var targetWaypoint = path[targetIndex];
             var waypointPos = new Vec(targetWaypoint.Position.X, targetWaypoint.Position.Y);
             var distance = CoordinateUtils.CalculateDistance(currentPos, waypointPos);
 
+            var hasApproachFlag = isFirstApproach.TryGetValue(plid, out var firstApproach);
             // Only generate approach curve when we're close to the track (e.g., within 20m)
             if (distance < APPROACH_DISTANCE)
             {
-                if (!isFirstApproach[plid] || !approachCurvePoints.ContainsKey(plid))
+                if (!hasApproachFlag || !firstApproach || !approachCurvePoints.ContainsKey(plid))
                 {
                     isFirstApproach[plid] = true;
+                    approachFinished[plid] = false;
                     GenerateApproachCurve(plid, car);
                     logger.Log($"PLID={plid} Approach curve activated at distance: {distance:F1}m");
                 }
@@ -169,10 +180,15 @@ namespace AHPP_AI.Waypoint
         /// </summary>
         private void GenerateApproachCurve(byte plid, CompCar car)
         {
-            if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null || aiPaths[plid].Count < 2 ||
-                !targetWaypointIndices.ContainsKey(plid) || !lookAheadWaypointIndices.ContainsKey(plid))
+            if (!aiPaths.TryGetValue(plid, out var path) || path == null || path.Count < 2)
             {
                 logger.LogWarning($"PLID={plid} Cannot generate approach curve: Missing path or indices");
+                return;
+            }
+
+            if (!targetWaypointIndices.TryGetValue(plid, out var storedIndex))
+            {
+                logger.LogWarning($"PLID={plid} Cannot generate approach curve: Missing target index");
                 return;
             }
 
@@ -180,13 +196,14 @@ namespace AHPP_AI.Waypoint
             var carPos = new Vec(car.X, car.Y, car.Z);
 
             // Target waypoint
-            var targetIndex = targetWaypointIndices[plid];
-            var targetWaypoint = aiPaths[plid][targetIndex];
+            var targetIndex = ClampIndex(plid, storedIndex);
+            targetWaypointIndices[plid] = targetIndex;
+            var targetWaypoint = path[targetIndex];
 
             // Look-ahead waypoint (use 3 waypoints ahead for smoother approach)
             var lookAheadIndex = GetAdvanceIndex(plid, targetIndex, 3);
             lookAheadWaypointIndices[plid] = lookAheadIndex;
-            var lookAheadWaypoint = aiPaths[plid][lookAheadIndex];
+            var lookAheadWaypoint = path[lookAheadIndex];
 
             // Calculate approach curve using a Bezier curve
             var curvePoints = new List<Vec>();
@@ -231,14 +248,14 @@ namespace AHPP_AI.Waypoint
                     var y = (int)(mt2 * p0.Y + 2 * mt * t * p1.Y + t2 * p2.Y);
                     var z = (int)(mt2 * p0.Z + 2 * mt * t * p1.Z + t2 * p2.Z);
 
-                    curvePoints.Add(new Vec(x, y, z));
-                }
-
-                // Store the curve points
-                approachCurvePoints[plid] = curvePoints;
-
-                logger.Log($"PLID={plid} Generated {curvePoints.Count} curve points for smooth approach");
+                curvePoints.Add(new Vec(x, y, z));
             }
+
+            // Store the curve points
+            approachCurvePoints[plid] = curvePoints;
+
+            logger.Log($"PLID={plid} Generated {curvePoints.Count} curve points for smooth approach");
+        }
             else
             {
                 // Fallback if path is too short - use direct line
@@ -490,6 +507,7 @@ namespace AHPP_AI.Waypoint
                 if (distanceCurrent < 5.0)
                 {
                     isFirstApproach[plid] = false;
+                    approachFinished[plid] = true;
                     var waypoint = GetTargetWaypoint(plid);
 
                     if (!targetSpeeds.ContainsKey(plid))
@@ -543,6 +561,9 @@ namespace AHPP_AI.Waypoint
 
             if (!inRecoveryMode.ContainsKey(plid))
                 inRecoveryMode[plid] = false;
+
+            if (!approachFinished.ContainsKey(plid))
+                approachFinished[plid] = false;
 
             if (!headingErrorHistory.ContainsKey(plid))
                 headingErrorHistory[plid] = new Queue<int>();
@@ -731,6 +752,9 @@ namespace AHPP_AI.Waypoint
                 progressStates[plid] = ProgressState.Unknown;
                 recoveryAttempts[plid] = 0;
                 failedRecoveryCycles[plid] = 0;
+                approachFinished[plid] = false;
+                isFirstApproach[plid] = false;
+                currentApproachPointIndex[plid] = 0;
                 return;
             }
 
@@ -743,6 +767,9 @@ namespace AHPP_AI.Waypoint
             lastDistanceToWaypoint[plid] = double.MaxValue;
             lastProgressCheckTimes[plid] = DateTime.Now;
             movingAwayCounts[plid] = 0;
+            approachFinished[plid] = false;
+            isFirstApproach[plid] = false;
+            currentApproachPointIndex[plid] = 0;
         }
 
         private void UpdateLookaheadIndex(byte plid)
@@ -893,6 +920,14 @@ namespace AHPP_AI.Waypoint
 
                     logger.Log(
                         $"PLID={plid} CURVE POINT REACHED: Moving to curve point {currentApproachPointIndex[plid]} of {approachCurvePoints[plid].Count}, Speed={targetSpeeds[plid]:F1}km/h");
+                }
+                else if (distance < 2.0 && currentApproachPointIndex[plid] >= approachCurvePoints[plid].Count - 1)
+                {
+                    // Finished the approach curve; hand over to normal waypoint following without reactivating.
+                    approachFinished[plid] = true;
+                    isFirstApproach[plid] = false;
+                    currentApproachPointIndex[plid] = 0;
+                    logger.Log($"PLID={plid} APPROACH COMPLETE: Switching to normal waypoint targeting");
                 }
 
                 logger.Log(

@@ -3614,6 +3614,10 @@ namespace AHPP_AI.AI
                                    routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase) &&
                                    ShouldHoldForSpawnMerge(plid, car, targetIndex, trafficSnapshot);
 
+                // For spawn paths, generate an approach curve from current position to the route.
+                if (routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase))
+                    waypointFollower.CheckAndUpdateApproachCurve(plid, car);
+
                 // Update AI controls based on current state
                 driver.UpdateControls(plid, car, allCars, trafficSnapshot, waypointManager, config,
                     lfsLayout.layoutObjects, aii.RPM, holdForMerge);
@@ -3632,14 +3636,37 @@ namespace AHPP_AI.AI
                         : pathManager.SpawnRoute.Count;
 
                     if (routeName == "spawn" && activeSpawnLength > 0 &&
-                        updatedTargetIndex >= activeSpawnLength - 1)
+                        IsNearSpawnRouteEnd(activeSpawnPath, car, config.SpawnMergeHoldDistanceMeters))
                     {
                         if (holdForMerge)
                             return;
 
-                        var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-                        waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex, pathManager.MainRouteMetadata?.IsLoop ?? true);
-                        currentRoute[plid] = "main";
+                        var selectedSpawn = spawnRouteSelections.TryGetValue(plid, out var sel) ? sel : string.Empty;
+                        var baseSpawnName = config.SpawnRouteName;
+                        var onAlternateSpawn = !string.IsNullOrWhiteSpace(selectedSpawn) &&
+                                               !selectedSpawn.Equals(baseSpawnName, StringComparison.OrdinalIgnoreCase);
+
+                        // If we used a lane-specific spawn route, hop onto the base pit_entry route before going main.
+                        if (onAlternateSpawn && pathManager.SpawnRoute != null && pathManager.SpawnRoute.Count > 0)
+                        {
+                            var closestSpawnIndex = FindClosestIndex(pathManager.SpawnRoute, car);
+                            var (alignedSpawnIndex, _, _) = FindAlignedWaypointIndex(
+                                pathManager.SpawnRoute,
+                                car,
+                                closestSpawnIndex,
+                                12);
+
+                            waypointFollower.SetPath(plid, pathManager.SpawnRoute, alignedSpawnIndex,
+                                pathManager.SpawnRouteMetadata?.IsLoop ?? false);
+                            spawnRouteSelections[plid] = baseSpawnName;
+                            // stay in spawn state until we reach the base pit_entry end
+                        }
+                        else
+                        {
+                            var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex, pathManager.MainRouteMetadata?.IsLoop ?? true);
+                            currentRoute[plid] = "main";
+                        }
                     }
                     else if (routeName == "main")
                     {
@@ -3788,6 +3815,30 @@ namespace AHPP_AI.AI
             spawnRouteSelections[plid] = selectedName;
             logger.Log(
                 $"PLID={plid} selected spawn route {selectedName} starting at index {appliedIndex} (clockwise={clockwise})");
+        }
+
+        /// <summary>
+        /// Determine if the AI is close enough to the end of the active spawn path to switch to the main route.
+        /// Uses path projection distance to the end rather than relying solely on waypoint index so mid-lane spawns stay on the lane.
+        /// </summary>
+        private bool IsNearSpawnRouteEnd(List<Util.Waypoint> spawnPath, CompCar car, double thresholdMeters)
+        {
+            if (spawnPath == null || spawnPath.Count < 2) return true;
+
+            var geometry = PathProjection.GetGeometry(spawnPath, config.PathLoopClosureDistanceMeters);
+            if (geometry == null || geometry.TotalLength <= 0) return true;
+            if (geometry.IsLoop) return true;
+
+            if (!PathProjection.TryProjectToPath(
+                    spawnPath,
+                    geometry,
+                    car.X / 65536.0,
+                    car.Y / 65536.0,
+                    out var projection))
+                return true;
+
+            var distanceToEnd = geometry.TotalLength - projection.DistanceAlongPathMeters;
+            return distanceToEnd <= Math.Max(1.0, thresholdMeters);
         }
 
         /// <summary>
