@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using AHPP_AI.AI;
 using AHPP_AI.Debug;
 using AHPP_AI.Waypoint;
@@ -169,13 +170,27 @@ namespace AHPP_AI
         private static readonly double passByCooldownMinSeconds;
         private static readonly double passByCooldownMaxSeconds;
         private static readonly double passByProximityResetSeconds;
+        private static readonly int controlTickHz;
+        private static readonly int minControlHzPerAi;
+        private static readonly int maxControlHzPerAi;
+        private static readonly bool useAiiTelemetry;
+        private static readonly double aiiTargetHz;
         private static readonly int aiiBaseIntervalHundredths;
         private static readonly int aiiMaxIntervalHundredths;
         private static readonly int packetRateBudgetPerSecond;
         private static readonly int packetRateReservePerSecond;
         private static readonly int packetsPerAiiUpdate;
+        private static readonly int telemetryWarmupMs;
+        private static readonly int warmupBrakeHoldMs;
         private static readonly AIConfig.PassByReactionMode passByReactionMode;
         private static readonly string buildVersion;
+        private static readonly TimeSpan InitialRouteReloadDelay = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan TrackLayoutRetryInterval = TimeSpan.FromSeconds(1);
+        private const int TrackLayoutRetryAttempts = 5;
+        private static CancellationTokenSource? initialRouteReloadCts;
+        private static CancellationTokenSource? trackLayoutRetryCts;
+        private static bool trackInfoReceived;
+        private static bool layoutInfoReceived;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -347,12 +362,19 @@ namespace AHPP_AI
             passByCooldownMinSeconds = appConfig.GetDouble("AI", "PassByCooldownMinSeconds", 60.0);
             passByCooldownMaxSeconds = appConfig.GetDouble("AI", "PassByCooldownMaxSeconds", 120.0);
             passByProximityResetSeconds = appConfig.GetDouble("AI", "PassByProximityResetSeconds", 5.0);
+            controlTickHz = Math.Max(1, appConfig.GetInt("AI", "ControlTickHz", 20));
+            minControlHzPerAi = Math.Max(1, appConfig.GetInt("AI", "MinControlHzPerAi", 4));
+            maxControlHzPerAi = Math.Max(minControlHzPerAi, appConfig.GetInt("AI", "MaxControlHzPerAi", 10));
+            useAiiTelemetry = appConfig.GetBool("AI", "UseAiiTelemetry", false);
+            aiiTargetHz = Math.Max(0.1, appConfig.GetDouble("AI", "AIITargetHz", 1.0));
             aiiBaseIntervalHundredths = Math.Max(1, appConfig.GetInt("AI", "AIIBaseIntervalHundredths", 20));
             aiiMaxIntervalHundredths = Math.Max(aiiBaseIntervalHundredths,
                 appConfig.GetInt("AI", "AIIMaxIntervalHundredths", 80));
             packetRateBudgetPerSecond = Math.Max(50, appConfig.GetInt("AI", "PacketRateBudgetPerSecond", 220));
             packetRateReservePerSecond = Math.Max(0, appConfig.GetInt("AI", "PacketRateReservePerSecond", 80));
             packetsPerAiiUpdate = Math.Max(1, appConfig.GetInt("AI", "PacketsPerAIIUpdate", 2));
+            telemetryWarmupMs = Math.Max(0, appConfig.GetInt("AI", "TelemetryWarmupMs", 2000));
+            warmupBrakeHoldMs = Math.Max(0, appConfig.GetInt("AI", "WarmupBrakeHoldMs", 0));
             passByReactionMode = ParsePassByReactionMode(
                 appConfig.GetString("AI", "PassByReactionMode", "FlashAndHorn"));
             buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
@@ -414,6 +436,12 @@ namespace AHPP_AI
                 packetRateBudgetPerSecond,
                 packetRateReservePerSecond,
                 packetsPerAiiUpdate);
+            aiController.ConfigureTelemetry(useAiiTelemetry, telemetryWarmupMs, warmupBrakeHoldMs);
+            aiController.ConfigureControlScheduler(
+                controlTickHz,
+                minControlHzPerAi,
+                maxControlHzPerAi,
+                aiiTargetHz);
             var sendLimit = Math.Max(10, packetRateBudgetPerSecond - packetRateReservePerSecond);
             InSimClientExtensions.SetPacketRateLimit(sendLimit);
             aiController.ConfigurePurePursuit(
@@ -500,6 +528,7 @@ namespace AHPP_AI
                 spawnBatchSize,
                 removeBatchSize);
             aiController.SetAutoPopulationEnabled(autoManagePopulation, false);
+            aiController.StartControlScheduler();
         }
 
         /// <summary>
@@ -685,7 +714,8 @@ namespace AHPP_AI
             insim.IS_NCN += (sender, e) => aiController.OnNewConnection(e.Packet);
 
             // Car telemetry
-            insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
+            if (useAiiTelemetry)
+                insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
             insim.IS_MCI += (sender, e) => aiController.OnMCI(e.Packet);
             insim.IS_CON += (sender, e) => aiController.OnCollision(e.Packet);
 
@@ -867,6 +897,8 @@ namespace AHPP_AI
         {
             logger.Log($"Initializing InSim connection to {currentHost}:{port}");
             UpdateInSimStatus("InSim: connecting");
+            trackInfoReceived = false;
+            layoutInfoReceived = false;
 
             try
             {
@@ -882,14 +914,15 @@ namespace AHPP_AI
 
                 // Request version information
                 insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_VER });
-                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_SST });
-                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_AXI });
+                RequestTrackAndLayoutInfo();
 
                 // Request layout objects
                 insim.Send(new IS_TINY { SubT = TinyType.TINY_AXM, ReqI = 1 });
                 visualizer.LayoutObjectsRequested = true;
 
                 RequestLayoutSelectionFeed();
+                ScheduleInitialRouteReload();
+                StartTrackLayoutDiscovery();
 
                 // Send welcome message
                 insim.SendPrivateMessage($"AI Car Control initialized (build {buildVersion})");
@@ -934,6 +967,8 @@ namespace AHPP_AI
 
             try
             {
+                trackLayoutRetryCts?.Cancel();
+                initialRouteReloadCts?.Cancel();
                 // Clear visualizations
                 visualizer.ClearAllVisualizations();
 
@@ -1123,7 +1158,9 @@ namespace AHPP_AI
         private static void OnState(IS_STA sta)
         {
             var track = (sta.Track ?? string.Empty).Trim();
+            trackInfoReceived |= !string.IsNullOrWhiteSpace(track);
             UpdateRouteContext(track, currentLayoutName);
+            StopTrackLayoutDiscoveryIfSatisfied();
         }
 
         /// <summary>
@@ -1133,7 +1170,9 @@ namespace AHPP_AI
         {
             var layout = (axi.LName ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(layout)) layout = currentLayoutName;
+            layoutInfoReceived |= !string.IsNullOrWhiteSpace(axi.LName);
             UpdateRouteContext(currentTrackCode, layout);
+            StopTrackLayoutDiscoveryIfSatisfied();
         }
 
         /// <summary>
@@ -1151,6 +1190,97 @@ namespace AHPP_AI
             {
                 logger.LogException(ex, "Failed to request layout selection feed");
             }
+        }
+
+        /// <summary>
+        ///     Reload recorded routes after layout data has had time to arrive.
+        /// </summary>
+        private static void ScheduleInitialRouteReload()
+        {
+            initialRouteReloadCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            initialRouteReloadCts = cts;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(InitialRouteReloadDelay, cts.Token).ConfigureAwait(false);
+                    aiController.ReloadRoutes(true);
+                }
+                catch (TaskCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    logger.LogException(ex, "Initial route reload failed");
+                }
+            });
+        }
+
+        /// <summary>
+        /// Request track state and layout metadata so routes load for the active context.
+        /// </summary>
+        private static void RequestTrackAndLayoutInfo()
+        {
+            if (insim == null || !insim.IsConnected) return;
+
+            try
+            {
+                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_SST });
+                insim.Send(new IS_TINY { ReqI = 1, SubT = TinyType.TINY_AXI });
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, "Failed to request track/layout info");
+            }
+        }
+
+        /// <summary>
+        /// Retry requesting track/layout data until both arrive or attempts are exhausted.
+        /// </summary>
+        private static void StartTrackLayoutDiscovery()
+        {
+            trackLayoutRetryCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            trackLayoutRetryCts = cts;
+            var token = cts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                var attempts = 0;
+                while (!token.IsCancellationRequested &&
+                       attempts < TrackLayoutRetryAttempts &&
+                       (!trackInfoReceived || !layoutInfoReceived))
+                {
+                    attempts++;
+                    RequestTrackAndLayoutInfo();
+
+                    try
+                    {
+                        await Task.Delay(TrackLayoutRetryInterval, token).ConfigureAwait(false);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        break;
+                    }
+                }
+
+                if (!token.IsCancellationRequested && (!trackInfoReceived || !layoutInfoReceived))
+                {
+                    logger.LogWarning(
+                        "Track/layout info not received after retries; routes may fall back to the default context until layout data arrives.");
+                }
+            }, token);
+        }
+
+        /// <summary>
+        /// Stop the retry loop once both track and layout data have been observed.
+        /// </summary>
+        private static void StopTrackLayoutDiscoveryIfSatisfied()
+        {
+            if (!trackInfoReceived || !layoutInfoReceived) return;
+            trackLayoutRetryCts?.Cancel();
+            trackLayoutRetryCts = null;
         }
 
         /// <summary>

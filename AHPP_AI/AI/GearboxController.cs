@@ -346,6 +346,9 @@ namespace AHPP_AI.AI
 
             var protectionActive = lowRpmClutchActive[plid];
 
+            if (engineRpm <= 0 && !protectionActive)
+                return false;
+
             if (engineRpm > 0 && engineRpm < config.StallPreventionRpm)
             {
                 lowRpmClutchActive[plid] = true;
@@ -358,7 +361,7 @@ namespace AHPP_AI.AI
             if (protectionActive)
             {
                 var holdElapsed = DateTime.Now - lowRpmClutchTimers[plid];
-                var recoveredRpm = engineRpm >= config.StallPreventionReleaseRpm;
+                var recoveredRpm = engineRpm > 0 && engineRpm >= config.StallPreventionReleaseRpm;
                 var heldLongEnough = holdElapsed.TotalMilliseconds >= config.StallPreventionHoldMs;
 
                 if (!recoveredRpm && !heldLongEnough)

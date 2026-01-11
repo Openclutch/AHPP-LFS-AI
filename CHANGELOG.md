@@ -1,5 +1,23 @@
 # Changelog
 
+- Added MCI-first telemetry with optional AII (`UseAiiTelemetry`) so control scheduling and spawn AII requests no longer assume AII traffic.
+- Added telemetry warmup gating and optional brake hold to prevent recovery/stall transitions during the first spawn seconds in MCI-only mode.
+- Added MCI-only engine-running detection (motion + spawn window) and surfaced telemetry staleness/recovery rates in control scheduler logs.
+- Hardened gearbox low-RPM clutch logic to treat RPM=0 as unknown telemetry.
+
+- Retried track/layout discovery after connecting so AI spawns pick up the active layout routes instead of falling back to the default context when AXI/STA responses arrive late.
+- Added a delayed route reload after layout data arrives so recorded pit/main routes apply reliably on startup without needing a manual refresh.
+
+- Prevented AI spawn from looping in recovery without IS_AII data by marking the engine running once the restart cooldown completes, so MCI-only setups no longer re-enter the stall routine.
+
+- Clicking the `X` next to an AI name now spectates the bot via `/spec` before removing it so it is not sent to the pits.
+- Added a main UI label beneath the performance indicator to show the active track and layout.
+- Prevented false stall recovery by ignoring zero-RPM AII updates unless the car is also moving slowly; engine state now uses speed-aware detection in the control loop.
+- Stopped the AI recovery loop by treating positive RPM as a running engine even when the ignition flag is missing, preventing constant stall restarts while driving.
+- AI reset after recovery failure now sends `/pitlane` to keep the bot in its chosen car instead of spectating and respawning.
+- Added a prioritized outbound send queue with token-bucket pacing and runtime limit updates so handlers no longer block; high-priority control packets bypass normal traffic while measured send rate and queue depths surface in periodic logs.
+- Shifted control to a fixed scheduler driven by cached MCI telemetry (with RPM/flag caches from AII only), computing per-AI control Hz from packet budgets and round-robining updates to keep large fleets responsive without join/leave broadcast spikes.
+- Added control cadence/AII target settings (`ControlTickHz`, `MinControlHzPerAi`, `MaxControlHzPerAi`, `AIITargetHz`) plus per-AI AII interval batching to avoid O(n²) bursts on spawn/leave while keeping overall send rate under the configured budget.
 - Added a packet-budget-aware AI info refresh rate that stretches the AII/AIC interval as more bots join, keeping total packets under the configured per-second cap so larger fleets stay connected.
 - Lowered default packet budgets and tied the InSim send limiter to the configured budget/reserve so outbound traffic stays below the server cap by default.
 - Start All AI button now shows the current AI count so you can see how many bots are active at a glance.

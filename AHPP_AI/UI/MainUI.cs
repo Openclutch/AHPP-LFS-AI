@@ -39,6 +39,7 @@ namespace AHPP_AI.UI
         private const byte HIDE_BUTTON_ROW = 60;
         private const byte INSIM_STATUS_ROW = 85;
         private const byte PERFORMANCE_STATUS_ROW = 100;
+        private const byte TRACK_LAYOUT_STATUS_ROW = (byte)(PERFORMANCE_STATUS_ROW + ROW_HEIGHT);
         private const byte REMOVE_BTN_W = 5;
         private const byte RECORD_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = BTN_W;
@@ -72,6 +73,7 @@ namespace AHPP_AI.UI
         public const byte LayoutSpawnHereId = (byte)(ButtonIds.MainStart + 68);
         public const byte ToggleDebugButtonsId = (byte)(ButtonIds.MainStart + 69);
         public const byte PerformanceStatusId = (byte)(ButtonIds.MainStart + 70);
+        public const byte TrackLayoutStatusId = (byte)(ButtonIds.MainStart + 71);
         private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
         private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 20);
         public const byte HideUiButtonId = (byte)(ButtonIds.MainStart + 63);
@@ -115,6 +117,7 @@ namespace AHPP_AI.UI
         private byte toggleLayoutRow;
         private bool debugButtonsVisible = true;
         private string performanceStatusLabel = "AI Perf: waiting";
+        private string trackLayoutStatusLabel = "Track: pending";
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -140,6 +143,7 @@ namespace AHPP_AI.UI
             RenderInSimStatus();
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
             RenderPerformanceStatus();
+            RenderTrackLayoutStatus();
 
             row = 70;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
@@ -280,7 +284,7 @@ namespace AHPP_AI.UI
                 H = height,
                 Text = text
             };
-            insim.Send(btn);
+            insim.SendUi(btn);
         }
 
         /// <summary>
@@ -296,7 +300,7 @@ namespace AHPP_AI.UI
                 ClickID = id,
                 ClickMax = id
             };
-            insim.Send(del);
+            insim.SendUi(del);
         }
 
         /// <summary>
@@ -320,7 +324,7 @@ namespace AHPP_AI.UI
                 Text = caption,
                 Caption = caption
             };
-            insim.Send(btn);
+            insim.SendUi(btn);
         }
 
         /// <summary>
@@ -632,6 +636,17 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Update the track/layout status label shown beneath the performance indicator.
+        /// </summary>
+        public void UpdateTrackLayoutStatus(string trackCode, string layoutName)
+        {
+            var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
+            var layout = string.IsNullOrWhiteSpace(layoutName) ? "DefaultLayout" : layoutName.Trim();
+            trackLayoutStatusLabel = $"Track: {track} / {layout}";
+            RenderTrackLayoutStatus();
+        }
+
+        /// <summary>
         /// Render the InSim connection status and host labels.
         /// </summary>
         private void RenderInSimStatus()
@@ -655,6 +670,18 @@ namespace AHPP_AI.UI
 
             DeleteButton(PerformanceStatusId);
             CreateButton(PerformanceStatusId, performanceStatusLabel, LEFT_COL, PERFORMANCE_STATUS_ROW, LAYOUT_STATUS_W,
+                ROW_HEIGHT, false);
+        }
+
+        /// <summary>
+        /// Render the current track/layout label beneath the performance indicator.
+        /// </summary>
+        private void RenderTrackLayoutStatus()
+        {
+            if (!uiInitialized || uiHidden) return;
+
+            DeleteButton(TrackLayoutStatusId);
+            CreateButton(TrackLayoutStatusId, trackLayoutStatusLabel, LEFT_COL, TRACK_LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
                 ROW_HEIGHT, false);
         }
 
@@ -691,7 +718,7 @@ namespace AHPP_AI.UI
                 ClickID = 0,
                 ClickMax = 0
             };
-            insim.Send(clear);
+            insim.SendUi(clear);
         }
 
         /// <summary>

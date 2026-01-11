@@ -102,9 +102,27 @@ namespace AHPP_AI.AI
         // Car tracking
         private readonly object carStateLock = new object();
         private readonly Dictionary<byte, CompCar> carStates = new Dictionary<byte, CompCar>();
+        private readonly Dictionary<byte, DateTime> carTimestamps = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, AiiTelemetry> aiiTelemetry = new Dictionary<byte, AiiTelemetry>();
+        private readonly Dictionary<byte, Vec> lastKnownPositions = new Dictionary<byte, Vec>();
+        private readonly Dictionary<byte, DateTime> lastMovementTimes = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, DateTime> aiSpawnTimes = new Dictionary<byte, DateTime>();
         private CompCar[] allCars = Array.Empty<CompCar>();
         private volatile TrafficCarSnapshot[] trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
         private bool debugUIInitialized;
+        private readonly CancellationTokenSource controlLoopCts = new CancellationTokenSource();
+        private Task? controlLoopTask;
+        private int controlLoopCursor;
+        private DateTime lastControlLogTime = DateTime.UtcNow;
+        private double lastComputedControlHzPerAi;
+        private int lastControlUpdatesPerTick;
+        private int telemetryStaleCount;
+        private int telemetrySkippedCount;
+        private int recoveryEntryCount;
+        private readonly Queue<byte> pendingAiiIntervalUpdates = new Queue<byte>();
+        private readonly HashSet<byte> pendingAiiIntervalSet = new HashSet<byte>();
+        private static readonly TimeSpan TelemetryStaleAfter = TimeSpan.FromSeconds(1);
+        private DateTime lastAiiRebalance = DateTime.MinValue;
 
         private enum PerformanceHealth
         {
@@ -121,6 +139,30 @@ namespace AHPP_AI.AI
         {
             public byte TargetPlid { get; set; }
             public DateTime LastSeen { get; set; }
+        }
+
+        private struct AiiTelemetry
+        {
+            public double Rpm;
+            public AIFlags Flags;
+            public DateTime Timestamp;
+        }
+
+        /// <summary>
+        ///     Cached, derived values from MCI telemetry for reuse within a control tick.
+        /// </summary>
+        private struct CarSnapshot
+        {
+            public double SpeedKmh;
+            public double Heading;
+            public Vec Position;
+            public double AgeMs;
+        }
+
+        private struct ControlSchedule
+        {
+            public double EffectiveControlHzPerAi;
+            public int UpdatesPerTick;
         }
 
         /// <summary>
@@ -174,6 +216,7 @@ namespace AHPP_AI.AI
             lightController = new AILightController(insim, logger);
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim, lightController);
             driver.SetRecoveryFailedHandler(ResetAI);
+            driver.SetRecoveryStartedHandler(OnRecoveryStarted);
             mainUI = new MainUI(insim, logger);
             mainUI.SetDebugButtonsVisible(debugButtonsVisible);
             routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
@@ -184,7 +227,7 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Wrap AI names with quotes when needed for chat/admin commands.
+        /// Wrap AI names for use in chat/admin commands.
         /// </summary>
         private static string FormatNameForCommand(string name)
         {
@@ -581,6 +624,7 @@ namespace AHPP_AI.AI
             waypointManager.ClearRoutes();
             ReloadRoutes(true);
             RefreshRouteOptions(recordingRouteName);
+            mainUI?.UpdateTrackLayoutStatus(track, layout);
             logger.Log($"Route context set to Track={track}, Layout={layout}");
         }
 
@@ -716,7 +760,54 @@ namespace AHPP_AI.AI
             config.PacketRateReservePerSecond = Math.Max(0, packetReservePerSecond);
             config.PacketsPerAiiUpdate = Math.Max(1, packetsPerUpdate);
 
+            if (config.UseAiiTelemetry)
+                UpdateAiiRefreshInterval(true);
+        }
+
+        /// <summary>
+        /// Configure whether optional AII telemetry is used and how long warmup protections apply.
+        /// </summary>
+        public void ConfigureTelemetry(bool useAiiTelemetry, int telemetryWarmupMs, int warmupBrakeHoldMs)
+        {
+            config.UseAiiTelemetry = useAiiTelemetry;
+            config.TelemetryWarmupMs = Math.Max(0, telemetryWarmupMs);
+            config.WarmupBrakeHoldMs = Math.Max(0, warmupBrakeHoldMs);
+
+            if (!config.UseAiiTelemetry)
+            {
+                lock (aiiIntervalLock)
+                {
+                    pendingAiiIntervalUpdates.Clear();
+                    pendingAiiIntervalSet.Clear();
+                    currentAiiIntervalHundredths = 0;
+                }
+                return;
+            }
+
             UpdateAiiRefreshInterval(true);
+        }
+
+        /// <summary>
+        /// Configure control scheduler cadence and bounds for per-AI update rates.
+        /// </summary>
+        public void ConfigureControlScheduler(int controlTickHz, int minControlHzPerAi, int maxControlHzPerAi,
+            double aiiTargetHz)
+        {
+            config.ControlTickHz = Math.Max(1, controlTickHz);
+            config.MinControlHzPerAi = Math.Max(1, minControlHzPerAi);
+            config.MaxControlHzPerAi = Math.Max(config.MinControlHzPerAi, maxControlHzPerAi);
+            config.AiiTargetHz = Math.Max(0.1, aiiTargetHz);
+            if (config.UseAiiTelemetry)
+                UpdateAiiRefreshInterval(true);
+        }
+
+        /// <summary>
+        /// Start the fixed-rate control scheduler if it is not already running.
+        /// </summary>
+        public void StartControlScheduler()
+        {
+            if (controlLoopTask == null)
+                controlLoopTask = Task.Run(() => RunControlLoopAsync(controlLoopCts.Token));
         }
 
         /// <summary>
@@ -1042,7 +1133,7 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Reset a single AI by spectating it and spawning a new one.
+        /// Reset a single AI by sending it to the pits to preserve the selected car.
         /// </summary>
         private void ResetAI(byte plid)
         {
@@ -1055,13 +1146,9 @@ namespace AHPP_AI.AI
             var name = aiNames.TryGetValue(plid, out var storedName) ? storedName : $"AI {plid}";
             var nameForCmd = FormatNameForCommand(name);
 
-            // Spectate by name (PLID is not accepted), then rejoin.
-            insim.Send(new IS_MST { Msg = $"/spec {nameForCmd}" });
-            insim.Send(new IS_MST { Msg = $"/join {nameForCmd}" });
-
-            ForgetAi(plid);
-            insim.Send(new IS_MST { Msg = "/ai" });
-            logger.Log($"Reset AI {plid} after failed recovery; sent to pits/spectate and spawned replacement");
+            // Pitlane by name to keep the existing car choice intact.
+            insim.Send(new IS_MST { Msg = $"/pitlane {nameForCmd}" });
+            logger.Log($"Reset AI {plid} after failed recovery; pitlaned to preserve car selection");
         }
 
         /// <summary>
@@ -2560,6 +2647,7 @@ namespace AHPP_AI.AI
                 aiPLIDs.Remove(plid);
             }
             aiSpawnPositions.Remove(plid);
+            aiSpawnTimes.Remove(plid);
             spawnRouteSelections.Remove(plid);
             engineStateMap.Remove(plid);
             currentRoute.Remove(plid);
@@ -2577,12 +2665,15 @@ namespace AHPP_AI.AI
             laneChangeSkipLog.Remove(plid);
             passByCooldowns.Remove(plid);
             passByProximityStates.Remove(plid);
+            lastKnownPositions.Remove(plid);
+            lastMovementTimes.Remove(plid);
             RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
                 populationManager?.OnAiLeft(plid);
 
-            UpdateAiiRefreshInterval();
+            if (config.UseAiiTelemetry)
+                UpdateAiiRefreshInterval();
         }
 
         public void StopAllAIs()
@@ -2756,14 +2847,20 @@ namespace AHPP_AI.AI
                 {
                     // Add to our list of AIs
                     aiSpawnPositions[plid] = new Vec();
+                    aiSpawnTimes[plid] = DateTime.UtcNow;
                     engineStateMap[plid] = true; // Assume engine starts running
                     aiNames[plid] = npl.PName;
                     var assignedRoute = DequeuePlannedRouteOrDefault();
 
                     // Initialize the driver
                     driver.InitializeDriver(plid);
+                    driver.StartWarmup(plid, config.TelemetryWarmupMs, config.WarmupBrakeHoldMs);
 
-                    UpdateAiiRefreshInterval(true);
+                    if (config.UseAiiTelemetry)
+                    {
+                        UpdateAiiRefreshInterval();
+                        ScheduleAiiIntervalUpdate(plid);
+                    }
 
                     logger.Log($"New AI player spawned: PLID={plid}, Type={npl.PType}, Name={npl.PName}");
 
@@ -2861,8 +2958,7 @@ namespace AHPP_AI.AI
         /// </summary>
         private byte ClampAiiIntervalToByte(int intervalHundredths)
         {
-            var clamped = Math.Max(config.AiiIntervalHundredthsMin,
-                Math.Min(config.AiiIntervalHundredthsMax, intervalHundredths));
+            var clamped = Math.Max(config.AiiIntervalHundredthsMin, intervalHundredths);
             clamped = Math.Max(1, Math.Min(255, clamped));
             return (byte)clamped;
         }
@@ -2870,37 +2966,34 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Adjust AI info request interval based on active AI count and packet budget.
         /// </summary>
-        private int UpdateAiiRefreshInterval(bool forceBroadcast = false)
+        private int UpdateAiiRefreshInterval(bool enqueueAll = false)
         {
-            var activeCount = GetActiveAiCount();
-            var baseInterval = Math.Max(1, config.AiiIntervalHundredthsMin);
-            var availableBudget = Math.Max(1, config.PacketRateBudgetPerSecond - config.PacketRateReservePerSecond);
-            var updatesPerSecondBudget = availableBudget / (double)Math.Max(1, config.PacketsPerAiiUpdate);
-            var perAiRate = activeCount > 0 ? updatesPerSecondBudget / activeCount : updatesPerSecondBudget;
-            var intervalHundredths = perAiRate <= 0.001
-                ? config.AiiIntervalHundredthsMax
-                : (int)Math.Ceiling(100.0 / perAiRate);
+            if (!config.UseAiiTelemetry)
+                return 0;
 
-            intervalHundredths = Math.Max(baseInterval, intervalHundredths);
-            intervalHundredths = Math.Min(config.AiiIntervalHundredthsMax, intervalHundredths);
+            var activeCount = GetActiveAiCount();
+            var intervalHundredths = CalculateAiiIntervalHundredths(activeCount);
 
             int previousInterval;
             lock (aiiIntervalLock)
             {
                 previousInterval = currentAiiIntervalHundredths;
-                if (!forceBroadcast && previousInterval == intervalHundredths && previousInterval > 0)
-                    return previousInterval;
-
                 currentAiiIntervalHundredths = intervalHundredths;
             }
 
-            foreach (var plid in GetActiveAiPlids())
+            var shouldRebalance = enqueueAll ||
+                                  (previousInterval != intervalHundredths &&
+                                   (DateTime.UtcNow - lastAiiRebalance) >= TimeSpan.FromSeconds(10));
+
+            if (shouldRebalance)
             {
-                RequestAIInfo(plid, intervalHundredths);
+                EnqueueAiiIntervalUpdates(GetActiveAiPlids());
+                lastAiiRebalance = DateTime.UtcNow;
             }
 
             if (previousInterval != intervalHundredths)
             {
+                var availableBudget = Math.Max(1, config.PacketRateBudgetPerSecond - config.PacketRateReservePerSecond);
                 var intervalSeconds = intervalHundredths / 100.0;
                 logger.Log(
                     $"Adjusted AI info repeat to {intervalSeconds:F2}s for {activeCount} AI(s) (packet budget {availableBudget}/s, reserve {config.PacketRateReservePerSecond}/s)");
@@ -2910,16 +3003,55 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Determine the AII repeat interval based on configured target Hz and packet budgets.
+        /// </summary>
+        private int CalculateAiiIntervalHundredths(int activeCount)
+        {
+            var baseInterval = Math.Max(1, config.AiiIntervalHundredthsMin);
+            var targetInterval = config.AiiTargetHz > 0
+                ? (int)Math.Round(100.0 / config.AiiTargetHz)
+                : config.AiiIntervalHundredthsMax;
+            var availableBudget = Math.Max(1, config.PacketRateBudgetPerSecond - config.PacketRateReservePerSecond);
+            var updatesPerSecondBudget = availableBudget / (double)Math.Max(1, config.PacketsPerAiiUpdate);
+            var perAiRate = activeCount > 0 ? updatesPerSecondBudget / activeCount : updatesPerSecondBudget;
+            var budgetInterval = perAiRate <= 0.001
+                ? config.AiiIntervalHundredthsMax
+                : (int)Math.Ceiling(100.0 / perAiRate);
+
+            var intervalHundredths = Math.Max(targetInterval, budgetInterval);
+            intervalHundredths = Math.Max(baseInterval, intervalHundredths);
+            var maxInterval = Math.Max(config.AiiIntervalHundredthsMax, targetInterval);
+            intervalHundredths = Math.Min(maxInterval, intervalHundredths);
+
+            return intervalHundredths;
+        }
+
+        /// <summary>
+        /// Queue interval updates for the provided AIs without broadcasting all at once.
+        /// </summary>
+        private void EnqueueAiiIntervalUpdates(IEnumerable<byte> plids)
+        {
+            if (plids == null) return;
+            if (!config.UseAiiTelemetry) return;
+
+            foreach (var plid in plids)
+            {
+                ScheduleAiiIntervalUpdate(plid);
+            }
+        }
+
+        /// <summary>
         /// Send the AI info repeat request for a specific AI.
         /// </summary>
         private void SendAiiRefreshInterval(byte plid, int intervalHundredths)
         {
+            if (!config.UseAiiTelemetry) return;
             var clamped = ClampAiiIntervalToByte(intervalHundredths);
 
             insim.Send(new IS_AIC(new List<AIInputVal>
             {
                 new AIInputVal { Input = AicInputType.CS_REPEAT_AI_INFO, Time = clamped, Value = 0 }
-            }) { PLID = plid });
+            }) { PLID = plid }, InSimClientExtensions.PacketPriority.Normal);
         }
 
         /// <summary>
@@ -2927,6 +3059,7 @@ namespace AHPP_AI.AI
         /// </summary>
         private void RequestAIInfo(byte plid, int? intervalOverrideHundredths = null)
         {
+            if (!config.UseAiiTelemetry) return;
             var intervalHundredths = intervalOverrideHundredths ?? GetCurrentAiiIntervalHundredths();
             SendAiiRefreshInterval(plid, intervalHundredths);
         }
@@ -2941,11 +3074,13 @@ namespace AHPP_AI.AI
             {
                 if (mci?.Info == null) return;
 
+                var now = DateTime.UtcNow;
                 lock (carStateLock)
                 {
                     foreach (var car in mci.Info)
                     {
                         carStates[car.PLID] = car;
+                        carTimestamps[car.PLID] = now;
                     }
 
                     allCars = carStates.Values.ToArray();
@@ -2995,18 +3130,18 @@ namespace AHPP_AI.AI
                             aiStates[plid] = BuildAiStateLabel(plid, state, inRecovery);
 
                             // Place active waypoint marker if available
-                        var path = waypointFollower.GetPath(plid);
-                        if (activeWaypointMarkersEnabled && path != null && path.Count > 0)
-                        {
-                            var now = DateTime.UtcNow;
-                            if (!lastActiveWaypointUpdate.TryGetValue(plid, out var lastUpdate) ||
-                                (now - lastUpdate).TotalMilliseconds >= activeWaypointIntervalMs)
+                            var path = waypointFollower.GetPath(plid);
+                            if (activeWaypointMarkersEnabled && path != null && path.Count > 0)
                             {
-                                lastActiveWaypointUpdate[plid] = now;
-                                var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
-                                lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
+                                var markerNow = DateTime.UtcNow;
+                                if (!lastActiveWaypointUpdate.TryGetValue(plid, out var lastUpdate) ||
+                                    (markerNow - lastUpdate).TotalMilliseconds >= activeWaypointIntervalMs)
+                                {
+                                    lastActiveWaypointUpdate[plid] = markerNow;
+                                    var activeWaypoint = waypointFollower.GetLookaheadWaypoint(plid);
+                                    lfsLayout.VisualizeActiveWaypoint(plid, activeWaypoint);
+                                }
                             }
-                        }
                         }
                         catch (Exception ex)
                         {
@@ -3046,6 +3181,7 @@ namespace AHPP_AI.AI
                 return;
             }
 
+            var now = DateTime.UtcNow;
             var aiPlids = GetActiveAiPlids();
             var aiSet = new HashSet<byte>(aiPlids);
             var snapshots = new TrafficCarSnapshot[allCars.Length];
@@ -3054,6 +3190,9 @@ namespace AHPP_AI.AI
             foreach (var car in allCars)
             {
                 if (car.PLID == 0) continue;
+                if (carTimestamps.TryGetValue(car.PLID, out var stamp) &&
+                    now - stamp > TelemetryStaleAfter)
+                    continue;
 
                 snapshots[count++] = new TrafficCarSnapshot
                 {
@@ -3601,8 +3740,10 @@ namespace AHPP_AI.AI
         {
             lock (carStateLock)
             {
-                if (carStates.Remove(plid))
-                    allCars = carStates.Values.ToArray();
+                carStates.Remove(plid);
+                carTimestamps.Remove(plid);
+                aiiTelemetry.Remove(plid);
+                allCars = carStates.Values.ToArray();
             }
         }
 
@@ -3675,6 +3816,111 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Build a derived snapshot from the latest MCI telemetry.
+        /// </summary>
+        private CarSnapshot BuildCarSnapshot(CompCar car, DateTime timestamp)
+        {
+            var now = DateTime.UtcNow;
+            return new CarSnapshot
+            {
+                SpeedKmh = 360.0 * car.Speed / 32768.0,
+                Heading = car.Heading,
+                Position = new Vec(car.X, car.Y, car.Z),
+                AgeMs = (now - timestamp).TotalMilliseconds
+            };
+        }
+
+        /// <summary>
+        /// Determine engine running state without relying on AII RPM.
+        /// </summary>
+        private bool DetermineEngineRunningFromMci(byte plid, CarSnapshot snapshot)
+        {
+            var now = DateTime.UtcNow;
+            var speedRunning = snapshot.SpeedKmh > config.RecoveryLowSpeedThresholdKmh;
+
+            if (!lastKnownPositions.TryGetValue(plid, out var lastPos))
+                lastPos = snapshot.Position;
+
+            var deltaMeters = Vec.Distance(lastPos, snapshot.Position);
+            var movementThreshold = Math.Max(0.1, config.RecoveryPositionChangeThreshold * 0.25);
+            var movedEnough = deltaMeters >= movementThreshold;
+
+            if (movedEnough)
+                lastMovementTimes[plid] = now;
+            else if (speedRunning)
+                lastMovementTimes[plid] = now;
+
+            lastKnownPositions[plid] = snapshot.Position;
+
+            if (speedRunning || movedEnough)
+                return true;
+
+            if (!aiSpawnTimes.TryGetValue(plid, out var spawnTime))
+            {
+                spawnTime = now;
+                aiSpawnTimes[plid] = spawnTime;
+            }
+
+            var recentlyMoved = lastMovementTimes.TryGetValue(plid, out var lastMove) &&
+                                (now - lastMove).TotalMilliseconds <= config.TelemetryWarmupMs;
+            var withinSpawnWarmup = (now - spawnTime).TotalMilliseconds <= config.TelemetryWarmupMs;
+
+            return recentlyMoved || withinSpawnWarmup;
+        }
+
+        /// <summary>
+        /// Retrieve the latest cached telemetry for an AI; MCI must be fresh while AII is optional.
+        /// </summary>
+        private bool TryGetLatestTelemetry(
+            byte plid,
+            out CompCar car,
+            out double rpm,
+            out AIFlags flags,
+            out bool hasAiiRpm,
+            out bool hasAiiFlags,
+            out bool wasStale,
+            out DateTime carTimestamp)
+        {
+            car = default(CompCar);
+            rpm = 0;
+            flags = 0;
+            hasAiiRpm = false;
+            hasAiiFlags = false;
+            wasStale = false;
+            carTimestamp = DateTime.MinValue;
+
+            lock (carStateLock)
+            {
+                if (!carStates.TryGetValue(plid, out var cachedCar) ||
+                    !carTimestamps.TryGetValue(plid, out var timestamp))
+                {
+                    wasStale = true;
+                    return false;
+                }
+
+                if (DateTime.UtcNow - timestamp > TelemetryStaleAfter)
+                {
+                    wasStale = true;
+                    return false;
+                }
+
+                car = cachedCar;
+                carTimestamp = timestamp;
+                if (config.UseAiiTelemetry &&
+                    aiiTelemetry.TryGetValue(plid, out var aii) &&
+                    DateTime.UtcNow - aii.Timestamp <= TimeSpan.FromSeconds(5))
+                {
+                    rpm = aii.Rpm;
+                    flags = aii.Flags;
+                    hasAiiRpm = true;
+                    hasAiiFlags = true;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         ///     Handle AII packet (AI info)
         /// </summary>
         public void OnAII(IS_AII aii)
@@ -3682,6 +3928,9 @@ namespace AHPP_AI.AI
             var stopwatch = Stopwatch.StartNew();
             try
             {
+                if (!config.UseAiiTelemetry) return;
+                if (aii == null) return;
+
                 var plid = aii.PLID;
                 bool knownAi;
                 lock (aiPlidLock)
@@ -3689,191 +3938,19 @@ namespace AHPP_AI.AI
                     knownAi = aiPLIDs.Contains(plid);
                 }
                 if (!knownAi) return;
-                if (allCars == null) return;
-
-                // Check engine state - stalled if ignition is on but RPM is near zero
-                var ignitionOn = (aii.Flags & AIFlags.AIFLAGS_IGNITION) != 0;
-                var engineStalled = ignitionOn && aii.RPM < 0.1f;
-                var engineRunning = ignitionOn && !engineStalled;
-
-                // Update engine state in driver
-                driver.UpdateEngineState(plid, engineRunning);
-
-                // Find car data in MCI
-                var car = Array.Find(allCars, c => c.PLID == plid);
-                if (car == null || car.PLID == 0)
+                lock (carStateLock)
                 {
-                    logger.Log($"PLID={plid} No MCI data available yet, skipping control update");
-                    return;
+                    aiiTelemetry[plid] = new AiiTelemetry
+                    {
+                        Rpm = aii.RPM,
+                        Flags = aii.Flags,
+                        Timestamp = DateTime.UtcNow
+                    };
                 }
 
-                EnsureSpawnRouteChosen(plid, car);
-
-                var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
-                var routeName = currentRoute.TryGetValue(plid, out var currentName) ? currentName : string.Empty;
-                var holdForMerge = !string.IsNullOrWhiteSpace(routeName) &&
-                                   routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase) &&
-                                   ShouldHoldForSpawnMerge(plid, car, targetIndex, trafficSnapshot);
-
-                // For spawn paths, generate an approach curve from current position to the route.
-                if (routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase))
-                    waypointFollower.CheckAndUpdateApproachCurve(plid, car);
-
-                // Update AI controls based on current state
-                driver.UpdateControls(plid, car, allCars, trafficSnapshot, waypointManager, config,
-                    lfsLayout.layoutObjects, aii.RPM, holdForMerge);
-
-                // Route management
-                var (updatedTargetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
-                var laneChangeActive = HandleLaneChangeState(plid);
-                if (!string.IsNullOrWhiteSpace(routeName))
-                {
-                    if (laneChangeActive)
-                        return;
-
-                    var activeSpawnPath = waypointFollower.GetPath(plid);
-                    var activeSpawnLength = activeSpawnPath?.Count > 0
-                        ? activeSpawnPath.Count
-                        : pathManager.SpawnRoute.Count;
-
-                    if (routeName == "spawn" && activeSpawnLength > 0 &&
-                        IsNearSpawnRouteEnd(activeSpawnPath, car, config.SpawnMergeHoldDistanceMeters))
-                    {
-                        if (holdForMerge)
-                            return;
-
-                        var selectedSpawn = spawnRouteSelections.TryGetValue(plid, out var sel) ? sel : string.Empty;
-                        var baseSpawnName = config.SpawnRouteName;
-                        var onAlternateSpawn = !string.IsNullOrWhiteSpace(selectedSpawn) &&
-                                               !selectedSpawn.Equals(baseSpawnName, StringComparison.OrdinalIgnoreCase);
-
-                        // If we used a lane-specific spawn route, hop onto the base pit_entry route before going main.
-                        if (onAlternateSpawn && pathManager.SpawnRoute != null && pathManager.SpawnRoute.Count > 0)
-                        {
-                            var closestSpawnIndex = FindClosestIndex(pathManager.SpawnRoute, car);
-                            var (alignedSpawnIndex, _, _) = FindAlignedWaypointIndex(
-                                pathManager.SpawnRoute,
-                                car,
-                                closestSpawnIndex,
-                                12);
-
-                            waypointFollower.SetPath(plid, pathManager.SpawnRoute, alignedSpawnIndex,
-                                pathManager.SpawnRouteMetadata?.IsLoop ?? false);
-                            spawnRouteSelections[plid] = baseSpawnName;
-                            // stay in spawn state until we reach the base pit_entry end
-                        }
-                        else
-                        {
-                            var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-                            waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex, pathManager.MainRouteMetadata?.IsLoop ?? true);
-                            currentRoute[plid] = "main";
-                        }
-                    }
-                    else if (routeName == "main")
-                    {
-                        TryGetAssignedRoute(plid, out var assignedRoute);
-                        var hasAssignment = !string.IsNullOrWhiteSpace(assignedRoute);
-                        var assignedIsMain = !hasAssignment ||
-                                             assignedRoute.Equals(config.MainRouteName,
-                                                 StringComparison.OrdinalIgnoreCase);
-
-                        var allowInnerBranch = pathManager.MainAlternateRoute != null &&
-                                               (!hasAssignment ||
-                                                assignedRoute.Equals(config.MainRouteName,
-                                                    StringComparison.OrdinalIgnoreCase) ||
-                                                assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
-                                                    StringComparison.OrdinalIgnoreCase));
-                        var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
-
-                        if (pathManager.TryGetBranch(targetIndex, out var branchInfo) && branchInfo != null)
-                        {
-                            var innerBlocked = IsInnerBranch(branchInfo) &&
-                                               (!hasAssignment ||
-                                                !assignedRoute.Equals(branchInfo.Name,
-                                                    StringComparison.OrdinalIgnoreCase));
-                            var assignmentMismatch = hasAssignment &&
-                                                     !assignedRoute.Equals(branchInfo.Name,
-                                                         StringComparison.OrdinalIgnoreCase);
-                            var randomSkip = !hasAssignment && branchRandom.NextDouble() >= 0.5;
-
-                            var shouldSwitch = !switchedInner && !innerBlocked && !assignmentMismatch && !randomSkip;
-
-                            if (shouldSwitch)
-                            {
-                                SignalLaneChange(
-                                    plid,
-                                    pathManager.MainRoute,
-                                    targetIndex,
-                                    branchInfo.Path,
-                                    0,
-                                    $"Taking branch {branchInfo.Name}");
-
-                                var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
-                                waypointFollower.SetPath(plid, branchInfo.Path, bestIndex, branchInfo.Metadata?.IsLoop ?? false);
-                                currentRoute[plid] = "branch";
-                                activeBranchSelections[plid] = branchInfo;
-                            }
-                        }
-                        else if (!assignedIsMain)
-                        {
-                            TryAssignBranchIfNeeded(plid, assignedRoute);
-                        }
-                    }
-                    else if (routeName == "branch")
-                    {
-                        var path = waypointFollower.GetPath(plid);
-                        if (path == null || path.Count == 0)
-                        {
-                            logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
-                            waypointFollower.SetPath(plid, pathManager.MainRoute, null, pathManager.MainRouteMetadata?.IsLoop ?? true);
-                            activeBranchSelections.Remove(plid);
-                            currentRoute[plid] = "main";
-                            return;
-                        }
-
-                        var hasBranchInfo = activeBranchSelections.TryGetValue(plid, out var branchInfo);
-                        var isInnerBranch = hasBranchInfo && IsInnerBranch(branchInfo);
-
-                        if (isInnerBranch)
-                        {
-                            if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
-                                return;
-
-                            // Stay on alternate/looping inner lanes until an explicit merge is requested.
-                            if (branchInfo?.Metadata?.Type == RouteType.AlternateMain ||
-                                branchInfo?.Metadata?.IsLoop == true)
-                                return;
-                        }
-
-                        if (targetIndex >= path.Count - 1)
-                        {
-                            var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
-                            var approachIndex = Math.Max(0, path.Count - 2);
-
-                            if (hasBranchInfo && branchInfo != null)
-                            {
-                                var hintedIndex = pathManager.MainRoute.Count == 0
-                                    ? 0
-                                    : Math.Max(
-                                        0,
-                                        Math.Min(pathManager.MainRoute.Count - 1, branchInfo.RejoinIndex));
-                                bestIndex = hintedIndex;
-
-                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
-                                    return;
-                            }
-                            else
-                            {
-                                if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
-                                    return;
-                            }
-
-                            if (laneChangeDetailedLogging)
-                                logger.Log(
-                                    $"PLID={plid} Holding rejoin from {branchInfo?.Name ?? "branch"} until lane change safety conditions pass");
-                        }
-                    }
-                }
+                // Only update engine state on positive RPM; low RPM is handled with speed-aware checks elsewhere.
+                if (aii.RPM >= 0.1f)
+                    driver.UpdateEngineState(plid, true);
             }
             catch (Exception ex)
             {
@@ -3885,6 +3962,395 @@ namespace AHPP_AI.AI
                 aiiPerformanceTracker.Record(stopwatch.Elapsed);
                 LogPerformanceSnapshots();
             }
+        }
+
+        /// <summary>
+        /// Run a control update for a single AI using cached telemetry.
+        /// </summary>
+        private void RunControlUpdate(
+            byte plid,
+            CompCar car,
+            DateTime carTimestamp,
+            double rpm,
+            bool hasAiiRpm,
+            AIFlags flags,
+            bool hasAiiFlags)
+        {
+            if (allCars == null || car.PLID == 0) return;
+
+            var carSnapshot = BuildCarSnapshot(car, carTimestamp);
+            var speedKmh = carSnapshot.SpeedKmh;
+            var engineRunning = hasAiiRpm
+                ? rpm >= 0.1f || speedKmh > config.RecoveryLowSpeedThresholdKmh
+                : DetermineEngineRunningFromMci(plid, carSnapshot);
+
+            _ = flags;
+            _ = hasAiiFlags;
+
+            driver.UpdateEngineState(plid, engineRunning);
+
+            EnsureSpawnRouteChosen(plid, car);
+
+            var (targetIndex, _, _, _) = waypointFollower.GetFollowerInfo(plid);
+            var routeName = currentRoute.TryGetValue(plid, out var currentName) ? currentName : string.Empty;
+            var trafficSnapshotLocal = trafficSnapshot ?? Array.Empty<TrafficCarSnapshot>();
+            var holdForMerge = !string.IsNullOrWhiteSpace(routeName) &&
+                               routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase) &&
+                               ShouldHoldForSpawnMerge(plid, car, targetIndex, trafficSnapshotLocal);
+
+            if (routeName.Equals("spawn", StringComparison.OrdinalIgnoreCase))
+                waypointFollower.CheckAndUpdateApproachCurve(plid, car);
+
+            driver.UpdateControls(plid, car, allCars, trafficSnapshotLocal, waypointManager, config,
+                lfsLayout.layoutObjects, (float)rpm, holdForMerge);
+
+            var laneChangeActive = HandleLaneChangeState(plid);
+            if (string.IsNullOrWhiteSpace(routeName)) return;
+
+            if (laneChangeActive)
+                return;
+
+            var activeSpawnPath = waypointFollower.GetPath(plid);
+            var activeSpawnLength = activeSpawnPath?.Count > 0
+                ? activeSpawnPath.Count
+                : pathManager.SpawnRoute.Count;
+
+            if (routeName == "spawn" && activeSpawnLength > 0 &&
+                IsNearSpawnRouteEnd(activeSpawnPath, car, config.SpawnMergeHoldDistanceMeters))
+            {
+                if (holdForMerge)
+                    return;
+
+                var selectedSpawn = spawnRouteSelections.TryGetValue(plid, out var sel) ? sel : string.Empty;
+                var baseSpawnName = config.SpawnRouteName;
+                var onAlternateSpawn = !string.IsNullOrWhiteSpace(selectedSpawn) &&
+                                       !selectedSpawn.Equals(baseSpawnName, StringComparison.OrdinalIgnoreCase);
+
+                if (onAlternateSpawn && pathManager.SpawnRoute != null && pathManager.SpawnRoute.Count > 0)
+                {
+                    var closestSpawnIndex = FindClosestIndex(pathManager.SpawnRoute, car);
+                    var (alignedSpawnIndex, _, _) = FindAlignedWaypointIndex(
+                        pathManager.SpawnRoute,
+                        car,
+                        closestSpawnIndex,
+                        12);
+
+                    waypointFollower.SetPath(plid, pathManager.SpawnRoute, alignedSpawnIndex,
+                        pathManager.SpawnRouteMetadata?.IsLoop ?? false);
+                    spawnRouteSelections[plid] = baseSpawnName;
+                }
+                else
+                {
+                    var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                    waypointFollower.SetPath(plid, pathManager.MainRoute, bestIndex,
+                        pathManager.MainRouteMetadata?.IsLoop ?? true);
+                    currentRoute[plid] = "main";
+                }
+            }
+            else if (routeName == "main")
+            {
+                TryGetAssignedRoute(plid, out var assignedRoute);
+                var hasAssignment = !string.IsNullOrWhiteSpace(assignedRoute);
+                var assignedIsMain = !hasAssignment ||
+                                     assignedRoute.Equals(config.MainRouteName,
+                                         StringComparison.OrdinalIgnoreCase);
+
+                var allowInnerBranch = pathManager.MainAlternateRoute != null &&
+                                       (!hasAssignment ||
+                                        assignedRoute.Equals(config.MainRouteName,
+                                            StringComparison.OrdinalIgnoreCase) ||
+                                        assignedRoute.Equals(pathManager.MainAlternateRoute.Name,
+                                            StringComparison.OrdinalIgnoreCase));
+                var switchedInner = allowInnerBranch && TryJoinInnerBranchLaneChange(plid, car, targetIndex);
+
+                if (pathManager.TryGetBranch(targetIndex, out var branchInfo) && branchInfo != null)
+                {
+                    var innerBlocked = IsInnerBranch(branchInfo) &&
+                                       (!hasAssignment ||
+                                        !assignedRoute.Equals(branchInfo.Name,
+                                            StringComparison.OrdinalIgnoreCase));
+                    var assignmentMismatch = hasAssignment &&
+                                             !assignedRoute.Equals(branchInfo.Name,
+                                                 StringComparison.OrdinalIgnoreCase);
+                    var randomSkip = !hasAssignment && branchRandom.NextDouble() >= 0.5;
+
+                    var shouldSwitch = !switchedInner && !innerBlocked && !assignmentMismatch && !randomSkip;
+
+                    if (shouldSwitch)
+                    {
+                        SignalLaneChange(
+                            plid,
+                            pathManager.MainRoute,
+                            targetIndex,
+                            branchInfo.Path,
+                            0,
+                            $"Taking branch {branchInfo.Name}");
+
+                        var (bestIndex, _, _) = FindAlignedWaypointIndex(branchInfo.Path, car, 0, 8);
+                        waypointFollower.SetPath(plid, branchInfo.Path, bestIndex, branchInfo.Metadata?.IsLoop ?? false);
+                        currentRoute[plid] = "branch";
+                        activeBranchSelections[plid] = branchInfo;
+                    }
+                }
+                else if (!assignedIsMain)
+                {
+                    TryAssignBranchIfNeeded(plid, assignedRoute);
+                }
+            }
+            else if (routeName == "branch")
+            {
+                var path = waypointFollower.GetPath(plid);
+                if (path == null || path.Count == 0)
+                {
+                    logger.LogWarning($"PLID={plid} has an empty branch path, switching back to main.");
+                    waypointFollower.SetPath(plid, pathManager.MainRoute, null,
+                        pathManager.MainRouteMetadata?.IsLoop ?? true);
+                    activeBranchSelections.Remove(plid);
+                    currentRoute[plid] = "main";
+                    return;
+                }
+
+                var hasBranchInfo = activeBranchSelections.TryGetValue(plid, out var branchInfo);
+                var isInnerBranch = hasBranchInfo && IsInnerBranch(branchInfo);
+
+                if (isInnerBranch)
+                {
+                    if (TrySwapInnerToMainLane(plid, car, targetIndex, path))
+                        return;
+
+                    if (branchInfo?.Metadata?.Type == RouteType.AlternateMain ||
+                        branchInfo?.Metadata?.IsLoop == true)
+                        return;
+                }
+
+                if (targetIndex >= path.Count - 1)
+                {
+                    var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
+                    var approachIndex = Math.Max(0, path.Count - 2);
+
+                    if (hasBranchInfo && branchInfo != null)
+                    {
+                        var hintedIndex = pathManager.MainRoute.Count == 0
+                            ? 0
+                            : Math.Max(
+                                0,
+                                Math.Min(pathManager.MainRoute.Count - 1, branchInfo.RejoinIndex));
+                        bestIndex = hintedIndex;
+
+                        if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
+                            return;
+                    }
+                    else
+                    {
+                        if (TryScheduleBranchEndRejoin(plid, car, approachIndex, path, branchInfo, bestIndex))
+                            return;
+                    }
+
+                    if (laneChangeDetailedLogging)
+                        logger.Log(
+                            $"PLID={plid} Holding rejoin from {branchInfo?.Name ?? "branch"} until lane change safety conditions pass");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Drive a fixed control cadence that is independent from AII events.
+        /// </summary>
+        private async Task RunControlLoopAsync(CancellationToken token)
+        {
+            var tickInterval = TimeSpan.FromMilliseconds(
+                1000.0 / Math.Max(1, config.ControlTickHz));
+
+            while (!token.IsCancellationRequested)
+            {
+                var start = DateTime.UtcNow;
+                try
+                {
+                    RunControlTick();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogException(ex, "Control scheduler tick failed");
+                }
+
+                var elapsed = DateTime.UtcNow - start;
+                var delay = tickInterval - elapsed;
+                if (delay > TimeSpan.Zero)
+                {
+                    try
+                    {
+                        await Task.Delay(delay, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Execute one scheduler tick and update a round-robin slice of the AI pool.
+        /// </summary>
+        private void RunControlTick()
+        {
+            ProcessPendingAiiIntervalUpdates();
+
+            var activePlids = GetActiveAiPlids();
+            var activeCount = activePlids.Count;
+            if (activeCount == 0)
+            {
+                lastControlUpdatesPerTick = 0;
+                lastComputedControlHzPerAi = 0;
+                LogControlSnapshot(activeCount, 0, 0);
+                return;
+            }
+
+            var schedule = CalculateControlSchedule(activeCount);
+            var updatesThisTick = schedule.UpdatesPerTick;
+            var updated = 0;
+
+            for (var i = 0; i < updatesThisTick && activeCount > 0; i++)
+            {
+                var index = (controlLoopCursor + i) % activeCount;
+                var plid = activePlids[index];
+
+                if (TryGetLatestTelemetry(plid, out var car, out var rpm, out var flags,
+                        out var hasAiiRpm, out var hasAiiFlags, out var wasStale, out var carTimestamp))
+                {
+                    try
+                    {
+                        RunControlUpdate(plid, car, carTimestamp, rpm, hasAiiRpm, flags, hasAiiFlags);
+                        updated++;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogException(ex, $"Control update failed for PLID={plid}");
+                    }
+                }
+                else
+                {
+                    if (wasStale)
+                    {
+                        telemetryStaleCount++;
+                        telemetrySkippedCount++;
+                    }
+                }
+            }
+
+            controlLoopCursor = activeCount == 0 ? 0 : (controlLoopCursor + updatesThisTick) % activeCount;
+            lastComputedControlHzPerAi = schedule.EffectiveControlHzPerAi;
+            lastControlUpdatesPerTick = updated;
+            LogControlSnapshot(activeCount, schedule.EffectiveControlHzPerAi, updated);
+        }
+
+        /// <summary>
+        /// Calculate how many control updates to run per tick based on packet budget and configured limits.
+        /// </summary>
+        private ControlSchedule CalculateControlSchedule(int activeAiCount)
+        {
+            var available = Math.Max(1, config.PacketRateBudgetPerSecond - config.PacketRateReservePerSecond);
+            var aiiOverhead = 0.0;
+            if (config.UseAiiTelemetry)
+            {
+                var aiiIntervalHundredths = Math.Max(1, GetCurrentAiiIntervalHundredths());
+                var aiiHz = 100.0 / aiiIntervalHundredths;
+                aiiOverhead = activeAiCount * aiiHz * Math.Max(1, config.PacketsPerAiiUpdate);
+            }
+            var controlBudget = Math.Max(1.0, available - aiiOverhead);
+            var perAiBudget = activeAiCount > 0 ? controlBudget / activeAiCount : controlBudget;
+            double effectiveHzPerAi;
+            if (perAiBudget < config.MinControlHzPerAi)
+                effectiveHzPerAi = perAiBudget;
+            else
+                effectiveHzPerAi = Math.Min(config.MaxControlHzPerAi, perAiBudget);
+
+            var updatesPerTick = activeAiCount == 0
+                ? 0
+                : (int)Math.Ceiling(effectiveHzPerAi * activeAiCount / Math.Max(1, config.ControlTickHz));
+            updatesPerTick = Math.Max(1, Math.Min(activeAiCount, updatesPerTick));
+
+            return new ControlSchedule
+            {
+                EffectiveControlHzPerAi = effectiveHzPerAi,
+                UpdatesPerTick = updatesPerTick
+            };
+        }
+
+        /// <summary>
+        /// Send pending AII interval updates in small batches to avoid broadcast spikes.
+        /// </summary>
+        private void ProcessPendingAiiIntervalUpdates(int maxPerTick = 3)
+        {
+            if (!config.UseAiiTelemetry) return;
+            var processed = 0;
+            var intervalHundredths = GetCurrentAiiIntervalHundredths();
+
+            while (processed < maxPerTick)
+            {
+                byte plid;
+                lock (aiiIntervalLock)
+                {
+                    if (pendingAiiIntervalUpdates.Count == 0)
+                        break;
+
+                    plid = pendingAiiIntervalUpdates.Dequeue();
+                    pendingAiiIntervalSet.Remove(plid);
+                }
+
+                bool isActive;
+                lock (aiPlidLock)
+                {
+                    isActive = aiPLIDs.Contains(plid);
+                }
+
+                if (isActive)
+                    SendAiiRefreshInterval(plid, intervalHundredths);
+
+                processed++;
+            }
+        }
+
+        /// <summary>
+        /// Add a PLID to the pending AII interval queue if not already scheduled.
+        /// </summary>
+        private void ScheduleAiiIntervalUpdate(byte plid)
+        {
+            if (!config.UseAiiTelemetry) return;
+            lock (aiiIntervalLock)
+            {
+                if (pendingAiiIntervalSet.Contains(plid))
+                    return;
+
+                pendingAiiIntervalSet.Add(plid);
+                pendingAiiIntervalUpdates.Enqueue(plid);
+            }
+        }
+
+        /// <summary>
+        /// Emit periodic control scheduler metrics for acceptance validation.
+        /// </summary>
+        private void LogControlSnapshot(int activeCount, double controlHzPerAi, int updatedThisTick)
+        {
+            var now = DateTime.UtcNow;
+            if (now - lastControlLogTime < PerformanceLogWindow) return;
+
+            var queueStats = InSimClientExtensions.GetOutboundQueueStats();
+            logger.Log(
+                $"CONTROL ({PerformanceLogWindow.TotalSeconds:F0}s): activeAI={activeCount} controlHzPerAI={controlHzPerAi:F2} updatesPerTick={updatedThisTick} staleMci={telemetryStaleCount} staleSkips={telemetrySkippedCount} recoveryPerMin={(recoveryEntryCount / PerformanceLogWindow.TotalMinutes):F1} queueHigh={queueStats.HighPriorityDepth} queueNormal={queueStats.NormalPriorityDepth} sendRate={queueStats.SendRatePerSecond:F1}/s");
+
+            telemetryStaleCount = 0;
+            telemetrySkippedCount = 0;
+            recoveryEntryCount = 0;
+            lastControlLogTime = now;
+        }
+
+        /// <summary>
+        /// Track recovery starts for MCI-only viability metrics.
+        /// </summary>
+        private void OnRecoveryStarted(byte plid, string reason)
+        {
+            recoveryEntryCount++;
         }
 
         /// <summary>

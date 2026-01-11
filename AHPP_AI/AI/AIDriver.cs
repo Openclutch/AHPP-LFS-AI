@@ -76,6 +76,8 @@ namespace AHPP_AI.AI
 
         // Engine state tracking
         private readonly Dictionary<byte, bool> engineRunning = new Dictionary<byte, bool>();
+        private readonly Dictionary<byte, DateTime> warmupUntilUtc = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, DateTime> warmupHoldUntilUtc = new Dictionary<byte, DateTime>();
 
         private readonly Dictionary<byte, EngineStartState>
             engineStartStates = new Dictionary<byte, EngineStartState>();
@@ -88,6 +90,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
         private Action<byte>? recoveryFailedHandler;
+        private Action<byte, string>? recoveryStartedHandler;
         private readonly Logger logger;
         private readonly Dictionary<byte, double> stuckPositionX = new Dictionary<byte, double>();
         private readonly Dictionary<byte, double> stuckPositionY = new Dictionary<byte, double>();
@@ -113,9 +116,46 @@ namespace AHPP_AI.AI
             this.lightController = lightController;
         }
 
+        /// <summary>
+        /// Register a callback that is invoked when recovery fails and a reset is required.
+        /// </summary>
         public void SetRecoveryFailedHandler(Action<byte> handler)
         {
             recoveryFailedHandler = handler;
+        }
+
+        /// <summary>
+        /// Register a callback that is invoked whenever recovery begins.
+        /// </summary>
+        public void SetRecoveryStartedHandler(Action<byte, string> handler)
+        {
+            recoveryStartedHandler = handler;
+        }
+
+        /// <summary>
+        /// Start a warmup window where recovery and stall logic are suppressed.
+        /// </summary>
+        public void StartWarmup(byte plid, int warmupDurationMs, int brakeHoldMs)
+        {
+            var now = DateTime.UtcNow;
+            warmupUntilUtc[plid] = now.AddMilliseconds(Math.Max(0, warmupDurationMs));
+            warmupHoldUntilUtc[plid] = now.AddMilliseconds(Math.Max(0, brakeHoldMs));
+        }
+
+        /// <summary>
+        /// Determine whether an AI is still within its warmup window.
+        /// </summary>
+        private bool IsWarmup(byte plid)
+        {
+            return warmupUntilUtc.TryGetValue(plid, out var until) && DateTime.UtcNow < until;
+        }
+
+        /// <summary>
+        /// Determine whether the warmup brake hold is still active.
+        /// </summary>
+        private bool IsWarmupHoldActive(byte plid)
+        {
+            return warmupHoldUntilUtc.TryGetValue(plid, out var until) && DateTime.UtcNow < until;
         }
 
         /// <summary>
@@ -190,6 +230,12 @@ namespace AHPP_AI.AI
 
                 // Calculate steering early so merge holds can keep the car aligned to the lane.
                 var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
+
+                if (IsWarmupHoldActive(plid))
+                {
+                    ApplyWarmupHold(plid, steering, speedKmh, currentRpm);
+                    return;
+                }
 
                 if (holdForMerge)
                 {
@@ -353,6 +399,27 @@ namespace AHPP_AI.AI
             controlInputs[plid] =
                 $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
             controlStatuses[plid] = "MERGE YIELD: Waiting";
+
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+        }
+
+        /// <summary>
+        /// Apply a short brake hold during spawn warmup to stabilize the AI.
+        /// </summary>
+        private void ApplyWarmupHold(byte plid, int steering, double speedKmh, float currentRpm)
+        {
+            const int throttle = 0;
+            const int brake = 65535;
+
+            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
+            gearboxController.ApplyBrakingClutch(plid, brake);
+
+            var (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+            clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+
+            controlInputs[plid] =
+                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+            controlStatuses[plid] = "WARMUP HOLD: Stabilizing";
 
             SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
         }
@@ -642,6 +709,16 @@ namespace AHPP_AI.AI
             MovementIssue movementIssue)
         {
             var context = GetRecoveryContext(plid);
+            if (IsWarmup(plid))
+            {
+                if (context.State != RecoveryState.Driving)
+                {
+                    context.State = RecoveryState.Driving;
+                    context.ValidationActive = false;
+                }
+
+                return false;
+            }
 
             var isEngineRunning = engineRunning.TryGetValue(plid, out var running) && running;
             if (!isEngineRunning &&
@@ -734,6 +811,7 @@ namespace AHPP_AI.AI
             controlStatuses[plid] = $"Recovery: {(longRecovery ? "ReverseLong" : "ReverseShort")}";
             logger.Log(
                 $"PLID={plid} RECOVERY START [{context.State}]: {reason}, steerDir={context.SteerDirection}, duration={(longRecovery ? config.RecoveryLongReverseMs : config.RecoveryShortReverseMs)}ms");
+            recoveryStartedHandler?.Invoke(plid, reason);
         }
 
         /// <summary>
@@ -784,6 +862,7 @@ namespace AHPP_AI.AI
 
             controlStatuses[plid] = "Engine restart";
             logger.Log($"PLID={plid} RECOVERY START [EngineRestart]: {reason}");
+            recoveryStartedHandler?.Invoke(plid, reason);
         }
 
         /// <summary>
@@ -796,7 +875,7 @@ namespace AHPP_AI.AI
             var isRunning = engineRunning.TryGetValue(plid, out var running) && running;
             if (isRunning && engineStartStates[plid] == EngineStartState.Normal)
             {
-                    EnterRecoveryCooldown(plid, "Engine restarted", true);
+                    EnterRecoveryCooldown(plid, "Engine restarted", true, true);
                     return false;
                 }
 
@@ -846,13 +925,13 @@ namespace AHPP_AI.AI
                     {
                         insim.Send(new IS_AIC(new List<AIInputVal>
                                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 2 } })
-                            { PLID = plid });
+                            { PLID = plid }, InSimClientExtensions.PacketPriority.High);
                     }
                     else if (elapsed >= 600)
                     {
                         insim.Send(new IS_AIC(new List<AIInputVal>
                                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } })
-                            { PLID = plid });
+                            { PLID = plid }, InSimClientExtensions.PacketPriority.High);
 
                         if (elapsed >= 2000)
                         {
@@ -893,7 +972,7 @@ namespace AHPP_AI.AI
                     if (elapsed >= 100)
                     {
                         engineStartStates[plid] = EngineStartState.Normal;
-                        EnterRecoveryCooldown(plid, "Engine restart sequence complete", true);
+                        EnterRecoveryCooldown(plid, "Engine restart sequence complete", true, true);
                         return false;
                     }
 
@@ -901,7 +980,7 @@ namespace AHPP_AI.AI
                     return true;
                 default:
                     engineStartStates[plid] = EngineStartState.Normal;
-                    EnterRecoveryCooldown(plid, "Engine restart reset", true);
+                    EnterRecoveryCooldown(plid, "Engine restart reset", true, true);
                     return false;
             }
         }
@@ -909,7 +988,8 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Enter cooldown/validation after a recovery attempt.
         /// </summary>
-        private void EnterRecoveryCooldown(byte plid, string reason, bool resetToFirstGear = false)
+        private void EnterRecoveryCooldown(byte plid, string reason, bool resetToFirstGear = false,
+            bool markEngineRunning = false)
         {
             var context = GetRecoveryContext(plid);
             context.State = RecoveryState.Cooldown;
@@ -919,6 +999,8 @@ namespace AHPP_AI.AI
             controlStatuses[plid] = $"Recovery cool: {reason}";
             if (resetToFirstGear)
                 gearboxController.ResetToFirstGear(plid, reason);
+            if (markEngineRunning)
+                UpdateEngineState(plid, true);
             logger.Log($"PLID={plid} RECOVERY COOLING: {reason}");
         }
 
@@ -980,7 +1062,7 @@ namespace AHPP_AI.AI
 
             if (context.FailureCount >= config.RecoveryMaxFailureCount)
             {
-                logger.LogWarning($"PLID={plid} RECOVERY FAILURE: Escalating to pit/spectate");
+                logger.LogWarning($"PLID={plid} RECOVERY FAILURE: Escalating to pitlane command");
                 recoveryFailedHandler?.Invoke(plid);
             }
         }
@@ -995,6 +1077,12 @@ namespace AHPP_AI.AI
 
             if (engineRunning[plid] == isRunning)
                 return;
+
+            if (IsWarmup(plid) && !isRunning)
+            {
+                engineRunning[plid] = false;
+                return;
+            }
 
             logger.Log($"PLID={plid} ENGINE: {(isRunning ? "STARTED" : "STALLED")}");
 
@@ -1259,28 +1347,33 @@ namespace AHPP_AI.AI
         {
             // Reset all inputs
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_RESET_INPUTS, Time = 0, Value = 0 } }) { PLID = plid });
+                { new AIInputVal { Input = AicInputType.CS_RESET_INPUTS, Time = 0, Value = 0 } }) { PLID = plid },
+                InSimClientExtensions.PacketPriority.High);
 
             // Press clutch fully first
             insim.Send(new IS_AIC(new List<AIInputVal>
                     { new AIInputVal { Input = AicInputType.CS_CLUTCH, Time = 0, Value = config.ClutchFullyPressed } })
-                { PLID = plid });
+                { PLID = plid }, InSimClientExtensions.PacketPriority.High);
 
             // Apply high throttle before starting (much higher than before)
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_THROTTLE, Time = 0, Value = 20000 } }) { PLID = plid });
+                { new AIInputVal { Input = AicInputType.CS_THROTTLE, Time = 0, Value = 20000 } }) { PLID = plid },
+                InSimClientExtensions.PacketPriority.High);
 
             // Set initial gear to 1st
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_GEAR, Time = 0, Value = 2 } }) { PLID = plid });
+                { new AIInputVal { Input = AicInputType.CS_GEAR, Time = 0, Value = 2 } }) { PLID = plid },
+                InSimClientExtensions.PacketPriority.High);
 
             // Turn on ignition
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } }) { PLID = plid });
+                { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } }) { PLID = plid },
+                InSimClientExtensions.PacketPriority.High);
 
             // Disable automatic clutch
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_SET_HELP_FLAGS, Time = 0, Value = 0 } }) { PLID = plid });
+                { new AIInputVal { Input = AicInputType.CS_SET_HELP_FLAGS, Time = 0, Value = 0 } })
+                { PLID = plid }, InSimClientExtensions.PacketPriority.High);
 
             // Request periodic info updates
             insim.Send(new IS_AIC(new List<AIInputVal>
@@ -1310,7 +1403,7 @@ namespace AHPP_AI.AI
                 new AIInputVal { Input = AicInputType.CS_CLUTCH, Value = (ushort)clutchValue }
             };
 
-            insim.Send(new IS_AIC(inputs) { PLID = plid });
+            insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
 
         /// <summary>
@@ -1331,7 +1424,7 @@ namespace AHPP_AI.AI
                 new AIInputVal { Input = AicInputType.CS_BRAKE, Value = 65535 }
             };
 
-            insim.Send(new IS_AIC(inputs) { PLID = plid });
+            insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
 
         /// <summary>
@@ -1347,7 +1440,7 @@ namespace AHPP_AI.AI
                 new AIInputVal { Input = AicInputType.CS_IGNITION, Value = (ushort)AIInputVal_ToggleValues.SwitchOff }
             };
 
-            insim.Send(new IS_AIC(inputs) { PLID = plid });
+            insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
 
         /// <summary>
@@ -1363,7 +1456,7 @@ namespace AHPP_AI.AI
                 new AIInputVal { Input = AicInputType.CS_IGNITION, Value = (ushort)AIInputVal_ToggleValues.SwitchOn }
             };
 
-            insim.Send(new IS_AIC(inputs) { PLID = plid });
+            insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
     }
 }

@@ -421,11 +421,14 @@ namespace AHPP_AI.Waypoint
             if (Directory.Exists(contextPath))
                 LoadRoutesFromDirectory(contextPath, routes, seenNames, duplicateNames);
 
-            var legacyPath = routesRoot;
-            if (!contextPath.Equals(legacyPath, StringComparison.OrdinalIgnoreCase))
+            if (routes.Count == 0)
             {
-                if (Directory.Exists(legacyPath))
-                    LoadRoutesFromDirectory(legacyPath, routes, seenNames, duplicateNames);
+                var legacyPath = routesRoot;
+                if (!contextPath.Equals(legacyPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Directory.Exists(legacyPath))
+                        LoadRoutesFromDirectory(legacyPath, routes, seenNames, duplicateNames);
+                }
             }
 
             return routes;

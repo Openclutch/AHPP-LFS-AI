@@ -37,11 +37,18 @@ namespace AHPP_AI.AI
         public bool AutoManagePopulation { get; set; } = true;
 
         // Packet pacing settings
+        public bool UseAiiTelemetry { get; set; } = false;
         public int AiiIntervalHundredthsMin { get; set; } = 20;
         public int AiiIntervalHundredthsMax { get; set; } = 80;
         public int PacketRateBudgetPerSecond { get; set; } = 220;
         public int PacketRateReservePerSecond { get; set; } = 80;
         public int PacketsPerAiiUpdate { get; set; } = 2;
+        public int ControlTickHz { get; set; } = 20;
+        public int MinControlHzPerAi { get; set; } = 4;
+        public int MaxControlHzPerAi { get; set; } = 10;
+        public double AiiTargetHz { get; set; } = 1.0;
+        public int TelemetryWarmupMs { get; set; } = 2000;
+        public int WarmupBrakeHoldMs { get; set; } = 0;
 
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
