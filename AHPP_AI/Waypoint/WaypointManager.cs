@@ -158,6 +158,52 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        /// Score how well a path fits a spawn position/heading.
+        /// Lower scores are better; returns the recommended start index and direction.
+        /// </summary>
+        public (double score, int startIndex, bool clockwise) ScoreRouteFit(
+            Vec position,
+            int heading,
+            List<Util.Waypoint> path,
+            bool isLoop,
+            bool preferLoopMatch)
+        {
+            if (path == null || path.Count < 2)
+                return (double.MaxValue, 0, true);
+
+            var (bestIndex, clockwise) = FindBestWaypointForDirection(position, heading, path);
+            var posX = position.X / 65536.0;
+            var posY = position.Y / 65536.0;
+            var waypoint = path[bestIndex];
+            var wpX = waypoint.Position.X / 65536.0;
+            var wpY = waypoint.Position.Y / 65536.0;
+            var distance = Math.Sqrt(Math.Pow(wpX - posX, 2) + Math.Pow(wpY - posY, 2));
+
+            var nextIndex = clockwise
+                ? (bestIndex + 1) % path.Count
+                : (bestIndex - 1 + path.Count) % path.Count;
+            var neighbor = path[nextIndex];
+            var headingToNeighbor = CoordinateUtils.CalculateHeadingToTarget(
+                neighbor.Position.X / 65536.0 - wpX,
+                neighbor.Position.Y / 65536.0 - wpY);
+            var headingError = Math.Abs(CoordinateUtils.CalculateHeadingError(
+                CoordinateUtils.NormalizeHeading(heading), headingToNeighbor));
+            var headingPenalty = headingError / CoordinateUtils.FULL_CIRCLE * 100.0;
+
+            var score = distance + headingPenalty;
+
+            if (preferLoopMatch)
+            {
+                var geometry = PathProjection.GetGeometry(path, 1.0);
+                var pathIsLoop = geometry != null && geometry.IsLoop;
+                if (pathIsLoop != isLoop)
+                    score += 1000.0;
+            }
+
+            return (score, bestIndex, clockwise);
+        }
+
+        /// <summary>
         /// Load a traffic route from disk using the route library.
         /// </summary>
         public void LoadTrafficRoute(string name)

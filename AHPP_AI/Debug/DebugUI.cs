@@ -192,6 +192,17 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
+        ///     Update the AI status button with the provided state label.
+        /// </summary>
+        /// <param name="stateLabel">State text to display on the AI_ST button.</param>
+        public void SetStateLabel(string stateLabel)
+        {
+            if (!debugUIInitialized || !buttonsVisible) return;
+            var label = string.IsNullOrWhiteSpace(stateLabel) ? "--" : stateLabel.Trim();
+            UpdateDebugButton(aiButtonIds["State"], $"AI_ST: {label}");
+        }
+
+        /// <summary>
         ///     Update debug information displayed in UI
         /// </summary>
         /// <param name="allCars">All cars telemetry data</param>

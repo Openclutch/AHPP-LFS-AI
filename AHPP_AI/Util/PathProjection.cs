@@ -42,7 +42,7 @@ namespace AHPP_AI.Util
         /// <summary>
         ///     Build or fetch cached geometry for a waypoint path.
         /// </summary>
-        public static PathGeometry GetGeometry(List<Waypoint> path, double loopClosureMeters)
+        public static PathGeometry? GetGeometry(List<Waypoint> path, double loopClosureMeters)
         {
             if (path == null || path.Count < 2) return null;
 

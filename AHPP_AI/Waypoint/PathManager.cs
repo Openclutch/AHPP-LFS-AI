@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using AHPP_AI.AI;
 using AHPP_AI.Debug;
+using Vec = AHPP_AI.Util.Vec;
 
 namespace AHPP_AI.Waypoint
 {
@@ -28,6 +29,10 @@ namespace AHPP_AI.Waypoint
         private readonly Random random = new Random();
         private readonly RouteLibrary routeLibrary;
         private readonly List<RouteValidationIssue> validationIssues = new List<RouteValidationIssue>();
+        private readonly Dictionary<string, List<Util.Waypoint>> spawnRoutes =
+            new Dictionary<string, List<Util.Waypoint>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, bool> spawnRouteLoops =
+            new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         public List<Util.Waypoint> SpawnRoute { get; private set; } = new List<Util.Waypoint>();
         public List<Util.Waypoint> MainRoute { get; private set; } = new List<Util.Waypoint>();
@@ -60,6 +65,8 @@ namespace AHPP_AI.Waypoint
             MainAlternateRoute = null;
             branches.Clear();
             validationIssues.Clear();
+            spawnRoutes.Clear();
+            spawnRouteLoops.Clear();
 
             waypointManager.LoadTrafficRoute(config.SpawnRouteName);
             SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
@@ -77,6 +84,14 @@ namespace AHPP_AI.Waypoint
             SpawnRouteMetadata = spawnMeta;
             logger.Log(
                 $"Loaded spawn route {config.SpawnRouteName} ({spawnMeta.Type}) with {SpawnRoute.Count} points");
+
+            if (SpawnRoute != null && SpawnRoute.Count > 0)
+            {
+                spawnRoutes[config.SpawnRouteName] = SpawnRoute;
+                spawnRouteLoops[config.SpawnRouteName] = spawnMeta.IsLoop;
+            }
+
+            DiscoverAdditionalSpawnRoutes(config);
 
             waypointManager.LoadTrafficRoute(config.MainRouteName);
             MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);

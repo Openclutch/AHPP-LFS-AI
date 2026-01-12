@@ -747,6 +747,11 @@ namespace AHPP_AI
                 return;
             }
 
+            if (aiController.TrySelectAiFromLabelButton(btc.ClickID))
+            {
+                return;
+            }
+
             switch (btc.ClickID)
             {
                 case MainUI.RecordToggleId:
@@ -1140,7 +1145,6 @@ namespace AHPP_AI
         private static void OnCameraChange(IS_CCH cch)
         {
             currentViewPLID = cch.PLID;
-            aiController.UpdateUIForView(currentViewPLID);
         }
 
         /// <summary>

@@ -56,6 +56,7 @@ namespace AHPP_AI.AI
         private readonly object plannedSpawnLock = new object();
         private readonly object aiPlidLock = new object();
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, string> spawnRouteSelections = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastActiveWaypointUpdate = new Dictionary<byte, DateTime>();
@@ -450,19 +451,6 @@ namespace AHPP_AI.AI
             recordingRouteName = metadata.Name;
             RefreshRouteOptions(recordingRouteName);
             routeRecorder.Start(metadata);
-        }
-
-        public void UpdateUIForView(byte viewPlid)
-        {
-            if (!config.DebugEnabled || debugUI == null) return;
-
-            lock (aiPlidLock)
-            {
-                if (aiPLIDs.Contains(viewPlid))
-                {
-                    debugUI.SetAIPLID(viewPlid);
-                }
-            }
         }
 
         /// <summary>
@@ -2621,6 +2609,49 @@ namespace AHPP_AI.AI
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Try to set the debug target when an AI label button is clicked.
+        /// </summary>
+        public bool TrySelectAiFromLabelButton(byte clickId)
+        {
+            if (!config.DebugEnabled || debugUI == null || !debugUIInitialized) return false;
+
+            if (mainUI.TryGetAiForLabelButton(clickId, out var plid))
+            {
+                lock (aiPlidLock)
+                {
+                    if (!aiPLIDs.Contains(plid)) return false;
+                }
+
+                debugUI.SetAIPLID(plid);
+                RefreshSelectedAiStateLabel(plid);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Refresh the AI_ST status button for the selected AI using current state data.
+        /// </summary>
+        /// <param name="plid">AI player ID to display.</param>
+        private void RefreshSelectedAiStateLabel(byte plid)
+        {
+            if (!config.DebugEnabled || debugUI == null || !debugUIInitialized) return;
+
+            try
+            {
+                var (_, _, _, inRecovery) = waypointFollower.GetFollowerInfo(plid);
+                var state = driver.GetStateDescription(plid);
+                var stateLabel = BuildAiStateLabel(plid, state, inRecovery);
+                debugUI.SetStateLabel(stateLabel);
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, $"Failed to refresh AI_ST label for PLID={plid}");
+            }
         }
 
         public void RemoveAllAICars()

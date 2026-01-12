@@ -89,7 +89,7 @@ namespace AHPP_AI.UI
             public bool HasRecording { get; set; }
         }
 
-        private readonly Dictionary<byte, byte> aiListButtons = new Dictionary<byte, byte>(); // AI ID -> button ID
+        private readonly Dictionary<byte, byte> aiLabelButtons = new Dictionary<byte, byte>(); // label button ID -> AI ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly List<RouteButtonInfo> routeButtons = new List<RouteButtonInfo>();
         private readonly List<(byte id, string name)> lastAiSnapshot = new List<(byte id, string name)>();
@@ -263,6 +263,14 @@ namespace AHPP_AI.UI
         public bool TryGetAiForRemoveButton(byte clickId, out byte aiId)
         {
             return aiRemoveButtons.TryGetValue(clickId, out aiId);
+        }
+
+        /// <summary>
+        /// Map an AI label ClickID to the PLID it represents.
+        /// </summary>
+        public bool TryGetAiForLabelButton(byte clickId, out byte aiId)
+        {
+            return aiLabelButtons.TryGetValue(clickId, out aiId);
         }
 
         /// <summary>
@@ -729,9 +737,9 @@ namespace AHPP_AI.UI
             if (!uiInitialized || uiHidden) return;
 
             byte row = (byte)(5 + ROW_HEIGHT * 4);
-            foreach (var b in aiListButtons.Values) DeleteButton(b);
+            foreach (var buttonId in aiLabelButtons.Keys) DeleteButton(buttonId);
             foreach (var b in aiRemoveButtons.Keys) DeleteButton(b);
-            aiListButtons.Clear();
+            aiLabelButtons.Clear();
             aiRemoveButtons.Clear();
 
             byte index = 0;
@@ -745,7 +753,7 @@ namespace AHPP_AI.UI
                 CreateButton(removeId, "X", removeLeft, top, REMOVE_BTN_W);
                 CreateButton(labelId, $"{name}", AI_LIST_COL, top);
 
-                aiListButtons[id] = labelId;
+                aiLabelButtons[labelId] = id;
                 aiRemoveButtons[removeId] = id;
                 index++;
             }

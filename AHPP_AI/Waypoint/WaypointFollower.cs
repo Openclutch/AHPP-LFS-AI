@@ -30,6 +30,7 @@ namespace AHPP_AI.Waypoint
         // Waypoint tracking
         private readonly Dictionary<byte, List<Util.Waypoint>> aiPaths = new Dictionary<byte, List<Util.Waypoint>>();
         private readonly Dictionary<byte, List<Vec>> approachCurvePoints = new Dictionary<byte, List<Vec>>();
+        private readonly Dictionary<byte, bool> pathIsLoop = new Dictionary<byte, bool>();
         private readonly AIConfig config;
         private readonly Dictionary<byte, int> currentApproachPointIndex = new Dictionary<byte, int>();
         private readonly Dictionary<byte, Queue<int>> headingErrorHistory = new Dictionary<byte, Queue<int>>();
@@ -742,9 +743,13 @@ namespace AHPP_AI.Waypoint
             };
         }
 
-        public void SetPath(byte plid, List<Util.Waypoint> path, int? startIndex = null)
+        /// <summary>
+        /// Set or replace the active path for an AI, including the starting waypoint and loop flag.
+        /// </summary>
+        public void SetPath(byte plid, List<Util.Waypoint> path, int? startIndex = null, bool isLoop = true)
         {
             aiPaths[plid] = path;
+            pathIsLoop[plid] = isLoop;
             if (path == null || path.Count == 0)
             {
                 targetWaypointIndices[plid] = 0;
@@ -755,6 +760,7 @@ namespace AHPP_AI.Waypoint
                 approachFinished[plid] = false;
                 isFirstApproach[plid] = false;
                 currentApproachPointIndex[plid] = 0;
+                pathIsLoop[plid] = false;
                 return;
             }
 
@@ -770,6 +776,19 @@ namespace AHPP_AI.Waypoint
             approachFinished[plid] = false;
             isFirstApproach[plid] = false;
             currentApproachPointIndex[plid] = 0;
+        }
+
+        /// <summary>
+        /// Clamp a stored waypoint index to the bounds of the active path for a specific AI.
+        /// </summary>
+        private int ClampIndex(byte plid, int storedIndex)
+        {
+            if (!aiPaths.TryGetValue(plid, out var path) || path == null || path.Count == 0)
+                return 0;
+
+            if (storedIndex < 0) return 0;
+            if (storedIndex >= path.Count) return path.Count - 1;
+            return storedIndex;
         }
 
         private void UpdateLookaheadIndex(byte plid)
