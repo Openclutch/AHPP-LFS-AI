@@ -59,6 +59,7 @@ namespace AHPP_AI.UI
         public const byte StopAllAisId = (byte)(ButtonIds.MainStart + 8);
         public const byte PitAllAisId = (byte)(ButtonIds.MainStart + 9);
         public const byte StartAutoAisId = (byte)(ButtonIds.MainStart + 65);
+        public const byte SpawnDelayInputId = (byte)(ButtonIds.MainStart + 72);
         public const byte AddAiDialogId = (byte)(ButtonIds.MainStart + 10);
         public const byte SpeedInputId = (byte)(ButtonIds.MainStart + 11);
         public const byte RecordingIntervalId = (byte)(ButtonIds.MainStart + 12);
@@ -146,6 +147,7 @@ namespace AHPP_AI.UI
             RenderTrackLayoutStatus();
 
             row = 70;
+            CreateInputButton(SpawnDelayInputId, RIGHT_COL, row, "Spawn Delay"); row += ROW_HEIGHT;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;

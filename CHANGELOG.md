@@ -1,5 +1,9 @@
 # Changelog
 
+- Reset AI pit recovery to reinitialize driver/warmup and respawn on the spawn route so bots don’t loop pitting and immediately re-enter recovery.
+- Held MCI-based engine-running detection during recovery so stalled bots finish the validation window and pit after repeated failures instead of looping restarts.
+- Expanded AI list button ID ranges so remove buttons no longer overflow the reserved range when more than 40 bots are online.
+- Added a spawn delay input above AI Count so `SpawnDelayMs` can be applied/persisted from config at runtime.
 - Added MCI-first telemetry with optional AII (`UseAiiTelemetry`) so control scheduling and spawn AII requests no longer assume AII traffic.
 - Added telemetry warmup gating and optional brake hold to prevent recovery/stall transitions during the first spawn seconds in MCI-only mode.
 - Added MCI-only engine-running detection (motion + spawn window) and surfaced telemetry staleness/recovery rates in control scheduler logs.

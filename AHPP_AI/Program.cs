@@ -828,6 +828,23 @@ namespace AHPP_AI
         /// </summary>
         private static void OnButtonType(IS_BTT btt)
         {
+            if (btt.ClickID == MainUI.SpawnDelayInputId)
+            {
+                if (int.TryParse(btt.Text, out var delayMs))
+                {
+                    var clampedDelay = Math.Max(0, delayMs);
+                    aiController.SetSpawnDelayMs(clampedDelay);
+                    appConfig.SetString("AI", "SpawnDelayMs", clampedDelay.ToString(), true);
+                    insim.SendPrivateMessage(btt.UCID, $"Spawn delay set to {clampedDelay} ms");
+                }
+                else
+                {
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid spawn delay in milliseconds.");
+                }
+
+                return;
+            }
+
             if (btt.ClickID == MainUI.AddAiDialogId)
             {
                 if (int.TryParse(btt.Text, out var count))

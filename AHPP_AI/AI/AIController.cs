@@ -107,6 +107,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, Vec> lastKnownPositions = new Dictionary<byte, Vec>();
         private readonly Dictionary<byte, DateTime> lastMovementTimes = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, DateTime> aiSpawnTimes = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, DateTime> recoveryGraceUntil = new Dictionary<byte, DateTime>();
         private CompCar[] allCars = Array.Empty<CompCar>();
         private volatile TrafficCarSnapshot[] trafficSnapshot = Array.Empty<TrafficCarSnapshot>();
         private bool debugUIInitialized;
@@ -1132,6 +1133,18 @@ namespace AHPP_AI.AI
 
             var name = aiNames.TryGetValue(plid, out var storedName) ? storedName : $"AI {plid}";
             var nameForCmd = FormatNameForCommand(name);
+
+            // Clear state so the AI restarts fresh after pitting.
+            driver.InitializeDriver(plid);
+            driver.StartWarmup(plid, config.TelemetryWarmupMs, config.WarmupBrakeHoldMs);
+            waypointFollower.SetPath(plid, pathManager.SpawnRoute);
+            currentRoute[plid] = "spawn";
+            spawnRouteSelections.Remove(plid);
+            lastKnownPositions.Remove(plid);
+            lastMovementTimes.Remove(plid);
+            aiSpawnTimes[plid] = DateTime.UtcNow;
+            recoveryGraceUntil[plid] = DateTime.UtcNow.AddMilliseconds(
+                config.TelemetryWarmupMs + config.WarmupBrakeHoldMs + config.RecoveryCooldownMs + 500);
 
             // Pitlane by name to keep the existing car choice intact.
             insim.Send(new IS_MST { Msg = $"/pitlane {nameForCmd}" });
@@ -2691,6 +2704,7 @@ namespace AHPP_AI.AI
             passByProximityStates.Remove(plid);
             lastKnownPositions.Remove(plid);
             lastMovementTimes.Remove(plid);
+            recoveryGraceUntil.Remove(plid);
             RemoveCarState(plid);
             mainUI.UpdateAIList(GetAiTuples());
             if (notifyPopulationManager)
@@ -3860,6 +3874,14 @@ namespace AHPP_AI.AI
         private bool DetermineEngineRunningFromMci(byte plid, CarSnapshot snapshot)
         {
             var now = DateTime.UtcNow;
+            if (recoveryGraceUntil.TryGetValue(plid, out var graceUntil))
+            {
+                if (now <= graceUntil)
+                    return true;
+
+                recoveryGraceUntil.Remove(plid);
+            }
+
             var speedRunning = snapshot.SpeedKmh > config.RecoveryLowSpeedThresholdKmh;
 
             if (!lastKnownPositions.TryGetValue(plid, out var lastPos))
@@ -4375,6 +4397,9 @@ namespace AHPP_AI.AI
         private void OnRecoveryStarted(byte plid, string reason)
         {
             recoveryEntryCount++;
+            var maxReverseMs = Math.Max(config.RecoveryShortReverseMs, config.RecoveryLongReverseMs);
+            var graceMs = maxReverseMs + config.RecoveryCooldownMs + config.RecoveryValidationWindowMs + 200;
+            recoveryGraceUntil[plid] = DateTime.UtcNow.AddMilliseconds(graceMs);
         }
 
         /// <summary>

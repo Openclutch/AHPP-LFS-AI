@@ -10,10 +10,10 @@ namespace AHPP_AI.UI
     {
         public const byte ReservedCeiling = 29; // Leave low IDs for LFS prompts
         public const byte MainStart = 30;
-        public const byte MainEnd = 119;
-        public const byte DynamicStart = 120;
-        public const byte DynamicEnd = 179;
-        public const byte RemoveStart = 180;
+        public const byte MainEnd = 109;
+        public const byte DynamicStart = 110;
+        public const byte DynamicEnd = 169;
+        public const byte RemoveStart = 170;
         public const byte RemoveEnd = 219;
         public const byte DebugStart = 220;
         public const byte DebugEnd = 239;
