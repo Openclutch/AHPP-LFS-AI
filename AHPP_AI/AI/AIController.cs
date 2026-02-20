@@ -75,6 +75,8 @@ namespace AHPP_AI.AI
         private int currentAiiIntervalHundredths;
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
+        private readonly object ownedSpawnLock = new object();
+        private readonly Queue<DateTime> pendingOwnedAiSpawns = new Queue<DateTime>();
         private readonly OutGauge outGauge;
         private readonly PerformanceTracker aiiPerformanceTracker = new PerformanceTracker();
         private readonly PerformanceTracker mciPerformanceTracker = new PerformanceTracker();
@@ -123,6 +125,7 @@ namespace AHPP_AI.AI
         private readonly Queue<byte> pendingAiiIntervalUpdates = new Queue<byte>();
         private readonly HashSet<byte> pendingAiiIntervalSet = new HashSet<byte>();
         private static readonly TimeSpan TelemetryStaleAfter = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan OwnedAiAdmissionWindow = TimeSpan.FromSeconds(20);
         private DateTime lastAiiRebalance = DateTime.MinValue;
 
         private enum PerformanceHealth
@@ -2564,10 +2567,54 @@ namespace AHPP_AI.AI
                     logger.LogWarning("Stopped spawning AI cars: InSim connection lost.");
                     return;
                 }
+                MarkOwnedAiSpawnRequested();
                 insim.Send(new IS_MST { Msg = "/ai" });
                 logger.Log($"Spawned AI {i + 1} of {count}");
                 if (i < count - 1)
                     await Task.Delay(delayMs).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Record a newly issued spawn request so only our spawned AI cars are admitted for control.
+        /// </summary>
+        private void MarkOwnedAiSpawnRequested()
+        {
+            lock (ownedSpawnLock)
+            {
+                PurgeExpiredOwnedSpawnRequests_NoLock(DateTime.UtcNow);
+                pendingOwnedAiSpawns.Enqueue(DateTime.UtcNow);
+            }
+        }
+
+        /// <summary>
+        /// Consume one pending owned spawn slot when an AI joins; returns false for unowned AI.
+        /// </summary>
+        private bool TryConsumeOwnedAiSpawnSlot()
+        {
+            lock (ownedSpawnLock)
+            {
+                PurgeExpiredOwnedSpawnRequests_NoLock(DateTime.UtcNow);
+                if (pendingOwnedAiSpawns.Count == 0)
+                    return false;
+
+                pendingOwnedAiSpawns.Dequeue();
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Drop stale spawn requests so delayed unrelated AI joins are never treated as owned.
+        /// </summary>
+        private void PurgeExpiredOwnedSpawnRequests_NoLock(DateTime nowUtc)
+        {
+            while (pendingOwnedAiSpawns.Count > 0)
+            {
+                var issued = pendingOwnedAiSpawns.Peek();
+                if ((nowUtc - issued) <= OwnedAiAdmissionWindow)
+                    break;
+
+                pendingOwnedAiSpawns.Dequeue();
             }
         }
 
@@ -2869,6 +2916,13 @@ namespace AHPP_AI.AI
             if ((npl.PType & PlayerTypes.PLT_AI) == PlayerTypes.PLT_AI &&
                 !npl.PName.Contains("Track")) // and not tracks
             {
+                if (!TryConsumeOwnedAiSpawnSlot())
+                {
+                    logger.Log(
+                        $"Ignoring non-owned AI join: PLID={npl.PLID}, UCID={npl.UCID}, Name={npl.PName}");
+                    return;
+                }
+
                 var plid = npl.PLID;
                 var isNewAi = false;
 

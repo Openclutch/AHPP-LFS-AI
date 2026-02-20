@@ -1,5 +1,7 @@
 # Changelog
 
+- Restricted AI control to bots spawned by this app by gating AI admission behind tracked `/ai` spawn requests, preventing takeover attempts on other admins' AI and startup errors from non-owned bots.
+
 - Reset AI pit recovery to reinitialize driver/warmup and respawn on the spawn route so bots don’t loop pitting and immediately re-enter recovery.
 - Held MCI-based engine-running detection during recovery so stalled bots finish the validation window and pit after repeated failures instead of looping restarts.
 - Expanded AI list button ID ranges so remove buttons no longer overflow the reserved range when more than 40 bots are online.

@@ -2,6 +2,9 @@
 
 This document outlines how the AI traffic system in `AHPP_AI` operates, what it expects from configuration, and how to drive or extend it. It is based on the current implementation in the codebase (InSim-based .NET 4.8, C# 8, x86).
 
+## Dev, to compile command
+- dotnet publish AHPP_AI/AHPP_AI.csproj -c Release -r win-x86 --self-contained false
+
 ## High-Level Flow
 - Program startup loads `config.ini`, initializes logging, route libraries, waypoint manager, and AI subsystems (steering, gearbox, lights, driver, population manager, and debug/UI helpers).
 - Recorded traffic routes are loaded up-front (main loop, pit/spawn, alternate main lane, optional detours). If a route is missing, a circular fallback path is generated around the spawn point.
