@@ -21,3 +21,7 @@ AHPP_TougeBattle/obj/Debug/build.force
 *.db
 dialogue.csv
 
+/.VSCodeCounter
+*.log
+*.tmp
+.DS_Store
