@@ -58,6 +58,7 @@ namespace AHPP_AI.Waypoint
         public void LoadRoutes(AIConfig config)
         {
             if (config == null) throw new ArgumentNullException(nameof(config));
+            ResolveConfiguredRouteNames(config);
 
             // Reset existing routes before reloading from disk.
             SpawnRoute = new List<Util.Waypoint>();
@@ -219,6 +220,83 @@ namespace AHPP_AI.Waypoint
             }
 
             ValidateRoutes(config, spawnMeta, mainMeta);
+        }
+
+        /// <summary>
+        /// Resolve the active spawn, main, and alternate route names from the current layout using file names.
+        /// </summary>
+        private void ResolveConfiguredRouteNames(AIConfig config)
+        {
+            var recordedRoutes = routeLibrary.ListRoutes();
+            if (recordedRoutes == null || recordedRoutes.Count == 0)
+                return;
+
+            config.SpawnRouteName = ResolvePrimaryRouteName(
+                config.SpawnRouteName,
+                recordedRoutes,
+                route => route.Metadata?.Type == RouteType.PitEntry,
+                route => route.Metadata?.Name?.StartsWith("pit_", StringComparison.OrdinalIgnoreCase) == true,
+                "spawn");
+
+            config.MainRouteName = ResolvePrimaryRouteName(
+                config.MainRouteName,
+                recordedRoutes,
+                route => route.Metadata?.Type == RouteType.MainLoop,
+                route => route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
+                         route.Metadata.Name.EndsWith("_loop", StringComparison.OrdinalIgnoreCase),
+                "main");
+
+            config.MainAlternateRouteName = ResolvePrimaryRouteName(
+                config.MainAlternateRouteName,
+                recordedRoutes,
+                route => route.Metadata?.Type == RouteType.AlternateMain,
+                route => route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
+                         route.Metadata.Name.IndexOf("_alt", StringComparison.OrdinalIgnoreCase) >= 0,
+                "alternate main",
+                config.MainRouteName);
+        }
+
+        /// <summary>
+        /// Resolve a configured primary route name against the current layout and fall back to convention-based file names.
+        /// </summary>
+        private string ResolvePrimaryRouteName(
+            string configuredName,
+            List<RecordedRoute> recordedRoutes,
+            Func<RecordedRoute, bool> typePredicate,
+            Func<RecordedRoute, bool> conventionPredicate,
+            string label,
+            string? excludedName = null)
+        {
+            var normalizedConfigured = routeLibrary.NormalizeRouteName(configuredName);
+            var matchingConfigured = recordedRoutes.FirstOrDefault(route =>
+                RouteMatchesName(route, normalizedConfigured));
+            if (matchingConfigured != null)
+                return matchingConfigured.Metadata?.Name ?? normalizedConfigured;
+
+            var resolved = recordedRoutes.FirstOrDefault(route =>
+                               typePredicate(route) &&
+                               !RouteMatchesName(route, excludedName)) ??
+                           recordedRoutes.FirstOrDefault(route =>
+                               conventionPredicate(route) &&
+                               !RouteMatchesName(route, excludedName));
+
+            if (resolved?.Metadata?.Name == null)
+                return normalizedConfigured;
+
+            logger.Log(
+                $"Resolved {label} route {normalizedConfigured} -> {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            return resolved.Metadata.Name;
+        }
+
+        /// <summary>
+        /// Check whether a recorded route matches a supplied logical name.
+        /// </summary>
+        private static bool RouteMatchesName(RecordedRoute? route, string? routeName)
+        {
+            if (route == null || route.Metadata == null || string.IsNullOrWhiteSpace(routeName))
+                return false;
+
+            return route.Metadata.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

@@ -41,12 +41,18 @@ namespace AHPP_AI.UI
         private const byte PERFORMANCE_STATUS_ROW = 100;
         private const byte TRACK_LAYOUT_STATUS_ROW = (byte)(PERFORMANCE_STATUS_ROW + ROW_HEIGHT);
         private const byte REMOVE_BTN_W = 5;
+        private const byte AI_LABEL_W = 14;
+        private const byte AI_MODE_W = 8;
+        private const byte AI_MODE_SPACING = 1;
+        private const byte AI_LIST_START_ROW = (byte)(5 + ROW_HEIGHT * 4);
         private const byte RECORD_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte RECORD_LABEL_W = BTN_W;
         private const byte VISUALIZER_LABEL_ROW = (byte)(VISUAL_ROUTE_START_ROW - ROW_HEIGHT - 1);
         private const byte LAYOUT_EDIT_ROW = 190;
         private const byte LAYOUT_STATUS_ROW = 195;
         private const byte LAYOUT_STATUS_W = 30;
+        private const byte TRACK_LAYOUT_OPTION_START_ID = (byte)(ButtonIds.MainStart + 73);
+        private const byte TRACK_LAYOUT_OPTION_MAX_COUNT = 7;
 
         public const byte RecordToggleId = (byte)(ButtonIds.MainStart + 0);
         public const byte ReloadRoutesId = (byte)(ButtonIds.MainStart + 1);
@@ -90,10 +96,31 @@ namespace AHPP_AI.UI
             public bool HasRecording { get; set; }
         }
 
+        /// <summary>
+        /// Track layout option shown beneath the active track button.
+        /// </summary>
+        private class TrackLayoutOptionInfo
+        {
+            public byte Id { get; set; }
+            public string Name { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        /// Single AI row shown in the right-hand list.
+        /// </summary>
+        public struct AiListEntry
+        {
+            public byte Id { get; set; }
+            public string Name { get; set; }
+            public string ModeLabel { get; set; }
+        }
+
         private readonly Dictionary<byte, byte> aiLabelButtons = new Dictionary<byte, byte>(); // label button ID -> AI ID
+        private readonly Dictionary<byte, byte> aiModeButtons = new Dictionary<byte, byte>(); // mode button ID -> AI ID
         private readonly Dictionary<byte, byte> aiRemoveButtons = new Dictionary<byte, byte>(); // remove button ID -> AI ID
         private readonly List<RouteButtonInfo> routeButtons = new List<RouteButtonInfo>();
-        private readonly List<(byte id, string name)> lastAiSnapshot = new List<(byte id, string name)>();
+        private readonly List<TrackLayoutOptionInfo> trackLayoutButtons = new List<TrackLayoutOptionInfo>();
+        private readonly List<AiListEntry> lastAiSnapshot = new List<AiListEntry>();
         private const byte ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 21);
         private const byte ROUTE_BUTTON_MAX_COUNT = 8;
         private const byte VISUAL_ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 40);
@@ -119,6 +146,8 @@ namespace AHPP_AI.UI
         private bool debugButtonsVisible = true;
         private string performanceStatusLabel = "AI Perf: waiting";
         private string trackLayoutStatusLabel = "Track: pending";
+        private string selectedTrackLayoutName = "DefaultLayout";
+        private bool trackLayoutDropdownExpanded;
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -181,7 +210,7 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Update the AI list on the right panel.
         /// </summary>
-        public void UpdateAIList(IEnumerable<(byte id, string name)> ai)
+        public void UpdateAIList(IEnumerable<AiListEntry> ai)
         {
             lastAiSnapshot.Clear();
             if (ai != null)
@@ -273,6 +302,14 @@ namespace AHPP_AI.UI
         public bool TryGetAiForLabelButton(byte clickId, out byte aiId)
         {
             return aiLabelButtons.TryGetValue(clickId, out aiId);
+        }
+
+        /// <summary>
+        /// Map an AI mode ClickID to the PLID it represents.
+        /// </summary>
+        public bool TryGetAiForModeButton(byte clickId, out byte aiId)
+        {
+            return aiModeButtons.TryGetValue(clickId, out aiId);
         }
 
         /// <summary>
@@ -570,6 +607,24 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Map a track-layout option button ClickID back to the layout name it represents.
+        /// </summary>
+        public bool TryGetTrackLayoutNameForButton(byte clickId, out string layoutName)
+        {
+            foreach (var button in trackLayoutButtons)
+            {
+                if (button.Id != clickId)
+                    continue;
+
+                layoutName = button.Name;
+                return true;
+            }
+
+            layoutName = string.Empty;
+            return false;
+        }
+
+        /// <summary>
         /// Map a visualization route button ClickID back to the route name it represents.
         /// </summary>
         public bool TryGetVisualizationRouteNameForButton(byte clickId, out string routeName)
@@ -652,7 +707,66 @@ namespace AHPP_AI.UI
         {
             var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
             var layout = string.IsNullOrWhiteSpace(layoutName) ? "DefaultLayout" : layoutName.Trim();
+            selectedTrackLayoutName = layout;
             trackLayoutStatusLabel = $"Track: {track} / {layout}";
+            RenderTrackLayoutStatus();
+        }
+
+        /// <summary>
+        /// Update the selectable layouts shown beneath the active track button.
+        /// </summary>
+        public void SetTrackLayoutOptions(IEnumerable<string> layouts, string selectedLayout)
+        {
+            selectedTrackLayoutName = string.IsNullOrWhiteSpace(selectedLayout) ? "DefaultLayout" : selectedLayout.Trim();
+            var unique = new List<string>();
+
+            if (layouts != null)
+            {
+                foreach (var layout in layouts)
+                {
+                    if (string.IsNullOrWhiteSpace(layout))
+                        continue;
+
+                    var trimmed = layout.Trim();
+                    if (!unique.Exists(existing => existing.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
+                        unique.Add(trimmed);
+                }
+            }
+
+            unique.Sort(StringComparer.OrdinalIgnoreCase);
+            trackLayoutButtons.Clear();
+
+            byte id = TRACK_LAYOUT_OPTION_START_ID;
+            foreach (var layout in unique)
+            {
+                if (trackLayoutButtons.Count >= TRACK_LAYOUT_OPTION_MAX_COUNT)
+                    break;
+
+                trackLayoutButtons.Add(new TrackLayoutOptionInfo
+                {
+                    Id = id,
+                    Name = layout
+                });
+                id++;
+            }
+
+            if (trackLayoutButtons.Count == 0)
+                trackLayoutDropdownExpanded = false;
+
+            if (!uiInitialized || uiHidden) return;
+
+            RenderTrackLayoutStatus();
+        }
+
+        /// <summary>
+        /// Toggle the visibility of the layout list beneath the track status label.
+        /// </summary>
+        public void ToggleTrackLayoutDropdown()
+        {
+            if (trackLayoutButtons.Count == 0)
+                return;
+
+            trackLayoutDropdownExpanded = !trackLayoutDropdownExpanded;
             RenderTrackLayoutStatus();
         }
 
@@ -692,7 +806,30 @@ namespace AHPP_AI.UI
 
             DeleteButton(TrackLayoutStatusId);
             CreateButton(TrackLayoutStatusId, trackLayoutStatusLabel, LEFT_COL, TRACK_LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
-                ROW_HEIGHT, false);
+                ROW_HEIGHT);
+            RenderTrackLayoutOptions();
+        }
+
+        /// <summary>
+        /// Render the available layouts stacked beneath the track status button when expanded.
+        /// </summary>
+        private void RenderTrackLayoutOptions()
+        {
+            foreach (var option in trackLayoutButtons)
+                DeleteButton(option.Id);
+
+            if (!trackLayoutDropdownExpanded)
+                return;
+
+            for (var i = 0; i < trackLayoutButtons.Count; i++)
+            {
+                var option = trackLayoutButtons[i];
+                var top = (byte)(TRACK_LAYOUT_STATUS_ROW + ROW_HEIGHT * (i + 1));
+                var text = option.Name.Equals(selectedTrackLayoutName, StringComparison.OrdinalIgnoreCase)
+                    ? $"^2> {option.Name}"
+                    : option.Name;
+                CreateButton(option.Id, text, LEFT_COL, top, LAYOUT_STATUS_W, ROW_HEIGHT);
+            }
         }
 
         /// <summary>
@@ -734,29 +871,38 @@ namespace AHPP_AI.UI
         /// <summary>
         /// Render the AI list using the latest snapshot of AI ids and names.
         /// </summary>
-        private void RenderAIList(IEnumerable<(byte id, string name)> ai)
+        private void RenderAIList(IEnumerable<AiListEntry> ai)
         {
             if (!uiInitialized || uiHidden) return;
 
-            byte row = (byte)(5 + ROW_HEIGHT * 4);
+            byte row = AI_LIST_START_ROW;
             foreach (var buttonId in aiLabelButtons.Keys) DeleteButton(buttonId);
+            foreach (var buttonId in aiModeButtons.Keys) DeleteButton(buttonId);
             foreach (var b in aiRemoveButtons.Keys) DeleteButton(b);
             aiLabelButtons.Clear();
+            aiModeButtons.Clear();
             aiRemoveButtons.Clear();
 
             byte index = 0;
-            foreach (var (id, name) in ai)
+            foreach (var entry in ai)
             {
-                var labelId = ButtonIds.Dynamic(index);
-                var removeId = ButtonIds.Remove(index);
+                if (index >= GetAiListCapacity())
+                    break;
+
+                var labelId = ButtonIds.AiLabel(index);
+                var modeId = ButtonIds.AiMode(index);
+                var removeId = ButtonIds.AiRemove(index);
                 var top = (byte)(row + ROW_HEIGHT * index);
                 var removeLeft = (byte)Math.Max(0, AI_LIST_COL - REMOVE_BTN_W - 2);
+                var modeLeft = (byte)(AI_LIST_COL + AI_LABEL_W + AI_MODE_SPACING);
 
                 CreateButton(removeId, "X", removeLeft, top, REMOVE_BTN_W);
-                CreateButton(labelId, $"{name}", AI_LIST_COL, top);
+                CreateButton(labelId, entry.Name ?? string.Empty, AI_LIST_COL, top, AI_LABEL_W);
+                CreateButton(modeId, entry.ModeLabel ?? "Cruise", modeLeft, top, AI_MODE_W);
 
-                aiLabelButtons[labelId] = id;
-                aiRemoveButtons[removeId] = id;
+                aiLabelButtons[labelId] = entry.Id;
+                aiModeButtons[modeId] = entry.Id;
+                aiRemoveButtons[removeId] = entry.Id;
                 index++;
             }
         }
@@ -813,6 +959,17 @@ namespace AHPP_AI.UI
             var availableRows = (bottomRow - VISUAL_ROUTE_START_ROW) / ROW_HEIGHT;
             if (availableRows <= 0) availableRows = 1;
             return availableRows;
+        }
+
+        /// <summary>
+        /// Determine how many AI rows fit on screen while preserving dedicated label, mode, and remove IDs.
+        /// </summary>
+        private int GetAiListCapacity()
+        {
+            var bottomRow = 200 - ROW_HEIGHT;
+            var availableRows = (bottomRow - AI_LIST_START_ROW) / ROW_HEIGHT + 1;
+            if (availableRows <= 0) availableRows = 1;
+            return Math.Min(35, availableRows);
         }
     }
 }

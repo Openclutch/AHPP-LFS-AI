@@ -13,6 +13,12 @@ namespace AHPP_AI.AI
             Recorded
         }
 
+        public enum DrivingMode
+        {
+            Cruise,
+            Race
+        }
+
         public enum PassByReactionMode
         {
             Flash,
@@ -20,10 +26,53 @@ namespace AHPP_AI.AI
             FlashAndHorn
         }
 
+        /// <summary>
+        ///     Maps a physical pit spawn slot to a logical AI spawn area tag.
+        /// </summary>
+        public sealed class PitSpawnSlotConfig
+        {
+            public int SlotNumber { get; set; }
+            public string Tag { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
+        }
+
+        /// <summary>
+        ///     Describes the setup and colour to apply when spawning a specific mod.
+        /// </summary>
+        public sealed class PitSpawnModPresetConfig
+        {
+            public int Setup { get; set; }
+            public int Colour { get; set; }
+        }
+
+        /// <summary>
+        ///     Describes the AI capacity, routes, and allowed mods for a logical pit spawn area.
+        /// </summary>
+        public sealed class PitSpawnAreaConfig
+        {
+            public string Tag { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
+            public int MaxAiCars { get; set; }
+            public List<string> RouteNames { get; set; } = new List<string>();
+            public List<string> AllowedMods { get; set; } = new List<string>();
+            public Dictionary<string, PitSpawnModPresetConfig> ModPresets { get; set; } =
+                new Dictionary<string, PitSpawnModPresetConfig>(StringComparer.OrdinalIgnoreCase);
+            public List<int> SlotNumbers { get; set; } = new List<int>();
+        }
+
         // Basic AI configuration
         public int NumberOfAIs { get; set; } = 0;
 
         public int WaitTimeToSpawn { get; set; } = 10000;
+
+        // Pit spawn settings
+        public int AiReservedRangeStart { get; set; } = 41;
+        public int AiReservedRangeEnd { get; set; } = 48;
+        public double PitSpawnOccupancyDistanceMeters { get; set; } = 5.0;
+        public Dictionary<int, PitSpawnSlotConfig> PitSpawnSlots { get; set; } =
+            new Dictionary<int, PitSpawnSlotConfig>();
+        public Dictionary<string, PitSpawnAreaConfig> PitSpawnAreas { get; set; } =
+            new Dictionary<string, PitSpawnAreaConfig>(StringComparer.OrdinalIgnoreCase);
 
         // Population manager settings
         public int MaxPlayers { get; set; } = 48;
@@ -105,6 +154,17 @@ namespace AHPP_AI.AI
         public double TrafficEmergencyTtcSeconds { get; set; } = 1.0;
         public int SpawnMergeHoldLookaheadWaypoints { get; set; } = 3;
         public double SpawnMergeHoldDistanceMeters { get; set; } = 15.0;
+
+        // Race mode settings
+        public bool RaceUseAutomaticTransmission { get; set; } = true;
+        public double TrackSpawnScoreAdvantage { get; set; } = 8.0;
+        public double RaceWaypointSpeedFactor { get; set; } = 1.12;
+        public double RaceWaypointSpeedOffsetKmh { get; set; } = 8.0;
+        public double RaceWaypointSpeedCapKmh { get; set; } = 260.0;
+        public double RaceLightTurnSpeedCapKmh { get; set; } = 120.0;
+        public double RaceMediumTurnSpeedCapKmh { get; set; } = 85.0;
+        public double RaceHardTurnSpeedCapKmh { get; set; } = 50.0;
+        public double RaceUpshiftThresholdMultiplier { get; set; } = 1.25;
 
         // Throttle and brake settings
         public int ThrottleBase { get; set; } = 0;

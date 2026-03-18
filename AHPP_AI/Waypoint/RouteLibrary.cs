@@ -148,6 +148,11 @@ namespace AHPP_AI.Waypoint
         public RouteType GuessRouteType(string name)
         {
             var lower = (name ?? string.Empty).ToLowerInvariant();
+            if (lower.StartsWith("pit_")) return RouteType.PitEntry;
+            if (lower.StartsWith("route_") &&
+                (lower.Contains("_alt") || lower.EndsWith("alt") || lower.Contains("inner")))
+                return RouteType.AlternateMain;
+            if (lower.StartsWith("route_")) return RouteType.MainLoop;
             if (lower.Contains("alt") || lower.Contains("inner")) return RouteType.AlternateMain;
             if (lower.Contains("main")) return RouteType.MainLoop;
             if (lower.Contains("pit") || lower.Contains("spawn")) return RouteType.PitEntry;
@@ -250,10 +255,8 @@ namespace AHPP_AI.Waypoint
             if (route == null) return CreateTemplate(fallbackName);
 
             if (route.Metadata == null) route.Metadata = BuildMetadata(fallbackName, GuessRouteType(fallbackName));
-            if (string.IsNullOrWhiteSpace(route.Metadata.Name))
-                route.Metadata.Name = string.IsNullOrWhiteSpace(fallbackName) ? "route" : fallbackName;
-
-            route.Metadata.Name = NormalizeRouteName(route.Metadata.Name);
+            route.Metadata.Name = NormalizeRouteName(
+                string.IsNullOrWhiteSpace(fallbackName) ? route.Metadata.Name : fallbackName);
 
             route.Metadata.Track = trackCode;
             route.Metadata.Layout = layoutName;
@@ -432,6 +435,40 @@ namespace AHPP_AI.Waypoint
             }
 
             return routes;
+        }
+
+        /// <summary>
+        /// Enumerate available layout folders for a specific track based on the recorded route directory structure.
+        /// </summary>
+        public List<string> ListLayouts(string track)
+        {
+            var layouts = new List<string>();
+            var safeTrack = string.IsNullOrWhiteSpace(track) ? "UnknownTrack" : SanitizeName(track);
+            var trackPath = Path.Combine(routesRoot, safeTrack);
+
+            try
+            {
+                if (!Directory.Exists(trackPath))
+                    return layouts;
+
+                foreach (var directory in Directory.GetDirectories(trackPath, "*", SearchOption.TopDirectoryOnly))
+                {
+                    var name = Path.GetFileName(directory);
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+
+                    if (!layouts.Exists(existing => existing.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                        layouts.Add(name);
+                }
+
+                layouts.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                logger.LogException(ex, $"Failed to enumerate layouts for track {safeTrack}");
+            }
+
+            return layouts;
         }
     }
 }

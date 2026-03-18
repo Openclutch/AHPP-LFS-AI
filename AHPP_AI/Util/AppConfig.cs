@@ -88,6 +88,25 @@ namespace AHPP_AI.Util
         }
 
         /// <summary>
+        /// Return the section names currently loaded from the INI file.
+        /// </summary>
+        public IEnumerable<string> GetSectionNames()
+        {
+            return sections.Keys;
+        }
+
+        /// <summary>
+        /// Return a copy of the key/value pairs for a section.
+        /// </summary>
+        public Dictionary<string, string> GetSectionEntries(string section)
+        {
+            if (sections.TryGetValue(section, out var entries))
+                return new Dictionary<string, string>(entries, StringComparer.OrdinalIgnoreCase);
+
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Update a configuration value and optionally persist it to disk.
         /// </summary>
         public void SetString(string section, string key, string value, bool persist = false)

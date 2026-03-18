@@ -162,6 +162,15 @@ namespace AHPP_AI
         private static readonly double trafficEmergencyTtcSeconds;
         private static readonly int spawnMergeHoldLookaheadWaypoints;
         private static readonly double spawnMergeHoldDistanceMeters;
+        private static readonly bool raceUseAutomaticTransmission;
+        private static readonly double trackSpawnScoreAdvantage;
+        private static readonly double raceWaypointSpeedFactor;
+        private static readonly double raceWaypointSpeedOffsetKmh;
+        private static readonly double raceWaypointSpeedCapKmh;
+        private static readonly double raceLightTurnSpeedCapKmh;
+        private static readonly double raceMediumTurnSpeedCapKmh;
+        private static readonly double raceHardTurnSpeedCapKmh;
+        private static readonly double raceUpshiftThresholdMultiplier;
         private static readonly bool passByReactionEnabled;
         private static readonly double passByReactionChance;
         private static readonly double passBySpeedThresholdKmh;
@@ -186,11 +195,12 @@ namespace AHPP_AI
         private static readonly string buildVersion;
         private static readonly TimeSpan InitialRouteReloadDelay = TimeSpan.FromSeconds(1);
         private static readonly TimeSpan TrackLayoutRetryInterval = TimeSpan.FromSeconds(1);
+        private const string TrackLayoutDefaultsSection = "TrackLayoutDefaults";
         private const int TrackLayoutRetryAttempts = 5;
         private static CancellationTokenSource? initialRouteReloadCts;
         private static CancellationTokenSource? trackLayoutRetryCts;
         private static bool trackInfoReceived;
-        private static bool layoutInfoReceived;
+        private static bool layoutPacketReceived;
 
         /// <summary>
         ///     Static constructor for initialization of components
@@ -297,6 +307,17 @@ namespace AHPP_AI
             trafficEmergencyTtcSeconds = appConfig.GetDouble("AI", "TrafficEmergencyTtcSeconds", 1.0);
             spawnMergeHoldLookaheadWaypoints = appConfig.GetInt("AI", "SpawnMergeHoldLookaheadWaypoints", 3);
             spawnMergeHoldDistanceMeters = appConfig.GetDouble("AI", "SpawnMergeHoldDistanceMeters", 15.0);
+            var raceSection = "RaceMode";
+            raceUseAutomaticTransmission = appConfig.GetBool(raceSection, "UseAutomaticTransmission", true);
+            trackSpawnScoreAdvantage = appConfig.GetDouble(raceSection, "TrackSpawnScoreAdvantage", 8.0);
+            raceWaypointSpeedFactor = appConfig.GetDouble(raceSection, "WaypointSpeedFactor", 1.12);
+            raceWaypointSpeedOffsetKmh = appConfig.GetDouble(raceSection, "WaypointSpeedOffsetKmh", 8.0);
+            raceWaypointSpeedCapKmh = appConfig.GetDouble(raceSection, "WaypointSpeedCapKmh", 260.0);
+            raceLightTurnSpeedCapKmh = appConfig.GetDouble(raceSection, "LightTurnSpeedCapKmh", 120.0);
+            raceMediumTurnSpeedCapKmh = appConfig.GetDouble(raceSection, "MediumTurnSpeedCapKmh", 85.0);
+            raceHardTurnSpeedCapKmh = appConfig.GetDouble(raceSection, "HardTurnSpeedCapKmh", 50.0);
+            raceUpshiftThresholdMultiplier =
+                appConfig.GetDouble(raceSection, "UpshiftThresholdMultiplier", 1.25);
             recoveryShortReverseMs = appConfig.GetInt("AI", "RecoveryShortReverseMs", 1200);
             recoveryLongReverseMs = appConfig.GetInt("AI", "RecoveryLongReverseMs", 2000);
             recoveryCooldownMs = appConfig.GetInt("AI", "RecoveryCooldownMs", 750);
@@ -425,6 +446,16 @@ namespace AHPP_AI
                 gearDownshiftHysteresisKmh,
                 gearShiftMinIntervalMs,
                 gearSpeedThresholdsKmh);
+            aiController.ConfigureRaceMode(
+                raceUseAutomaticTransmission,
+                trackSpawnScoreAdvantage,
+                raceWaypointSpeedFactor,
+                raceWaypointSpeedOffsetKmh,
+                raceWaypointSpeedCapKmh,
+                raceLightTurnSpeedCapKmh,
+                raceMediumTurnSpeedCapKmh,
+                raceHardTurnSpeedCapKmh,
+                raceUpshiftThresholdMultiplier);
             aiController.ConfigureCollisionDetection(
                 collisionDetectionRangeMeters,
                 collisionDetectionAngleDegrees,
@@ -645,26 +676,46 @@ namespace AHPP_AI
 
             aiController.SyncLayoutToggleState();
 
-            // Keep program running and listen for the 'q' key
-            logger.Log("Program is running. Press 'q' to exit cleanly or Ctrl+C to force exit.");
-
-                // Create a thread to listen for the 'q' key
-                var keyListenerThread = new Thread(() =>
+                // Keep program running and listen for the 'q' key when console input is available.
+                if (IsConsoleKeyInputAvailable())
                 {
-                    while (true)
-                    {
-                        var key = Console.ReadKey(true);
-                        if (key.KeyChar == 'q' || key.KeyChar == 'Q')
-                        {
-                            PerformCleanShutdown();
-                            break;
-                        }
-                    }
-                });
+                    logger.Log("Program is running. Press 'q' to exit cleanly or Ctrl+C to force exit.");
 
-                // Start the key listener thread as a background thread
-                keyListenerThread.IsBackground = true;
-                keyListenerThread.Start();
+                    // Create a thread to listen for the 'q' key
+                    var keyListenerThread = new Thread(() =>
+                    {
+                        while (true)
+                        {
+                            try
+                            {
+                                var key = Console.ReadKey(true);
+                                if (key.KeyChar == 'q' || key.KeyChar == 'Q')
+                                {
+                                    PerformCleanShutdown();
+                                    break;
+                                }
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                logger.Log("Console key listener stopped because interactive console input is unavailable.");
+                                break;
+                            }
+                            catch (IOException)
+                            {
+                                logger.Log("Console key listener stopped because console input is unavailable.");
+                                break;
+                            }
+                        }
+                    });
+
+                    // Start the key listener thread as a background thread
+                    keyListenerThread.IsBackground = true;
+                    keyListenerThread.Start();
+                }
+                else
+                {
+                    logger.Log("Program is running without interactive console input. Use Ctrl+C or stop the process to exit.");
+                }
 
                 // Wait indefinitely
                 Thread.Sleep(Timeout.Infinite);
@@ -672,9 +723,41 @@ namespace AHPP_AI
             catch (Exception ex)
             {
                 logger.LogException(ex, "Unhandled exception in Main");
-                Console.WriteLine("Press any key to exit...");
-                Console.ReadKey();
+                WaitForExitKeyIfAvailable();
             }
+        }
+
+        /// <summary>
+        ///     Determine whether the current process can safely read key input from an attached console.
+        /// </summary>
+        private static bool IsConsoleKeyInputAvailable()
+        {
+            try
+            {
+                return Environment.UserInteractive && !Console.IsInputRedirected;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        ///     Wait for a key press after an unhandled exception only when interactive console input is available.
+        /// </summary>
+        private static void WaitForExitKeyIfAvailable()
+        {
+            if (!IsConsoleKeyInputAvailable())
+            {
+                return;
+            }
+
+            Console.WriteLine("Press any key to exit...");
+            Console.ReadKey(true);
         }
 
         /// <summary>
@@ -739,6 +822,12 @@ namespace AHPP_AI
         /// </summary>
         private static void OnButtonClick(IS_BTC btc)
         {
+            if (aiController.TryGetTrackLayoutNameForButton(btc.ClickID, out var selectedLayoutName))
+            {
+                ApplyTrackLayoutPreference(selectedLayoutName);
+                return;
+            }
+
             if (aiController.TryGetRouteNameForButton(btc.ClickID, out var selectedRoute))
             {
                 SetRecordingRoute(selectedRoute);
@@ -748,6 +837,11 @@ namespace AHPP_AI
             }
 
             if (aiController.TrySelectAiFromLabelButton(btc.ClickID))
+            {
+                return;
+            }
+
+            if (aiController.TrySetAiRaceModeFromButton(btc.ClickID))
             {
                 return;
             }
@@ -790,6 +884,9 @@ namespace AHPP_AI
                     break;
                 case MainUI.RefreshSelectionFeedId:
                     RequestLayoutSelectionFeed();
+                    break;
+                case MainUI.TrackLayoutStatusId:
+                    aiController.ToggleTrackLayoutDropdown();
                     break;
                 case MainUI.AddRouteButtonId:
                     SetRecordingRoute(pendingRouteName);
@@ -920,7 +1017,7 @@ namespace AHPP_AI
             logger.Log($"Initializing InSim connection to {currentHost}:{port}");
             UpdateInSimStatus("InSim: connecting");
             trackInfoReceived = false;
-            layoutInfoReceived = false;
+            layoutPacketReceived = false;
 
             try
             {
@@ -1102,6 +1199,58 @@ namespace AHPP_AI
         }
 
         /// <summary>
+        /// Resolve the preferred fallback layout for a track using persisted defaults and recorded route folders.
+        /// </summary>
+        private static string ResolvePreferredLayoutForTrack(string trackCode, string fallbackLayout)
+        {
+            var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
+            var fallback = string.IsNullOrWhiteSpace(fallbackLayout) ? "DefaultLayout" : fallbackLayout.Trim();
+            var configured = appConfig.GetString(TrackLayoutDefaultsSection, track, string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(configured))
+                return configured;
+
+            var availableLayouts = routeLibrary.ListLayouts(track);
+            var defaultLayout = availableLayouts.FirstOrDefault(layout =>
+                layout.Equals("DefaultLayout", StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(defaultLayout))
+                return defaultLayout;
+
+            if (availableLayouts.Count == 1)
+                return availableLayouts[0];
+
+            return fallback;
+        }
+
+        /// <summary>
+        /// Persist a selected layout as the preferred default for the active track and apply it immediately.
+        /// </summary>
+        private static void ApplyTrackLayoutPreference(string selectedLayout)
+        {
+            var track = string.IsNullOrWhiteSpace(currentTrackCode) ? "UnknownTrack" : currentTrackCode.Trim();
+            if (track.Equals("UnknownTrack", StringComparison.OrdinalIgnoreCase))
+            {
+                insim.SendPrivateMessage("Track is not known yet, so a default layout cannot be saved.");
+                return;
+            }
+
+            var availableLayouts = routeLibrary.ListLayouts(track);
+            var matchedLayout = availableLayouts.FirstOrDefault(layout =>
+                layout.Equals(selectedLayout, StringComparison.OrdinalIgnoreCase));
+
+            if (string.IsNullOrWhiteSpace(matchedLayout))
+            {
+                insim.SendPrivateMessage($"Layout {selectedLayout} is not available under Routes/{track}.");
+                aiController.SetTrackLayoutOptions(availableLayouts, currentLayoutName);
+                return;
+            }
+
+            appConfig.SetString(TrackLayoutDefaultsSection, track, matchedLayout, true);
+            UpdateRouteContext(track, matchedLayout);
+            insim.SendPrivateMessage($"Default layout for {track} set to {matchedLayout}.");
+        }
+
+        /// <summary>
         /// Parse comma-separated gear speed thresholds (km/h) from configuration.
         /// </summary>
         private static double[] ParseGearSpeedThresholds(string rawThresholds)
@@ -1146,15 +1295,20 @@ namespace AHPP_AI
         {
             var track = string.IsNullOrWhiteSpace(trackCode) ? "UnknownTrack" : trackCode.Trim();
             var layout = string.IsNullOrWhiteSpace(layoutName) ? "DefaultLayout" : layoutName.Trim();
+            var availableLayouts = routeLibrary.ListLayouts(track);
 
             if (track.Equals(currentTrackCode, StringComparison.OrdinalIgnoreCase) &&
                 layout.Equals(currentLayoutName, StringComparison.OrdinalIgnoreCase))
+            {
+                aiController.SetTrackLayoutOptions(availableLayouts, layout);
                 return;
+            }
 
             currentTrackCode = track;
             currentLayoutName = layout;
 
             aiController.SetTrackLayoutContext(currentTrackCode, currentLayoutName);
+            aiController.SetTrackLayoutOptions(availableLayouts, currentLayoutName);
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
             logger.Log($"Route context changed to Track={currentTrackCode}, Layout={currentLayoutName}");
         }
@@ -1180,18 +1334,25 @@ namespace AHPP_AI
         {
             var track = (sta.Track ?? string.Empty).Trim();
             trackInfoReceived |= !string.IsNullOrWhiteSpace(track);
-            UpdateRouteContext(track, currentLayoutName);
+            var preferredLayout = ResolvePreferredLayoutForTrack(track, currentLayoutName);
+            UpdateRouteContext(track, preferredLayout);
             StopTrackLayoutDiscoveryIfSatisfied();
         }
 
         /// <summary>
-        /// Handle AutoX info packets to learn the current layout name.
+        /// Handle AutoX info packets so the current layout name can be used when LFS provides it.
         /// </summary>
         private static void OnAutoXInfo(IS_AXI axi)
         {
             var layout = (axi.LName ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(layout)) layout = currentLayoutName;
-            layoutInfoReceived |= !string.IsNullOrWhiteSpace(axi.LName);
+            layoutPacketReceived = true;
+
+            if (string.IsNullOrWhiteSpace(layout))
+            {
+                logger.Log("Received IS_AXI without a layout name; keeping the current layout context.");
+                layout = currentLayoutName;
+            }
+
             UpdateRouteContext(currentTrackCode, layout);
             StopTrackLayoutDiscoveryIfSatisfied();
         }
@@ -1257,7 +1418,7 @@ namespace AHPP_AI
         }
 
         /// <summary>
-        /// Retry requesting track/layout data until both arrive or attempts are exhausted.
+        /// Retry requesting track/layout data until both packets arrive or attempts are exhausted.
         /// </summary>
         private static void StartTrackLayoutDiscovery()
         {
@@ -1271,7 +1432,7 @@ namespace AHPP_AI
                 var attempts = 0;
                 while (!token.IsCancellationRequested &&
                        attempts < TrackLayoutRetryAttempts &&
-                       (!trackInfoReceived || !layoutInfoReceived))
+                       (!trackInfoReceived || !layoutPacketReceived))
                 {
                     attempts++;
                     RequestTrackAndLayoutInfo();
@@ -1286,20 +1447,20 @@ namespace AHPP_AI
                     }
                 }
 
-                if (!token.IsCancellationRequested && (!trackInfoReceived || !layoutInfoReceived))
+                if (!token.IsCancellationRequested && (!trackInfoReceived || !layoutPacketReceived))
                 {
                     logger.LogWarning(
-                        "Track/layout info not received after retries; routes may fall back to the default context until layout data arrives.");
+                        "Track/layout packets not received after retries; routes may fall back to the default context until discovery completes.");
                 }
             }, token);
         }
 
         /// <summary>
-        /// Stop the retry loop once both track and layout data have been observed.
+        /// Stop the retry loop once both track and layout packets have been observed.
         /// </summary>
         private static void StopTrackLayoutDiscoveryIfSatisfied()
         {
-            if (!trackInfoReceived || !layoutInfoReceived) return;
+            if (!trackInfoReceived || !layoutPacketReceived) return;
             trackLayoutRetryCts?.Cancel();
             trackLayoutRetryCts = null;
         }

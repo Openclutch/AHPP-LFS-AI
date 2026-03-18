@@ -11,10 +11,12 @@ namespace AHPP_AI.UI
         public const byte ReservedCeiling = 29; // Leave low IDs for LFS prompts
         public const byte MainStart = 30;
         public const byte MainEnd = 109;
-        public const byte DynamicStart = 110;
-        public const byte DynamicEnd = 169;
-        public const byte RemoveStart = 170;
-        public const byte RemoveEnd = 219;
+        public const byte AiLabelStart = 110;
+        public const byte AiLabelEnd = 144;
+        public const byte AiModeStart = 145;
+        public const byte AiModeEnd = 179;
+        public const byte AiRemoveStart = 180;
+        public const byte AiRemoveEnd = 214;
         public const byte DebugStart = 220;
         public const byte DebugEnd = 239;
 
@@ -27,19 +29,27 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
-        /// Calculate an ID for dynamic lists (AI labels, visualization entries).
+        /// Calculate an ID for AI label buttons in the right-hand list.
         /// </summary>
-        public static byte Dynamic(byte offset)
+        public static byte AiLabel(byte offset)
         {
-            return ValidateRange(DynamicStart, DynamicEnd, offset);
+            return ValidateRange(AiLabelStart, AiLabelEnd, offset);
         }
 
         /// <summary>
-        /// Calculate an ID within the remove-button range to keep deletions grouped.
+        /// Calculate an ID for AI mode buttons in the right-hand list.
         /// </summary>
-        public static byte Remove(byte offset)
+        public static byte AiMode(byte offset)
         {
-            return ValidateRange(RemoveStart, RemoveEnd, offset);
+            return ValidateRange(AiModeStart, AiModeEnd, offset);
+        }
+
+        /// <summary>
+        /// Calculate an ID within the AI remove-button range to keep deletions grouped.
+        /// </summary>
+        public static byte AiRemove(byte offset)
+        {
+            return ValidateRange(AiRemoveStart, AiRemoveEnd, offset);
         }
 
         /// <summary>

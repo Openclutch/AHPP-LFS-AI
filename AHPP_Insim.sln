@@ -9,8 +9,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AHPP_AI", "AHPP_AI\AHPP_AI.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AHPP_AI_Tests", "AHPP_AI_Tests\AHPP_AI_Tests.csproj", "{C308296D-141E-4C75-920F-14CDAF7B4CDF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AHPP_SpawnTrack", "AHPP_SpawnTrack\AHPP_SpawnTrack.csproj", "{4CB9464E-86ED-4FED-A590-1613C54EF13E}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,22 +67,6 @@ Global
 		{C308296D-141E-4C75-920F-14CDAF7B4CDF}.Release|x64.Build.0 = Release|Any CPU
 		{C308296D-141E-4C75-920F-14CDAF7B4CDF}.Release|x86.ActiveCfg = Release|Any CPU
 		{C308296D-141E-4C75-920F-14CDAF7B4CDF}.Release|x86.Build.0 = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|x64.Build.0 = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Debug|x86.Build.0 = Debug|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|Any CPU.Build.0 = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|Mixed Platforms.Build.0 = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|x64.ActiveCfg = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|x64.Build.0 = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|x86.ActiveCfg = Release|Any CPU
-		{4CB9464E-86ED-4FED-A590-1613C54EF13E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

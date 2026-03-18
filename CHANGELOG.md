@@ -1,5 +1,25 @@
 # Changelog
 
+- Route identity now follows the JSON filename instead of the embedded metadata name, so layout folders can use names like `pit_highway`, `route_highway_loop`, and `route_highway_alt` directly.
+- Added route-name auto resolution per layout so missing legacy names like `pit_entry` and `main_loop` fall back to discovered `pit_*`, `route_*_loop`, and `route_*_alt` files in the active track/layout folder.
+
+- Added a clickable layout picker under the AI track status so saved layout folders for the active track can be selected in-game.
+- Persisted per-track layout defaults in `config.ini` and use them as the startup fallback before LFS reports the live layout name.
+
+- Added per-area `ModPreset.<mod name>=setup,colour` support in the AI config and applied those presets during `/ai` spawning by sending `/mod`, `/setup`, and `/colour` before the spawn command.
+
+- Kept AI spawning on the normal `/ai` flow and stopped using `/grid static` for AI pit-slot assignment; the pit spawn config remains available for future non-AI or higher-level area management.
+
+- Treated `IS_AXI` receipt as successful layout discovery even when LFS does not report a layout filename, preventing repeated startup retries and warnings while keeping the current route context.
+
+- Added configurable `[PitSpawn]` and `[PitSpawnArea.*]` sections to the AI app so pit slots 41-48 can be tagged as reserved AI spawn areas with per-area capacity, route lists, and allowed mod lists.
+
+- Added a per-AI mode button in the right-hand AI list so each row shows `Cruise` or `Race`, and clicking the button promotes that AI into race mode.
+- Added spawn classification so AI that appear on pit/spawn routes stay in cruise mode while on-track starts immediately switch to race mode and begin from the nearest main-track route.
+- Added a configurable race driving profile with higher waypoint-speed targets, later upshifts, and optional LFS automatic gears/clutch for track-spawned AI.
+
+- Guarded `Console.ReadKey()` usage in the AI app so headless or redirected launches no longer crash while starting or handling fatal errors.
+
 - Restricted AI control to bots spawned by this app by gating AI admission behind tracked `/ai` spawn requests, preventing takeover attempts on other admins' AI and startup errors from non-owned bots.
 
 - Reset AI pit recovery to reinitialize driver/warmup and respawn on the spawn route so bots don’t loop pitting and immediately re-enter recovery.

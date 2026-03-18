@@ -63,9 +63,14 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Update gearbox state including gear selection and clutch operation
         /// </summary>
-        public void UpdateGearbox(byte plid, double speedKmh, float engineRpm = 0)
+        public void UpdateGearbox(byte plid, double speedKmh, float engineRpm = 0,
+            AIConfig.DrivingMode drivingMode = AIConfig.DrivingMode.Cruise)
         {
-            var desiredGear = ApplyGearHysteresis(plid, config.CalculateDesiredGear(speedKmh), speedKmh);
+            if (drivingMode == AIConfig.DrivingMode.Race && config.RaceUseAutomaticTransmission)
+                return;
+
+            var desiredGear =
+                ApplyGearHysteresis(plid, config.CalculateDesiredGear(speedKmh), speedKmh, drivingMode);
 
             // If RPM is falling too low, request a downshift instead of just holding the clutch.
             if (engineRpm > 0 && engineRpm < config.StallPreventionReleaseRpm && currentGears[plid] > 2)
@@ -382,13 +387,17 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Apply basic hysteresis so small speed oscillations do not trigger rapid gear hunting.
         /// </summary>
-        private byte ApplyGearHysteresis(byte plid, byte desiredGear, double speedKmh)
+        private byte ApplyGearHysteresis(byte plid, byte desiredGear, double speedKmh,
+            AIConfig.DrivingMode drivingMode)
         {
             if (!currentGears.ContainsKey(plid)) return desiredGear;
 
             var currentGear = currentGears[plid];
             var upHys = Math.Max(0, config.GearUpshiftHysteresisKmh);
             var downHys = Math.Max(0, config.GearDownshiftHysteresisKmh);
+            var upshiftMultiplier = drivingMode == AIConfig.DrivingMode.Race
+                ? Math.Max(1.0, config.RaceUpshiftThresholdMultiplier)
+                : 1.0;
 
             // Prevent array bounds issues
             var thresholds = config.GearSpeedThresholds ?? Array.Empty<double>();
@@ -397,7 +406,7 @@ namespace AHPP_AI.AI
             var upIndex = currentGear - 2;
             if (upIndex >= 0 && upIndex < thresholds.Length)
             {
-                var upThreshold = thresholds[upIndex];
+                var upThreshold = thresholds[upIndex] * upshiftMultiplier;
                 if (desiredGear > currentGear && speedKmh < upThreshold + upHys)
                     desiredGear = currentGear;
             }

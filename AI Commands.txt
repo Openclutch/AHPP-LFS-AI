@@ -1,0 +1,68 @@
+These are commands for spawning AI
+
+#can be used to deliver commands to host
+/h
+
+#used to spawn a specific mod based on the full name
+/mod MOD_NAME
+
+#used to spawn ai with ground, move
+/sai ground AI_NAME
+
+/setup 4 (or SET_NAME)
+
+/colour 5 (or COL_NAME)
+
+/grid static 3
+
+Command to spawn AI drivers with new options:
+
+/sai [m|f] [solid] move|float|ground|angle [AI_NAME]
+
+Square brackets are optional parameters.
+
+Required parameter - you must include one of:
+
+move - an ordinary movable AI that can drive
+float - object floats at the start position height
+ground - object is placed at ground level
+angle - take the lean of the ground
+
+Optional parameters, that come before the compulsory parameter:
+
+m|f: specify male or female driver
+solid: for the float/ground/angle options - enable collision
+
+One optional parameter comes after the compulsory parameter:
+
+AI_NAME: you can specify the AI name
+
+Soon this command will be usable on the host (except the move option).
+That is because float/ground/angle do not use physics to settle.
+Currently disabled on the host until a permission system is written.
+
+
+Another new command:
+
+/mod MOD_NAME
+
+Similar to the /car command but you must write the whole mod name
+
+
+Example:
+
+/mod MOD_NAME
+/sai ground AI_NAME
+
+- AI_NAME will be added using MOD_NAME and it will be at ground level
+
+If you need the mod to have collision, use the solid parameter:
+
+/sai solid ground
+
+
+Other changes:
+
+/car (and /mod) can be used after you are already in the race
+/setup and /colour can also be used when you are in the race
+- allows you to select a car, mod, setup, colour to spawn an AI

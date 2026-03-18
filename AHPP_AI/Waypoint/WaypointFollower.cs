@@ -602,7 +602,8 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Calculate throttle and brake values based on current speed and target speed
         /// </summary>
-        public (int throttle, int brake) CalculateThrottleAndBrake(byte plid, double speedKmh, double headingError)
+        public (int throttle, int brake) CalculateThrottleAndBrake(byte plid, double speedKmh, double headingError,
+            AIConfig.DrivingMode drivingMode)
         {
             // Initialize dictionary values if missing
             if (!targetSpeeds.ContainsKey(plid))
@@ -614,6 +615,7 @@ namespace AHPP_AI.Waypoint
             var targetSpeed = manualTargetSpeeds.ContainsKey(plid)
                 ? manualTargetSpeeds[plid]
                 : targetSpeeds[plid];
+            var hasManualTarget = manualTargetSpeeds.ContainsKey(plid);
 
             // Apply more aggressive speed reduction during first approach
             if (isFirstApproach[plid])
@@ -621,16 +623,17 @@ namespace AHPP_AI.Waypoint
                 targetSpeed = INITIAL_APPROACH_SPEED;
                 logger.Log($"PLID={plid} FIRST APPROACH: Target speed={targetSpeed:F1}km/h");
             }
+            else if (drivingMode == AIConfig.DrivingMode.Race && !hasManualTarget)
+            {
+                targetSpeed = Math.Min(
+                    Math.Max(targetSpeed, 0.0) * Math.Max(1.0, config.RaceWaypointSpeedFactor) +
+                    Math.Max(0.0, config.RaceWaypointSpeedOffsetKmh),
+                    Math.Max(1.0, config.RaceWaypointSpeedCapKmh));
+            }
 
             // Adjust target speed based on heading error
             var headingErrorDeg = Math.Abs(headingError) * 360.0 / 65536.0;
-
-            if (headingErrorDeg > 45)
-                targetSpeed = Math.Min(targetSpeed, 15);
-            else if (headingErrorDeg > 30)
-                targetSpeed = Math.Min(targetSpeed, 30);
-            else if (headingErrorDeg > 15)
-                targetSpeed = Math.Min(targetSpeed, 50);
+            targetSpeed = ApplyHeadingSpeedCap(targetSpeed, headingErrorDeg, drivingMode);
 
             var speedError = targetSpeed - speedKmh;
 
@@ -663,6 +666,33 @@ namespace AHPP_AI.Waypoint
             }
 
             return (throttle, brake);
+        }
+
+        /// <summary>
+        /// Apply turn-based speed caps for the active driving mode.
+        /// </summary>
+        private double ApplyHeadingSpeedCap(double targetSpeed, double headingErrorDeg, AIConfig.DrivingMode drivingMode)
+        {
+            if (drivingMode == AIConfig.DrivingMode.Race)
+            {
+                if (headingErrorDeg > 55)
+                    return Math.Min(targetSpeed, Math.Max(10.0, config.RaceHardTurnSpeedCapKmh));
+                if (headingErrorDeg > 30)
+                    return Math.Min(targetSpeed, Math.Max(15.0, config.RaceMediumTurnSpeedCapKmh));
+                if (headingErrorDeg > 15)
+                    return Math.Min(targetSpeed, Math.Max(20.0, config.RaceLightTurnSpeedCapKmh));
+
+                return targetSpeed;
+            }
+
+            if (headingErrorDeg > 45)
+                return Math.Min(targetSpeed, 15);
+            if (headingErrorDeg > 30)
+                return Math.Min(targetSpeed, 30);
+            if (headingErrorDeg > 15)
+                return Math.Min(targetSpeed, 50);
+
+            return targetSpeed;
         }
 
         /// <summary>

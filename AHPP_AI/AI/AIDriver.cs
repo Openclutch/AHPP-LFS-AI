@@ -14,6 +14,9 @@ namespace AHPP_AI.AI
     /// </summary>
     public class AIDriver
     {
+        private const ushort HelpFlagAutoGears = 8;
+        private const ushort HelpFlagAutoClutch = 512;
+
         // Enumeration for engine start state machine
         public enum EngineStartState
         {
@@ -73,6 +76,8 @@ namespace AHPP_AI.AI
         // Control state
         private readonly Dictionary<byte, string> controlInputs = new Dictionary<byte, string>();
         private readonly Dictionary<byte, string> controlStatuses = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, AIConfig.DrivingMode> drivingModes =
+            new Dictionary<byte, AIConfig.DrivingMode>();
 
         // Engine state tracking
         private readonly Dictionary<byte, bool> engineRunning = new Dictionary<byte, bool>();
@@ -164,6 +169,7 @@ namespace AHPP_AI.AI
         public void InitializeDriver(byte plid)
         {
             gearboxController.InitializeGearbox(plid);
+            drivingModes[plid] = AIConfig.DrivingMode.Cruise;
             controlInputs[plid] = "T:0k B:0k G:0 C:0 S:0";
             controlStatuses[plid] = "Initializing";
             engineRunning[plid] = false; // Always start with engine "not running" to trigger start procedure
@@ -190,6 +196,23 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Update the active driving mode for an AI and apply any transmission-assist changes immediately.
+        /// </summary>
+        public void SetDrivingMode(byte plid, AIConfig.DrivingMode drivingMode)
+        {
+            drivingModes[plid] = drivingMode;
+            ApplyTransmissionHelpFlags(plid, drivingMode);
+        }
+
+        /// <summary>
+        /// Return the current driving mode for an AI, defaulting to cruise until classified.
+        /// </summary>
+        public AIConfig.DrivingMode GetDrivingMode(byte plid)
+        {
+            return drivingModes.TryGetValue(plid, out var mode) ? mode : AIConfig.DrivingMode.Cruise;
+        }
+
+        /// <summary>
         ///     Update AI controls based on telemetry data
         /// </summary>
         public void UpdateControls(
@@ -205,6 +228,8 @@ namespace AHPP_AI.AI
         {
             try
             {
+                var drivingMode = GetDrivingMode(plid);
+                var automaticTransmission = UsesAutomaticTransmission(plid);
                 lightController?.Update(plid);
 
                 // Initialize path if needed
@@ -290,7 +315,7 @@ namespace AHPP_AI.AI
                 if (errorMagnitude > 0.5) // More than 90 degrees off
                 {
                     // We're facing more away than toward - reduce speed for sharper turn
-                    throttle = 20000;
+                    throttle = drivingMode == AIConfig.DrivingMode.Race ? 28000 : 20000;
                     brake = 0;
 
                     // Log severe heading errors
@@ -300,13 +325,14 @@ namespace AHPP_AI.AI
                 }
                 else if (errorMagnitude > 0.25) // 45-90 degrees off
                 {
-                    throttle = 30000;
+                    throttle = drivingMode == AIConfig.DrivingMode.Race ? 42000 : 30000;
                     brake = 0;
                 }
                 else
                 {
                     // Normal driving, use throttle based on desired speed
-                    (throttle, brake) = waypointFollower.CalculateThrottleAndBrake(plid, speedKmh, headingError);
+                    (throttle, brake) =
+                        waypointFollower.CalculateThrottleAndBrake(plid, speedKmh, headingError, drivingMode);
                 }
 
                 // Handle stationary vehicle 
@@ -337,12 +363,12 @@ namespace AHPP_AI.AI
                 waypointFollower.CheckWaypointReached(plid, distance, speedKmh);
 
                 // Update gearbox (gears and clutch)
-                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
+                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, drivingMode);
 
-                var lowRpmClutchActive = gearboxController.IsLowRpmClutchActive(plid);
+                var lowRpmClutchActive = !automaticTransmission && gearboxController.IsLowRpmClutchActive(plid);
 
                 // Check if we should apply throttle based on clutch state
-                if (!gearboxController.ShouldApplyThrottle(plid, speedKmh)) throttle = 0;
+                if (!automaticTransmission && !gearboxController.ShouldApplyThrottle(plid, speedKmh)) throttle = 0;
 
                 var forceClutch = false;
                 if (ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot,
@@ -358,23 +384,27 @@ namespace AHPP_AI.AI
                     // Override controls - stop the car
                     throttle = 0;
                     brake = 65535; // Full brake
-                    forceClutch = true;
+                    forceClutch = !automaticTransmission;
                     controlStatuses[plid] = "COLLISION AVOIDANCE: Stopping";
                 }
 
-                gearboxController.ApplyBrakingClutch(plid, brake);
+                if (!automaticTransmission)
+                    gearboxController.ApplyBrakingClutch(plid, brake);
 
                 // Get current gearbox state after braking adjustments
-                var (gear, clutchValue, clutchState) = gearboxController.GetGearboxInfo(plid);
-                if (forceClutch) clutchValue = 65535;
+                byte gear = 0;
+                var clutchValue = 0;
+                if (!automaticTransmission)
+                {
+                    (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+                    if (forceClutch) clutchValue = 65535;
+                }
 
-                // Update control info for debug display
-                controlInputs[plid] =
-                    $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+                RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
                 if (lowRpmClutchActive) controlStatuses[plid] = "Low RPM clutch";
 
                 // Send AI controls
-                SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+                SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
             }
             catch (Exception ex)
             {
@@ -389,18 +419,23 @@ namespace AHPP_AI.AI
         {
             const int throttle = 0;
             const int brake = 65535;
+            var automaticTransmission = UsesAutomaticTransmission(plid);
+            byte gear = 0;
+            var clutchValue = 0;
 
-            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
-            gearboxController.ApplyBrakingClutch(plid, brake);
+            if (!automaticTransmission)
+            {
+                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
+                gearboxController.ApplyBrakingClutch(plid, brake);
 
-            var (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
-            clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+                (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+                clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+            }
 
-            controlInputs[plid] =
-                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
             controlStatuses[plid] = "MERGE YIELD: Waiting";
 
-            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
         }
 
         /// <summary>
@@ -410,18 +445,23 @@ namespace AHPP_AI.AI
         {
             const int throttle = 0;
             const int brake = 65535;
+            var automaticTransmission = UsesAutomaticTransmission(plid);
+            byte gear = 0;
+            var clutchValue = 0;
 
-            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm);
-            gearboxController.ApplyBrakingClutch(plid, brake);
+            if (!automaticTransmission)
+            {
+                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
+                gearboxController.ApplyBrakingClutch(plid, brake);
 
-            var (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
-            clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+                (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+                clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
+            }
 
-            controlInputs[plid] =
-                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{(steering - config.SteeringCenter)}";
+            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
             controlStatuses[plid] = "WARMUP HOLD: Stabilizing";
 
-            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue);
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
         }
 
         /// <summary>
@@ -827,7 +867,7 @@ namespace AHPP_AI.AI
                 var throttle = context.State == RecoveryState.ReverseLong ? 28000 : 20000;
 
                 var steer = config.SteeringCenter + context.SteerDirection * steerMagnitude;
-                SendControlInputs(plid, steer, throttle, 4000, 0, config.ClutchReleased);
+                SendControlInputs(plid, steer, throttle, 4000, 0, config.ClutchReleased, false);
                 controlStatuses[plid] = $"Recovery: {context.State}";
                 return true;
             }
@@ -907,7 +947,7 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.PressClutch:
-                    SendControlInputs(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
+                    SendControlInputs(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false);
 
                     if (elapsed >= 500)
                     {
@@ -919,7 +959,7 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.TurnIgnition:
-                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed);
+                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false);
 
                     if (elapsed < 300)
                     {
@@ -953,7 +993,7 @@ namespace AHPP_AI.AI
                     var throttle = Math.Min(30000, 20000 + throttleBoost);
                     byte gear = 2;
 
-                    SendControlInputs(plid, steering, throttle, 0, gear, clutchValue);
+                    SendControlInputs(plid, steering, throttle, 0, gear, clutchValue, false);
 
                     if ((int)(elapsed / 1000) != (int)((elapsed - 20) / 1000))
                         logger.Log(
@@ -976,7 +1016,7 @@ namespace AHPP_AI.AI
                         return false;
                     }
 
-                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, 0);
+                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, 0, false);
                     return true;
                 default:
                     engineStartStates[plid] = EngineStartState.Normal;
@@ -1182,7 +1222,7 @@ namespace AHPP_AI.AI
             if (!string.IsNullOrEmpty(progressLabel))
                 return progressLabel;
 
-            return "Driving";
+            return GetDrivingMode(plid) == AIConfig.DrivingMode.Race ? "Race" : "Cruise";
         }
 
         /// <summary>
@@ -1370,10 +1410,7 @@ namespace AHPP_AI.AI
                 { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } }) { PLID = plid },
                 InSimClientExtensions.PacketPriority.High);
 
-            // Disable automatic clutch
-            insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_SET_HELP_FLAGS, Time = 0, Value = 0 } })
-                { PLID = plid }, InSimClientExtensions.PacketPriority.High);
+            ApplyTransmissionHelpFlags(plid, GetDrivingMode(plid));
 
             // Request periodic info updates
             insim.Send(new IS_AIC(new List<AIInputVal>
@@ -1390,18 +1427,21 @@ namespace AHPP_AI.AI
         /// <summary>
         ///     Send control inputs to the AI car
         /// </summary>
-        private void SendControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue)
+        private void SendControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue,
+            bool automaticTransmission)
         {
-            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue);
-
             var inputs = new List<AIInputVal>
             {
                 new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steering },
                 new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = (ushort)throttle },
-                new AIInputVal { Input = AicInputType.CS_BRAKE, Value = (ushort)brake },
-                new AIInputVal { Input = AicInputType.CS_GEAR, Value = gear },
-                new AIInputVal { Input = AicInputType.CS_CLUTCH, Value = (ushort)clutchValue }
+                new AIInputVal { Input = AicInputType.CS_BRAKE, Value = (ushort)brake }
             };
+
+            if (!automaticTransmission)
+            {
+                inputs.Add(new AIInputVal { Input = AicInputType.CS_GEAR, Value = gear });
+                inputs.Add(new AIInputVal { Input = AicInputType.CS_CLUTCH, Value = (ushort)clutchValue });
+            }
 
             insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
@@ -1409,11 +1449,36 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Record the last control inputs we sent for UI display.
         /// </summary>
-        private void RecordControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue)
+        private void RecordControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue,
+            bool automaticTransmission)
         {
             var steerOffset = steering - config.SteeringCenter;
+            var gearLabel = automaticTransmission ? "A" : gear.ToString();
+            var clutchLabel = automaticTransmission ? "A" : $"{clutchValue / 1000}k";
             controlInputs[plid] =
-                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gear} C:{clutchValue / 1000}k S:{steerOffset}";
+                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gearLabel} C:{clutchLabel} S:{steerOffset}";
+        }
+
+        /// <summary>
+        /// Apply the LFS transmission help flags that match the AI's current driving mode.
+        /// </summary>
+        private void ApplyTransmissionHelpFlags(byte plid, AIConfig.DrivingMode drivingMode)
+        {
+            var helpFlags = drivingMode == AIConfig.DrivingMode.Race && config.RaceUseAutomaticTransmission
+                ? (ushort)(HelpFlagAutoGears | HelpFlagAutoClutch)
+                : (ushort)0;
+
+            insim.Send(new IS_AIC(new List<AIInputVal>
+                { new AIInputVal { Input = AicInputType.CS_SET_HELP_FLAGS, Time = 0, Value = helpFlags } })
+                { PLID = plid }, InSimClientExtensions.PacketPriority.High);
+        }
+
+        /// <summary>
+        /// Determine whether the current driving mode should leave shifting and clutch work to LFS.
+        /// </summary>
+        private bool UsesAutomaticTransmission(byte plid)
+        {
+            return GetDrivingMode(plid) == AIConfig.DrivingMode.Race && config.RaceUseAutomaticTransmission;
         }
 
         public void StopCar(byte plid)
