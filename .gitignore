@@ -25,3 +25,9 @@ dialogue.csv
 *.log
 *.tmp
 .DS_Store
+
+/.dotnet-cli
+/.nuget/packages
+/AHPP_AI/artifacts
+/AHPP_AI_Tests/artifacts
+/artifacts

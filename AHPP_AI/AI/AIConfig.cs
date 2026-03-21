@@ -46,13 +46,13 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Describes the AI capacity, routes, and allowed mods for a logical pit spawn area.
+        ///     Describes the population share, routes, and allowed mods for a logical pit spawn area.
         /// </summary>
         public sealed class PitSpawnAreaConfig
         {
             public string Tag { get; set; } = string.Empty;
             public string DisplayName { get; set; } = string.Empty;
-            public int MaxAiCars { get; set; }
+            public double FillPercent { get; set; }
             public List<string> RouteNames { get; set; } = new List<string>();
             public List<string> AllowedMods { get; set; } = new List<string>();
             public Dictionary<string, PitSpawnModPresetConfig> ModPresets { get; set; } =
@@ -98,6 +98,7 @@ namespace AHPP_AI.AI
         public double AiiTargetHz { get; set; } = 1.0;
         public int TelemetryWarmupMs { get; set; } = 2000;
         public int WarmupBrakeHoldMs { get; set; } = 0;
+        public bool ResetInputsEveryTick { get; set; } = false;
 
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
@@ -255,6 +256,9 @@ namespace AHPP_AI.AI
 
         // Debug settings
         public bool DebugEnabled { get; set; } = false;
+        public bool ControlTraceLoggingEnabled { get; set; } = false;
+        public int ControlTraceIntervalMs { get; set; } = 1000;
+        public bool ControlTraceLogOnStateChange { get; set; } = true;
 
         /// <summary>
         ///     Calculate waypoint threshold based on speed

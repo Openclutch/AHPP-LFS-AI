@@ -54,7 +54,7 @@ namespace AHPP_AI
         private static string currentTrackCode = "UnknownTrack";
         private static string currentLayoutName = "DefaultLayout";
         private static readonly int initialAiCount;
-        private static readonly int spawnDelayMs;
+        private static readonly int spawnDelaySeconds;
         private static readonly int lookaheadWaypoints;
         private static readonly double recordingIntervalMeters;
         private static readonly double waypointProximityMultiplier;
@@ -182,6 +182,7 @@ namespace AHPP_AI
         private static readonly int controlTickHz;
         private static readonly int minControlHzPerAi;
         private static readonly int maxControlHzPerAi;
+        private static readonly bool resetInputsEveryTick;
         private static readonly bool useAiiTelemetry;
         private static readonly double aiiTargetHz;
         private static readonly int aiiBaseIntervalHundredths;
@@ -191,6 +192,9 @@ namespace AHPP_AI
         private static readonly int packetsPerAiiUpdate;
         private static readonly int telemetryWarmupMs;
         private static readonly int warmupBrakeHoldMs;
+        private static readonly bool controlTraceLoggingEnabled;
+        private static readonly int controlTraceIntervalMs;
+        private static readonly bool controlTraceLogOnStateChange;
         private static readonly AIConfig.PassByReactionMode passByReactionMode;
         private static readonly string buildVersion;
         private static readonly TimeSpan InitialRouteReloadDelay = TimeSpan.FromSeconds(1);
@@ -244,7 +248,11 @@ namespace AHPP_AI
             pendingRouteName = currentRecordingRoute;
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
-            spawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", 10000);
+            var legacySpawnDelayMs = appConfig.GetInt("AI", "SpawnDelayMs", -1);
+            var defaultSpawnDelaySeconds = legacySpawnDelayMs >= 0
+                ? Math.Max(0, (int)Math.Ceiling(legacySpawnDelayMs / 1000.0))
+                : 10;
+            spawnDelaySeconds = appConfig.GetInt("AI", "SpawnDelaySeconds", defaultSpawnDelaySeconds);
             lookaheadWaypoints = appConfig.GetInt("AI", "LookaheadWaypoints", 2);
             waypointProximityMultiplier = appConfig.GetDouble("AI", "WaypointProximityMultiplier", 1.0);
             steeringResponseDamping = appConfig.GetDouble("AI", "SteeringDamping", 1.0);
@@ -386,6 +394,7 @@ namespace AHPP_AI
             controlTickHz = Math.Max(1, appConfig.GetInt("AI", "ControlTickHz", 20));
             minControlHzPerAi = Math.Max(1, appConfig.GetInt("AI", "MinControlHzPerAi", 4));
             maxControlHzPerAi = Math.Max(minControlHzPerAi, appConfig.GetInt("AI", "MaxControlHzPerAi", 10));
+            resetInputsEveryTick = appConfig.GetBool("AI", "ResetInputsEveryTick", false);
             useAiiTelemetry = appConfig.GetBool("AI", "UseAiiTelemetry", false);
             aiiTargetHz = Math.Max(0.1, appConfig.GetDouble("AI", "AIITargetHz", 1.0));
             aiiBaseIntervalHundredths = Math.Max(1, appConfig.GetInt("AI", "AIIBaseIntervalHundredths", 20));
@@ -396,6 +405,10 @@ namespace AHPP_AI
             packetsPerAiiUpdate = Math.Max(1, appConfig.GetInt("AI", "PacketsPerAIIUpdate", 2));
             telemetryWarmupMs = Math.Max(0, appConfig.GetInt("AI", "TelemetryWarmupMs", 2000));
             warmupBrakeHoldMs = Math.Max(0, appConfig.GetInt("AI", "WarmupBrakeHoldMs", 0));
+            controlTraceLoggingEnabled = appConfig.GetBool("DebugAI", "ControlTraceLogging", false);
+            controlTraceIntervalMs = Math.Max(100, appConfig.GetInt("DebugAI", "ControlTraceIntervalMs", 1000));
+            controlTraceLogOnStateChange =
+                appConfig.GetBool("DebugAI", "ControlTraceLogOnStateChange", true);
             passByReactionMode = ParsePassByReactionMode(
                 appConfig.GetString("AI", "PassByReactionMode", "FlashAndHorn"));
             buildVersion = appConfig.GetString("AI", "BuildVersion", "dev");
@@ -412,7 +425,7 @@ namespace AHPP_AI
             visualizer.LayoutObjectMoved += aiController.OnLayoutObjectMoved;
             aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, mainAlternateRouteName, branchRouteNames);
             aiController.SetNumberOfAIs(initialAiCount);
-            aiController.SetSpawnDelayMs(spawnDelayMs);
+            aiController.SetSpawnDelayMs(Math.Max(0, spawnDelaySeconds) * 1000);
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
             aiController.SetLookaheadWaypoints(lookaheadWaypoints);
             aiController.SetRecordingInterval(recordingIntervalMeters);
@@ -473,6 +486,11 @@ namespace AHPP_AI
                 minControlHzPerAi,
                 maxControlHzPerAi,
                 aiiTargetHz);
+            aiController.ConfigureControlDiagnostics(
+                resetInputsEveryTick,
+                controlTraceLoggingEnabled,
+                controlTraceIntervalMs,
+                controlTraceLogOnStateChange);
             var sendLimit = Math.Max(10, packetRateBudgetPerSecond - packetRateReservePerSecond);
             InSimClientExtensions.SetPacketRateLimit(sendLimit);
             aiController.ConfigurePurePursuit(
@@ -888,6 +906,12 @@ namespace AHPP_AI
                 case MainUI.TrackLayoutStatusId:
                     aiController.ToggleTrackLayoutDropdown();
                     break;
+                case MainUI.RoutePagePreviousId:
+                    aiController.ShowPreviousRoutePage();
+                    break;
+                case MainUI.RoutePageNextId:
+                    aiController.ShowNextRoutePage();
+                    break;
                 case MainUI.AddRouteButtonId:
                     SetRecordingRoute(pendingRouteName);
                     aiController.SetVisualizationRouteSelection(pendingRouteName);
@@ -927,16 +951,16 @@ namespace AHPP_AI
         {
             if (btt.ClickID == MainUI.SpawnDelayInputId)
             {
-                if (int.TryParse(btt.Text, out var delayMs))
+                if (int.TryParse(btt.Text, out var delaySeconds))
                 {
-                    var clampedDelay = Math.Max(0, delayMs);
-                    aiController.SetSpawnDelayMs(clampedDelay);
-                    appConfig.SetString("AI", "SpawnDelayMs", clampedDelay.ToString(), true);
-                    insim.SendPrivateMessage(btt.UCID, $"Spawn delay set to {clampedDelay} ms");
+                    var clampedDelaySeconds = Math.Max(0, delaySeconds);
+                    aiController.SetSpawnDelayMs(clampedDelaySeconds * 1000);
+                    appConfig.SetString("AI", "SpawnDelaySeconds", clampedDelaySeconds.ToString(), true);
+                    insim.SendPrivateMessage(btt.UCID, $"Spawn delay set to {clampedDelaySeconds} seconds");
                 }
                 else
                 {
-                    insim.SendPrivateMessage(btt.UCID, "Enter a valid spawn delay in milliseconds.");
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid spawn delay in seconds.");
                 }
 
                 return;
@@ -1334,6 +1358,7 @@ namespace AHPP_AI
         {
             var track = (sta.Track ?? string.Empty).Trim();
             trackInfoReceived |= !string.IsNullOrWhiteSpace(track);
+            aiController.SetRaceInProgress(sta.RaceInProg == 1);
             var preferredLayout = ResolvePreferredLayoutForTrack(track, currentLayoutName);
             UpdateRouteContext(track, preferredLayout);
             StopTrackLayoutDiscoveryIfSatisfied();

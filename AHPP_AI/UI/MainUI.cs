@@ -27,7 +27,7 @@ namespace AHPP_AI.UI
         private const byte SHOW_BUTTON_LEFT = 0;
         private const byte SHOW_BUTTON_TOP = 0;
         private const byte SHOW_BUTTON_W = 12;
-        private const byte VISUAL_ROUTE_START_ROW = 100;
+        private const byte VISUAL_ROUTE_START_ROW = 60;
         private const byte VISUAL_COLUMN_LEFT = (byte)(SCREEN_WIDTH > BTN_W ? SCREEN_WIDTH - BTN_W : 0);
         private const byte VISUAL_DETAIL_ROW = 160;
         private const byte DETAIL_BTN_W = 6;
@@ -81,6 +81,9 @@ namespace AHPP_AI.UI
         public const byte ToggleDebugButtonsId = (byte)(ButtonIds.MainStart + 69);
         public const byte PerformanceStatusId = (byte)(ButtonIds.MainStart + 70);
         public const byte TrackLayoutStatusId = (byte)(ButtonIds.MainStart + 71);
+        public const byte RoutePagePreviousId = (byte)(ButtonIds.MainStart + 56);
+        public const byte RoutePageLabelId = (byte)(ButtonIds.MainStart + 57);
+        public const byte RoutePageNextId = (byte)(ButtonIds.MainStart + 58);
         private const byte RECORD_LABEL_ID = (byte)(ButtonIds.MainStart + 19);
         private const byte VISUALIZER_LABEL_ID = (byte)(ButtonIds.MainStart + 20);
         public const byte HideUiButtonId = (byte)(ButtonIds.MainStart + 63);
@@ -91,7 +94,6 @@ namespace AHPP_AI.UI
 
         private class RouteButtonInfo
         {
-            public byte Id { get; set; }
             public string Name { get; set; } = string.Empty;
             public bool HasRecording { get; set; }
         }
@@ -122,7 +124,6 @@ namespace AHPP_AI.UI
         private readonly List<TrackLayoutOptionInfo> trackLayoutButtons = new List<TrackLayoutOptionInfo>();
         private readonly List<AiListEntry> lastAiSnapshot = new List<AiListEntry>();
         private const byte ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 21);
-        private const byte ROUTE_BUTTON_MAX_COUNT = 8;
         private const byte VISUAL_ROUTE_BUTTON_START_ID = (byte)(ButtonIds.MainStart + 40);
         private readonly Dictionary<string, bool> routeRecordingStatus =
             new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -148,6 +149,7 @@ namespace AHPP_AI.UI
         private string trackLayoutStatusLabel = "Track: pending";
         private string selectedTrackLayoutName = "DefaultLayout";
         private bool trackLayoutDropdownExpanded;
+        private int routePageIndex;
         
         public MainUI(InSimClient insim, Logger logger)
         {
@@ -176,7 +178,7 @@ namespace AHPP_AI.UI
             RenderTrackLayoutStatus();
 
             row = 70;
-            CreateInputButton(SpawnDelayInputId, RIGHT_COL, row, "Spawn Delay"); row += ROW_HEIGHT;
+            CreateInputButton(SpawnDelayInputId, RIGHT_COL, row, "Spawn Delay (s)"); row += ROW_HEIGHT;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
@@ -389,26 +391,45 @@ namespace AHPP_AI.UI
                 return;
             }
 
-            var maxButtons = GetVisualizationRouteButtonCapacity();
-            var count = Math.Min(routeButtons.Count, maxButtons);
+            var pageSize = GetRouteButtonPageSize();
+            var pageCount = GetRoutePageCount(pageSize);
+            routePageIndex = Math.Max(0, Math.Min(routePageIndex, pageCount - 1));
+            var startIndex = routePageIndex * pageSize;
+            var count = Math.Min(pageSize, Math.Max(0, routeButtons.Count - startIndex));
 
             var startTop = VISUAL_ROUTE_START_ROW;
             var left = VISUAL_COLUMN_LEFT;
+            var routeIdsToClear = pageSize;
+
+            for (var i = 0; i < routeIdsToClear; i++)
+            {
+                DeleteButton((byte)(ROUTE_BUTTON_START_ID + i));
+            }
 
             for (var i = 0; i < count; i++)
             {
-                var option = routeButtons[i];
+                var option = routeButtons[startIndex + i];
                 var top = (byte)(startTop + i * ROW_HEIGHT);
-                DeleteButton(option.Id);
                 var text = FormatRouteLabel(option);
-                CreateButton(option.Id, text, left, top);
+                CreateButton((byte)(ROUTE_BUTTON_START_ID + i), text, left, top);
+            }
+
+            var pagerTop = (byte)(startTop + pageSize * ROW_HEIGHT);
+            DeleteButton(RoutePagePreviousId);
+            DeleteButton(RoutePageLabelId);
+            DeleteButton(RoutePageNextId);
+            if (pageCount > 1)
+            {
+                CreateButton(RoutePagePreviousId, "<", left, pagerTop, 5);
+                CreateButton(RoutePageLabelId, $"{routePageIndex + 1}/{pageCount}", (byte)(left + 5), pagerTop, 10,
+                    ROW_HEIGHT, false);
+                CreateButton(RoutePageNextId, ">", (byte)(left + 15), pagerTop, 5);
             }
 
             // Add a button to create/confirm a new route using the Route Name input at the bottom of the column.
-            var bottomRow = (byte)Math.Min(VISUAL_DETAIL_ROW, SELECT_ROW);
-            var addTop = (byte)Math.Min(200 - ROW_HEIGHT,
-                Math.Max(startTop + count * ROW_HEIGHT + ROW_HEIGHT, bottomRow + ROW_HEIGHT));
-            var routeNameTop = (byte)Math.Max(VISUAL_ROUTE_START_ROW, addTop - ROW_HEIGHT);
+            var inputStartTop = (byte)(pagerTop + (pageCount > 1 ? ROW_HEIGHT : 0));
+            var routeNameTop = (byte)Math.Min(200 - ROW_HEIGHT * 2, (int)inputStartTop);
+            var addTop = (byte)Math.Min(200 - ROW_HEIGHT, routeNameTop + ROW_HEIGHT);
             DeleteButton(RouteNameInputId);
             CreateInputButton(RouteNameInputId, left, routeNameTop, "Route Name", 24);
             DeleteButton(AddRouteButtonId);
@@ -554,21 +575,19 @@ namespace AHPP_AI.UI
             }
 
             routeButtons.Clear();
-            byte id = ROUTE_BUTTON_START_ID;
             foreach (var option in unique)
             {
-                if (routeButtons.Count >= ROUTE_BUTTON_MAX_COUNT) break;
                 var recorded = routeRecordingStatus.TryGetValue(option.name, out var hasRecording)
                     ? hasRecording
                     : option.recorded;
                 routeButtons.Add(new RouteButtonInfo
                 {
-                    Id = id,
                     Name = option.name,
                     HasRecording = recorded
                 });
-                id++;
             }
+
+            routePageIndex = GetPageIndexForRoute(selectedRoute);
 
             if (uiInitialized && !uiHidden)
             {
@@ -593,11 +612,14 @@ namespace AHPP_AI.UI
         /// </summary>
         public bool TryGetRouteNameForButton(byte clickId, out string routeName)
         {
-            foreach (var button in routeButtons)
+            var pageSize = GetRouteButtonPageSize();
+            var pageOffset = clickId - ROUTE_BUTTON_START_ID;
+            if (clickId >= ROUTE_BUTTON_START_ID && pageOffset < pageSize)
             {
-                if (button.Id == clickId)
+                var index = routePageIndex * pageSize + pageOffset;
+                if (index >= 0 && index < routeButtons.Count)
                 {
-                    routeName = button.Name;
+                    routeName = routeButtons[index].Name;
                     return true;
                 }
             }
@@ -648,6 +670,31 @@ namespace AHPP_AI.UI
             var normalized = string.IsNullOrWhiteSpace(routeName) ? selectedVisualizationRoute : routeName;
             selectedVisualizationRoute = normalized;
             EnsureRouteButton(normalized);
+        }
+
+        /// <summary>
+        /// Show the previous page of route buttons when multiple pages are available.
+        /// </summary>
+        public void ShowPreviousRoutePage()
+        {
+            if (routePageIndex <= 0)
+                return;
+
+            routePageIndex--;
+            RenderRouteSelectors();
+        }
+
+        /// <summary>
+        /// Show the next page of route buttons when multiple pages are available.
+        /// </summary>
+        public void ShowNextRoutePage()
+        {
+            var pageCount = GetRoutePageCount(GetRouteButtonPageSize());
+            if (routePageIndex >= pageCount - 1)
+                return;
+
+            routePageIndex++;
+            RenderRouteSelectors();
         }
 
         /// <summary>
@@ -923,28 +970,20 @@ namespace AHPP_AI.UI
         {
             if (routeButtons.Exists(b => b.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase)))
             {
+                routePageIndex = GetPageIndexForRoute(routeName);
                 RenderRouteSelectors();
                 RenderRecordButton();
                 return;
             }
 
-            if (routeButtons.Count >= ROUTE_BUTTON_MAX_COUNT)
-            {
-                routeButtons.RemoveAt(routeButtons.Count - 1);
-            }
-
             var recorded = routeRecordingStatus.TryGetValue(routeName, out var hasRecording) && hasRecording;
             routeButtons.Insert(0, new RouteButtonInfo
             {
-                Id = ROUTE_BUTTON_START_ID,
                 Name = routeName,
                 HasRecording = recorded
             });
-            for (var i = 0; i < routeButtons.Count; i++)
-            {
-                routeButtons[i].Id = (byte)(ROUTE_BUTTON_START_ID + i);
-            }
             routeRecordingStatus[routeName] = recorded;
+            routePageIndex = GetPageIndexForRoute(routeName);
 
             RenderRouteSelectors();
             RenderRecordButton();
@@ -959,6 +998,42 @@ namespace AHPP_AI.UI
             var availableRows = (bottomRow - VISUAL_ROUTE_START_ROW) / ROW_HEIGHT;
             if (availableRows <= 0) availableRows = 1;
             return availableRows;
+        }
+
+        /// <summary>
+        /// Reserve one row for paging controls so long route lists can be browsed in place.
+        /// </summary>
+        private int GetRouteButtonPageSize()
+        {
+            return Math.Max(1, GetVisualizationRouteButtonCapacity() - 1);
+        }
+
+        /// <summary>
+        /// Determine which route page should be shown for the supplied route selection.
+        /// </summary>
+        private int GetPageIndexForRoute(string routeName)
+        {
+            if (string.IsNullOrWhiteSpace(routeName) || routeButtons.Count == 0)
+                return 0;
+
+            var routeIndex = routeButtons.FindIndex(button =>
+                button.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase));
+            if (routeIndex < 0)
+                return 0;
+
+            var pageSize = GetRouteButtonPageSize();
+            return routeIndex / pageSize;
+        }
+
+        /// <summary>
+        /// Calculate how many route pages are required for the current route list.
+        /// </summary>
+        private int GetRoutePageCount(int pageSize)
+        {
+            if (pageSize <= 0)
+                return 1;
+
+            return Math.Max(1, (routeButtons.Count + pageSize - 1) / pageSize);
         }
 
         /// <summary>

@@ -92,6 +92,8 @@ namespace AHPP_AI.AI
         private readonly AILightController lightController;
         private readonly InSimClient insim;
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, string> lastControlTraceSignature = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, DateTime> lastControlTraceTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
         private Action<byte>? recoveryFailedHandler;
@@ -190,6 +192,8 @@ namespace AHPP_AI.AI
             movementIssues[plid] = MovementIssue.None;
             consecutiveStalls[plid] = 0;
             movementIssueCounts[plid] = 0;
+            lastControlTraceTime.Remove(plid);
+            lastControlTraceSignature.Remove(plid);
 
             // Send initial controls to configure AI car
             SendAIControls(plid);
@@ -309,6 +313,7 @@ namespace AHPP_AI.AI
                 // Calculate throttle and brake based on speed and heading error
                 int throttle;
                 int brake;
+                var status = drivingMode == AIConfig.DrivingMode.Race ? "RACE: Route follow" : "CRUISE: Route follow";
 
                 // Reduce throttle for sharp turns, apply more throttle for straight driving
                 var errorMagnitude = Math.Abs(headingError) / (double)CoordinateUtils.HALF_CIRCLE;
@@ -340,6 +345,7 @@ namespace AHPP_AI.AI
                 {
                     // Apply full throttle to escape if stuck
                     throttle = 65000;
+                    status = "SLOW/STUCK: Launch assist";
 
                     // Log when stuck
                     if (DateTime.Now.Millisecond < 100) // Throttle logging
@@ -374,7 +380,7 @@ namespace AHPP_AI.AI
                 if (ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot,
                         ref throttle, ref brake, out var trafficStatus, ref forceClutch))
                 {
-                    controlStatuses[plid] = trafficStatus;
+                    status = trafficStatus;
                 }
 
                 // Check for potential collisions
@@ -385,7 +391,7 @@ namespace AHPP_AI.AI
                     throttle = 0;
                     brake = 65535; // Full brake
                     forceClutch = !automaticTransmission;
-                    controlStatuses[plid] = "COLLISION AVOIDANCE: Stopping";
+                    status = "COLLISION AVOIDANCE: Stopping";
                 }
 
                 if (!automaticTransmission)
@@ -400,11 +406,12 @@ namespace AHPP_AI.AI
                     if (forceClutch) clutchValue = 65535;
                 }
 
-                RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
-                if (lowRpmClutchActive) controlStatuses[plid] = "Low RPM clutch";
+                if (lowRpmClutchActive) status = "Low RPM clutch";
+                controlStatuses[plid] = status;
 
                 // Send AI controls
-                SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+                ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh,
+                    lowRpmClutchActive);
             }
             catch (Exception ex)
             {
@@ -432,10 +439,8 @@ namespace AHPP_AI.AI
                 clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
             }
 
-            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
             controlStatuses[plid] = "MERGE YIELD: Waiting";
-
-            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+            ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh);
         }
 
         /// <summary>
@@ -458,10 +463,8 @@ namespace AHPP_AI.AI
                 clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
             }
 
-            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
             controlStatuses[plid] = "WARMUP HOLD: Stabilizing";
-
-            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+            ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh);
         }
 
         /// <summary>
@@ -867,8 +870,8 @@ namespace AHPP_AI.AI
                 var throttle = context.State == RecoveryState.ReverseLong ? 28000 : 20000;
 
                 var steer = config.SteeringCenter + context.SteerDirection * steerMagnitude;
-                SendControlInputs(plid, steer, throttle, 4000, 0, config.ClutchReleased, false);
                 controlStatuses[plid] = $"Recovery: {context.State}";
+                ApplyControlFrame(plid, steer, throttle, 4000, 0, config.ClutchReleased, false, 0);
                 return true;
             }
 
@@ -947,7 +950,9 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.PressClutch:
-                    SendControlInputs(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false);
+                    controlStatuses[plid] = "Engine restart: clutch";
+                    ApplyControlFrame(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false,
+                        0);
 
                     if (elapsed >= 500)
                     {
@@ -959,7 +964,9 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.TurnIgnition:
-                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false);
+                    controlStatuses[plid] = "Engine restart: ignition";
+                    ApplyControlFrame(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false,
+                        0);
 
                     if (elapsed < 300)
                     {
@@ -993,7 +1000,8 @@ namespace AHPP_AI.AI
                     var throttle = Math.Min(30000, 20000 + throttleBoost);
                     byte gear = 2;
 
-                    SendControlInputs(plid, steering, throttle, 0, gear, clutchValue, false);
+                    controlStatuses[plid] = "Engine restart: release";
+                    ApplyControlFrame(plid, steering, throttle, 0, gear, clutchValue, false, 0);
 
                     if ((int)(elapsed / 1000) != (int)((elapsed - 20) / 1000))
                         logger.Log(
@@ -1016,7 +1024,8 @@ namespace AHPP_AI.AI
                         return false;
                     }
 
-                    SendControlInputs(plid, steering, 15000 + throttleBoost, 0, 2, 0, false);
+                    controlStatuses[plid] = "Engine restart: recovery";
+                    ApplyControlFrame(plid, steering, 15000 + throttleBoost, 0, 2, 0, false, 0);
                     return true;
                 default:
                     engineStartStates[plid] = EngineStartState.Normal;
@@ -1102,7 +1111,7 @@ namespace AHPP_AI.AI
 
             if (context.FailureCount >= config.RecoveryMaxFailureCount)
             {
-                logger.LogWarning($"PLID={plid} RECOVERY FAILURE: Escalating to pitlane command");
+                logger.LogWarning($"PLID={plid} RECOVERY FAILURE: Escalating to despawn and respawn");
                 recoveryFailedHandler?.Invoke(plid);
             }
         }
@@ -1425,23 +1434,113 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Record, trace, and send a single control frame for the AI.
+        /// </summary>
+        private void ApplyControlFrame(
+            byte plid,
+            int steering,
+            int throttle,
+            int brake,
+            byte gear,
+            int clutchValue,
+            bool automaticTransmission,
+            double speedKmh,
+            bool lowRpmClutchActive = false)
+        {
+            RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+
+            var status = controlStatuses.TryGetValue(plid, out var currentStatus) ? currentStatus : "Unspecified";
+            var stateLabel = GetStateDescription(plid);
+            TraceControlDecision(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh,
+                stateLabel, status, lowRpmClutchActive);
+
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+        }
+
+        /// <summary>
+        /// Emit detailed control traces when enabled, and always warn on suspicious input overlap.
+        /// </summary>
+        private void TraceControlDecision(
+            byte plid,
+            int steering,
+            int throttle,
+            int brake,
+            byte gear,
+            int clutchValue,
+            bool automaticTransmission,
+            double speedKmh,
+            string stateLabel,
+            string status,
+            bool lowRpmClutchActive)
+        {
+            var suspiciousOverlap = AIControlDiagnostics.HasSuspiciousOverlap(
+                throttle,
+                brake,
+                clutchValue,
+                automaticTransmission,
+                gear,
+                speedKmh,
+                config.BrakeBase,
+                config.ClutchFullyPressed,
+                lowRpmClutchActive,
+                out var overlapReason);
+
+            if (!config.ControlTraceLoggingEnabled && !suspiciousOverlap)
+                return;
+
+            var now = DateTime.UtcNow;
+            var signature =
+                $"{stateLabel}|{status}|{throttle}|{brake}|{gear}|{clutchValue}|{steering}|{automaticTransmission}|{overlapReason}";
+            var intervalSatisfied = !lastControlTraceTime.TryGetValue(plid, out var lastTraceTime) ||
+                                    (now - lastTraceTime).TotalMilliseconds >= config.ControlTraceIntervalMs;
+            var stateChanged = !lastControlTraceSignature.TryGetValue(plid, out var previousSignature) ||
+                               !string.Equals(previousSignature, signature, StringComparison.Ordinal);
+
+            var shouldTrace = suspiciousOverlap ||
+                              (config.ControlTraceLoggingEnabled &&
+                               (intervalSatisfied || (config.ControlTraceLogOnStateChange && stateChanged)));
+            if (!shouldTrace)
+                return;
+
+            var message = AIControlDiagnostics.BuildTraceLine(
+                plid,
+                config.SteeringCenter,
+                steering,
+                throttle,
+                brake,
+                gear,
+                clutchValue,
+                automaticTransmission,
+                config.ResetInputsEveryTick,
+                speedKmh,
+                stateLabel,
+                status,
+                suspiciousOverlap,
+                overlapReason);
+
+            if (suspiciousOverlap)
+                logger.LogWarning(message);
+            else
+                logger.LogTrace(message);
+
+            lastControlTraceTime[plid] = now;
+            lastControlTraceSignature[plid] = signature;
+        }
+
+        /// <summary>
         ///     Send control inputs to the AI car
         /// </summary>
         private void SendControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue,
             bool automaticTransmission)
         {
-            var inputs = new List<AIInputVal>
-            {
-                new AIInputVal { Input = AicInputType.CS_MSX, Value = (ushort)steering },
-                new AIInputVal { Input = AicInputType.CS_THROTTLE, Value = (ushort)throttle },
-                new AIInputVal { Input = AicInputType.CS_BRAKE, Value = (ushort)brake }
-            };
-
-            if (!automaticTransmission)
-            {
-                inputs.Add(new AIInputVal { Input = AicInputType.CS_GEAR, Value = gear });
-                inputs.Add(new AIInputVal { Input = AicInputType.CS_CLUTCH, Value = (ushort)clutchValue });
-            }
+            var inputs = AIControlDiagnostics.BuildInputPacket(
+                steering,
+                throttle,
+                brake,
+                gear,
+                clutchValue,
+                automaticTransmission,
+                config.ResetInputsEveryTick);
 
             insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }
@@ -1452,11 +1551,15 @@ namespace AHPP_AI.AI
         private void RecordControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue,
             bool automaticTransmission)
         {
-            var steerOffset = steering - config.SteeringCenter;
-            var gearLabel = automaticTransmission ? "A" : gear.ToString();
-            var clutchLabel = automaticTransmission ? "A" : $"{clutchValue / 1000}k";
-            controlInputs[plid] =
-                $"T:{throttle / 1000}k B:{brake / 1000}k G:{gearLabel} C:{clutchLabel} S:{steerOffset}";
+            controlInputs[plid] = AIControlDiagnostics.FormatCompactControlInfo(
+                config.SteeringCenter,
+                steering,
+                throttle,
+                brake,
+                gear,
+                clutchValue,
+                automaticTransmission,
+                config.ResetInputsEveryTick);
         }
 
         /// <summary>

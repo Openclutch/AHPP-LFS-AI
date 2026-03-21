@@ -3,6 +3,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net6.0</TargetFramework>
+    <!-- Exclude local build artifact folders so generated obj sources are not compiled twice. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>8.0</LangVersion>
@@ -13,7 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\InSimDotNet\InSimDotNet.csproj" />
+    <ProjectReference Include="..\InSimDotNet\InSimDotNet.csproj" SetTargetFramework="TargetFramework=net6.0" />
   </ItemGroup>
 
   <ItemGroup>

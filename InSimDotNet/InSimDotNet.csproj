@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <TargetFrameworks>net6.0;net6.0-windows7.0</TargetFrameworks>
+    <!-- Exclude local build artifact folders so generated obj sources are not compiled twice. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**</DefaultItemExcludes>
     <AssemblyVersion>6.0.3.1</AssemblyVersion>
     <FileVersion>6.0.3.1</FileVersion>
     <Description>A light-weight InSim library for .NET 6 (min. LFS version: 0.6W)</Description>

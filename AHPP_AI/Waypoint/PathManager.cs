@@ -235,23 +235,26 @@ namespace AHPP_AI.Waypoint
                 config.SpawnRouteName,
                 recordedRoutes,
                 route => route.Metadata?.Type == RouteType.PitEntry,
-                route => route.Metadata?.Name?.StartsWith("pit_", StringComparison.OrdinalIgnoreCase) == true,
+                route => (route.Metadata?.Name?.EndsWith("_pit", StringComparison.OrdinalIgnoreCase) == true) ||
+                         (route.Metadata?.Name?.StartsWith("pit_", StringComparison.OrdinalIgnoreCase) == true),
                 "spawn");
 
             config.MainRouteName = ResolvePrimaryRouteName(
                 config.MainRouteName,
                 recordedRoutes,
                 route => route.Metadata?.Type == RouteType.MainLoop,
-                route => route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
-                         route.Metadata.Name.EndsWith("_loop", StringComparison.OrdinalIgnoreCase),
+                route => (route.Metadata?.Name?.EndsWith("_route_loop", StringComparison.OrdinalIgnoreCase) == true) ||
+                         (route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
+                          route.Metadata.Name.EndsWith("_loop", StringComparison.OrdinalIgnoreCase)),
                 "main");
 
             config.MainAlternateRouteName = ResolvePrimaryRouteName(
                 config.MainAlternateRouteName,
                 recordedRoutes,
                 route => route.Metadata?.Type == RouteType.AlternateMain,
-                route => route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
-                         route.Metadata.Name.IndexOf("_alt", StringComparison.OrdinalIgnoreCase) >= 0,
+                route => (route.Metadata?.Name?.IndexOf("_route_alt", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                         (route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
+                          route.Metadata.Name.IndexOf("_alt", StringComparison.OrdinalIgnoreCase) >= 0),
                 "alternate main",
                 config.MainRouteName);
         }
@@ -472,44 +475,122 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
-        /// Choose the best-fit spawn route for a given position/heading among all recorded pit-entry routes.
-        /// Returns the path, start index and direction that should be used.
+        /// Choose the nearest spawn route for a given position among all recorded pit-entry routes.
+        /// Returns the path plus the best heading-aligned merge direction once the route is chosen.
         /// </summary>
         public bool TrySelectSpawnRoute(Vec position, int heading, out string routeName, out List<Util.Waypoint> path,
             out int startIndex, out bool clockwise, out bool isLoop)
+        {
+            return TrySelectSpawnRoute(position, heading, null, out routeName, out path, out startIndex, out clockwise,
+                out isLoop, out _);
+        }
+
+        /// <summary>
+        /// Choose the nearest spawn route for a given position, optionally limiting the search to specific route names.
+        /// Returns the nearest waypoint distance for the selected route so callers can compare planned and live fits.
+        /// </summary>
+        public bool TrySelectSpawnRoute(Vec position, int heading, IEnumerable<string>? candidateRouteNames,
+            out string routeName, out List<Util.Waypoint> path, out int startIndex, out bool clockwise, out bool isLoop,
+            out double nearestDistance)
         {
             routeName = SpawnRouteMetadata?.Name ?? string.Empty;
             path = SpawnRoute;
             startIndex = 0;
             clockwise = true;
             isLoop = SpawnRouteMetadata?.IsLoop ?? false;
+            nearestDistance = double.MaxValue;
 
             if (spawnRoutes.Count == 0)
+            {
+                nearestDistance = FindNearestDistance(position, path);
                 return path != null && path.Count > 0;
+            }
 
-            var bestScore = double.MaxValue;
+            IEnumerable<KeyValuePair<string, List<Util.Waypoint>>> routeCandidates = spawnRoutes;
+            if (candidateRouteNames != null)
+            {
+                var requestedNames = candidateRouteNames
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(routeLibrary.NormalizeRouteName)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                if (requestedNames.Count == 0)
+                    return false;
+
+                routeCandidates = requestedNames
+                    .Where(name => spawnRoutes.ContainsKey(name))
+                    .Select(name => new KeyValuePair<string, List<Util.Waypoint>>(name, spawnRoutes[name]))
+                    .ToList();
+            }
+
             var found = false;
 
-            foreach (var kvp in spawnRoutes)
+            foreach (var kvp in routeCandidates)
             {
                 var candidatePath = kvp.Value;
                 if (candidatePath == null || candidatePath.Count < 2) continue;
 
                 var loop = spawnRouteLoops.TryGetValue(kvp.Key, out var recordedLoop) && recordedLoop;
-                var (score, index, forward) = waypointManager.ScoreRouteFit(position, heading, candidatePath, loop, false);
-                if (score < bestScore)
-                {
-                    bestScore = score;
-                    routeName = kvp.Key;
-                    path = candidatePath;
-                    startIndex = index;
-                    clockwise = forward;
-                    isLoop = loop;
-                    found = true;
-                }
+                var candidateDistance = FindNearestDistance(position, candidatePath);
+                if (candidateDistance >= nearestDistance)
+                    continue;
+
+                var (_, index, forward) = waypointManager.ScoreRouteFit(position, heading, candidatePath, loop, false);
+                nearestDistance = candidateDistance;
+                routeName = kvp.Key;
+                path = candidatePath;
+                startIndex = index;
+                clockwise = forward;
+                isLoop = loop;
+                found = true;
             }
 
             return found;
+        }
+
+        /// <summary>
+        /// Measure the shortest world-space distance from a position to any waypoint on a path.
+        /// </summary>
+        private static double FindNearestDistance(Vec position, List<Util.Waypoint> path)
+        {
+            if (path == null || path.Count == 0)
+                return double.MaxValue;
+
+            var posX = position.X / 65536.0;
+            var posY = position.Y / 65536.0;
+            var bestDistance = double.MaxValue;
+
+            foreach (var waypoint in path)
+            {
+                var wpX = waypoint.Position.X / 65536.0;
+                var wpY = waypoint.Position.Y / 65536.0;
+                var dx = wpX - posX;
+                var dy = wpY - posY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+                if (distance < bestDistance)
+                    bestDistance = distance;
+            }
+
+            return bestDistance;
+        }
+
+        /// <summary>
+        /// Resolve a loaded spawn route by its recorded file name.
+        /// </summary>
+        public bool TryGetSpawnRouteByName(string routeName, out List<Util.Waypoint> path, out bool isLoop)
+        {
+            path = new List<Util.Waypoint>();
+            isLoop = false;
+            if (string.IsNullOrWhiteSpace(routeName))
+                return false;
+
+            if (!spawnRoutes.TryGetValue(routeName, out var storedPath) || storedPath == null || storedPath.Count == 0)
+                return false;
+
+            path = storedPath;
+            isLoop = spawnRouteLoops.TryGetValue(routeName, out var recordedLoop) && recordedLoop;
+            return true;
         }
 
         /// <summary>

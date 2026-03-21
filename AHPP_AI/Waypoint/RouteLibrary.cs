@@ -148,6 +148,10 @@ namespace AHPP_AI.Waypoint
         public RouteType GuessRouteType(string name)
         {
             var lower = (name ?? string.Empty).ToLowerInvariant();
+            if (lower.EndsWith("_pit") || lower.Contains("_pit_")) return RouteType.PitEntry;
+            if (lower.Contains("_route_alt") || lower.Contains("_route_inner")) return RouteType.AlternateMain;
+            if (lower.Contains("_route_detour") || lower.Contains("_route_branch")) return RouteType.Detour;
+            if (lower.EndsWith("_route_loop") || lower.Contains("_route_main")) return RouteType.MainLoop;
             if (lower.StartsWith("pit_")) return RouteType.PitEntry;
             if (lower.StartsWith("route_") &&
                 (lower.Contains("_alt") || lower.EndsWith("alt") || lower.Contains("inner")))
@@ -174,39 +178,76 @@ namespace AHPP_AI.Waypoint
         {
             try
             {
-                var route = JsonSerializer.Deserialize<RecordedRoute>(json, serializerOptions);
-                if (route != null) return route;
-            }
-            catch
-            {
-                // Continue trying legacy formats
-            }
-
-            try
-            {
-                var saved = JsonSerializer.Deserialize<SavedRoute>(json, serializerOptions);
-                if (saved != null && saved.Nodes != null) return ConvertLegacy(saved, name);
-            }
-            catch
-            {
-                // Continue trying legacy formats
-            }
-
-            try
-            {
-                var points = JsonSerializer.Deserialize<List<RoutePoint>>(json, serializerOptions);
-                if (points != null) return new RecordedRoute
+                using (var document = JsonDocument.Parse(json))
                 {
-                    Metadata = BuildMetadata(name, GuessRouteType(name)),
-                    Nodes = points
-                };
+                    if (TryParseRecordedRoute(document, json, out var recordedRoute))
+                        return recordedRoute;
+
+                    if (TryParseLegacyRoute(document, json, name, out var legacyRoute))
+                        return legacyRoute;
+
+                    if (TryParseRoutePointList(document, json, name, out var pointListRoute))
+                        return pointListRoute;
+                }
             }
-            catch
+            catch (JsonException ex)
             {
-                // Continue to template fallback
+                logger.LogWarning($"Invalid JSON in route {name}: {ex.Message}");
             }
 
             return CreateTemplate(name);
+        }
+
+        /// <summary>
+        /// Deserialize the current route schema when JSON contains metadata and node collections.
+        /// </summary>
+        private bool TryParseRecordedRoute(JsonDocument document, string json, out RecordedRoute route)
+        {
+            route = null;
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("Metadata", out _)) return false;
+            if (!root.TryGetProperty("Nodes", out _)) return false;
+
+            route = JsonSerializer.Deserialize<RecordedRoute>(json, serializerOptions);
+            return route != null;
+        }
+
+        /// <summary>
+        /// Deserialize the legacy object schema that stored route identity beside the node list.
+        /// </summary>
+        private bool TryParseLegacyRoute(JsonDocument document, string json, string name, out RecordedRoute route)
+        {
+            route = null;
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("Nodes", out _)) return false;
+
+            var saved = JsonSerializer.Deserialize<SavedRoute>(json, serializerOptions);
+            if (saved == null || saved.Nodes == null) return false;
+
+            route = ConvertLegacy(saved, name);
+            return true;
+        }
+
+        /// <summary>
+        /// Deserialize the oldest array-only schema where the file contained route points directly.
+        /// </summary>
+        private bool TryParseRoutePointList(JsonDocument document, string json, string name, out RecordedRoute route)
+        {
+            route = null;
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return false;
+
+            var points = JsonSerializer.Deserialize<List<RoutePoint>>(json, serializerOptions);
+            if (points == null) return false;
+
+            route = new RecordedRoute
+            {
+                Metadata = BuildMetadata(name, GuessRouteType(name)),
+                Nodes = points
+            };
+
+            return true;
         }
 
         /// <summary>

@@ -1,5 +1,57 @@
 # Changelog
 
+- Fixed AI spawn classification so bots now try their planned pit area's spawn routes first, but still fall back to the physically nearest pit route when LFS places them in a different bay, preventing fresh spawns from targeting another area's waypoints or getting stuck on a bad first route. Defensive PLID de-duplication was also added so repeated join tracking cannot leave duplicate AI rows in the UI list.
+
+- Simplified AI spawn routing so live spawned position is now the sole source of truth for pit-route selection, and the AI's assigned population segment is remapped from that actual spawn route instead of trusting the pre-spawn segment guess.
+
+- Spawn routing now cross-checks the planned pit-area route against the AI's live spawn position and falls back to the nearest actual pit route when LFS places the car in a different slot, preventing long-standing misroutes caused by planned area tags not matching the car's real spawn point.
+
+- Fixed pit-area spawn classification so newly spawned AI first uses that area's configured pit route instead of picking the nearest pit route anywhere on the map, preventing bots from spawning in one area and immediately targeting a waypoint hundreds of metres away on another pit path.
+
+- Stopped MCI-only engine-state fallback from treating stationary AI as stalled after the telemetry warmup window, which was falsely triggering the restart sequence and leaving bots holding clutch, throttle, and steering when more traffic was added.
+
+- Stuck AI recovery no longer uses `/pitlane`, so failed recoveries now spectate the bot and queue a fresh spawn instead of forcing it back to pit slot 1 and away from its assigned route.
+
+- AI spawns now wait for the actual nearest pit-route classification before assigning a driving route, and pit-route exit handoff now follows that pit family's recorded loop or alt route instead of snapping back to the default pit/main fallback.
+
+- Route JSON loading in `AHPP_AI` now inspects each file's shape before deserializing, avoiding the repeated `System.Text.Json.JsonException` probes that were firing in the debugger for legacy route formats.
+
+- AI spawn classification now always picks the physically closest recorded pit-entry route from the car's live position, so bad segment-to-pit mappings no longer send fresh spawns hundreds of metres toward the wrong route.
+
+- Fixed the recent auto race-mode gating regression that left `trackCandidate` unassigned and broke `AHPP_AI` compilation.
+
+- Restricted automatic AI race-mode selection to active race sessions without a pit-area spawn assignment, so normal pit traffic no longer flips into race/highway routing from the initial spawn heuristic.
+
+- Grouped pit-route selection now locks the AI onto the same route family, so choosing a spawn like `da_pit` also keeps later routing on matching `da_*` loop/alt routes instead of crossing into another group.
+
+- Restored segment-aware AI spawn routing so bots assigned to a pit area prefer that area's recorded pit route (for example `da_pit`) before falling back to nearest pit-route matching.
+
+- Fixed the debug route label during AI spawn so it shows the per-AI pit route actually selected at spawn time instead of always displaying the configured default spawn route.
+
+- Updated the debug `AI_ST` status label to show the AI's resolved active route name, so multi-route spawn/main/branch decisions are visible in the HUD.
+
+- AI spawn classification now picks the physically nearest recorded pit-entry route when a bot appears, instead of preferring segment-tag pit routes or heading-weighted spawn scoring.
+
+- Moved the in-game AI route list up by 40 UI units so more of the route selector sits clear of the lower controls.
+
+- Fixed the AI list mode button so clicking `Race` again now switches the same AI back to `Cruise`, reapplying a spawn-route cruise path when current telemetry is available.
+
+- Added support for segment-prefixed route names like `bmw_pit`, `bmw_route_loop`, and `bmw_route_alt`, and AI spawn selection now prefers the assigned segment tag's `<tag>_pit` file before falling back to generic pit-route matching.
+
+- Removed legacy red fallback route entries from the AI route selector so detour/main placeholders are no longer shown when only custom recorded routes should be selectable.
+
+- Added paging controls to the AI route selector so more than one screen of routes can be browsed in-game with `<` and `>` buttons instead of silently truncating the list.
+
+- Reworked auto-population to target `PitSpawnArea` segment tags from `config.ini` instead of per-route JSON metadata, so AI counts are now distributed by segment `FillPercent` and spawned with that segment's configured mod/setup/colour presets.
+- Added segment assignment tracking for spawned AI so auto-population removes surplus traffic from the correct segment when players join and keeps the configured player buffer intact.
+- Updated the sample AI config to reserve an 8-player join buffer on a 48-slot server, cap auto traffic at 40 AI, and express the current highway segment as `FillPercent=100`.
+
+- Added optional AI control diagnostics with per-state trace logging, suspicious throttle/clutch overlap warnings, and an `AI.ResetInputsEveryTick` toggle for debugging stale control inputs.
+- Normal driving, warmup hold, merge hold, and recovery paths now all record and trace their control frames consistently so bad AI behavior can be tied back to the exact state/status that sent it.
+- Added AI control unit tests that document reset-packet construction and the expected clutch/throttle overlap rules for launch versus abnormal driving.
+
+- Changed AI spawn delay config and in-game input to use `SpawnDelaySeconds` instead of `SpawnDelayMs`, while still converting to milliseconds internally for the existing spawn timing logic.
+
 - Route identity now follows the JSON filename instead of the embedded metadata name, so layout folders can use names like `pit_highway`, `route_highway_loop`, and `route_highway_alt` directly.
 - Added route-name auto resolution per layout so missing legacy names like `pit_entry` and `main_loop` fall back to discovered `pit_*`, `route_*_loop`, and `route_*_alt` files in the active track/layout folder.
 
