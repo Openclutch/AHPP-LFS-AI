@@ -1,5 +1,39 @@
 # Changelog
 
+- Fixed `AHPP_AI` planned auto-population spawns dropping their target pit-area segment before `/ai` was issued, which meant fresh bots were always classified only from whatever live slot LFS happened to use and could all pile onto routes like `bmw_route_loop`. Planned segment tags are now queued through spawn and applied on the matching AI join before initial route selection runs.
+
+- Refactored `AHPP_AI` driving so each active driver state now produces a complete control intent for the tick instead of stacking single-input overrides afterward. Normal route following, warmup hold, merge yield, reverse recovery, and engine restart now all flow through the same full-frame apply path, with ignition toggles included in the engine-restart state output.
+
+- Overhauled `AHPP_AI` manual gearbox control so shifts are now driven by a smaller verified state machine that waits for `IS_AII` to confirm the actual LFS gear before releasing the clutch, preventing the driver from assuming first gear while the HUD still shows neutral.
+
+- Removed the low-speed clutch hold and standstill full-throttle launch override that could leave AI revving in neutral or with slipping clutch, and updated launch diagnostics to show commanded gear, confirmed actual gear, target gear, and shift phase for faster drivetrain debugging.
+
+- Initial spawn classification now rejects pit-entry routes more than 100m from the AI's actual spawn position, so distant routes like `tram_pit` are treated as unresolved instead of being accepted and sending the AI into pointless recovery loops.
+
+- Added focused `LAUNCH DIAG` logging for near-stationary AI so spawn failures now record engine state, recovery state, warmup flags, target waypoint context, gear, clutch, throttle, brake, steering, and whether throttle is currently allowed by the gearbox logic.
+
+- Extracted spawn and initial-route classification into dedicated route-planning policies with explicit decision/result models, so `AHPP_AI` now applies deterministic spawn-route fallback, on-track override, and spawn-to-driving-route handoff rules from a single testable layer instead of scattered controller-only heuristics.
+
+- Added in-memory routing and path-projection tests covering planned-vs-live spawn selection, on-track viability thresholds, reversed candidate creation, spawn-route handoff decisions, and path distance/projection geometry so the core spawn reliability rules can be regression-tested without running Live for Speed.
+
+- Tightened AI spawn classification so on-track routes are rejected when they are still implausibly far away or require a large heading flip from the fresh spawn position, preventing cars from locking onto distant highway/alternate lanes instead of their nearby pit route.
+
+- Stopped the driver from applying unconditional launch throttle while stationary and badly misaligned to the target waypoint, so a wrong route choice no longer turns into sustained clutch-in/full-throttle behavior before reverse recovery kicks in.
+
+- Neutralized the initial spawn throttle frame sent to new AI cars, reducing bad takeoff behavior during the first route-classification ticks and making spawn failures easier to diagnose from logs.
+
+- Stopped importing legacy `Routes:Detour1-3` placeholders from config during startup, so `AHPP_AI` no longer tries to load missing branch names like `detour1`, `detour2`, or `detour3` when route discovery is supposed to come only from recorded files and metadata.
+
+- Removed local AI spawn planning/ownership matching so this app no longer pre-assigns segment tags to future `/ai` requests or ignores AI that were spawned by another InSim controller. AI joins are now accepted from the live server state and classified only from their actual spawn position, while reset/spectate no longer queues a local replacement spawn.
+
+- AI that still cannot resolve any valid initial route after the spawn warmup window is now spectated instead of sitting indefinitely with no usable path.
+
+- Fixed AI spawn classification so remapped or on-road spawns no longer get forced onto pit-entry routes that are hundreds of metres away. The controller now compares pit-route distance against nearby drivable routes, promotes clearly on-track starts onto the nearest valid loop/branch even outside race mode, and logs the chosen spawn distance so bad slot mappings are obvious during debugging.
+
+- Removed the remaining generic route-slot scaffolding from `AHPP_AI` so route bootstrap, recording selection, and UI route lists now rely on actual recorded route files instead of placeholder names like `main_alt`, `detour1-3`, or legacy `route1-3` mappings. Alternate and detour routes are now discovered from recorded metadata for the active layout.
+
+- Cleaned up route branch discovery so resolved alternate-main files are no longer reprocessed as generic branches, and missing optional detour placeholders like `detour1-3` are ignored unless a real recorded detour exists for the active layout. This removes the false "route not found" and duplicate branch warnings that were appearing alongside valid `*_route_*` loads.
+
 - Fixed AI spawn classification so bots now try their planned pit area's spawn routes first, but still fall back to the physically nearest pit route when LFS places them in a different bay, preventing fresh spawns from targeting another area's waypoints or getting stuck on a bad first route. Defensive PLID de-duplication was also added so repeated join tracking cannot leave duplicate AI rows in the UI list.
 
 - Simplified AI spawn routing so live spawned position is now the sole source of truth for pit-route selection, and the AI's assigned population segment is remapped from that actual spawn route instead of trusting the pre-spawn segment guess.

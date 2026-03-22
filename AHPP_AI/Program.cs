@@ -45,8 +45,8 @@ namespace AHPP_AI
         private static readonly int outGaugePort;
         private static readonly string adminPassword;
         private static byte currentViewPLID = 0;
-        private static string currentRecordingRoute = "main_loop";
-        private static string pendingRouteName = "main_loop";
+        private static string currentRecordingRoute = string.Empty;
+        private static string pendingRouteName = string.Empty;
         private static readonly string spawnRouteName;
         private static readonly string mainRouteName;
         private static readonly string mainAlternateRouteName;
@@ -90,6 +90,10 @@ namespace AHPP_AI
         private static readonly int stallPreventionRpm;
         private static readonly int stallPreventionReleaseRpm;
         private static readonly int stallPreventionHoldMs;
+        private static readonly int launchThrottleValue;
+        private static readonly int launchHoldMs;
+        private static readonly int launchClutchReleaseMs;
+        private static readonly int gearConfirmationTimeoutMs;
         private static readonly bool wallRecoveryEnabled;
         private static readonly int waypointTimeoutSeconds;
         private static readonly int progressCheckIntervalMs;
@@ -163,6 +167,7 @@ namespace AHPP_AI
         private static readonly int spawnMergeHoldLookaheadWaypoints;
         private static readonly double spawnMergeHoldDistanceMeters;
         private static readonly bool raceUseAutomaticTransmission;
+        private static readonly double maxSpawnInitialRouteDistanceMeters;
         private static readonly double trackSpawnScoreAdvantage;
         private static readonly double raceWaypointSpeedFactor;
         private static readonly double raceWaypointSpeedOffsetKmh;
@@ -230,21 +235,19 @@ namespace AHPP_AI
             debugCoordinateSystem = appConfig.GetBool("DebugAI", "AutoVisualizeAxes", false);
 
             routeLibrary = new RouteLibrary(logger);
-            mainRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Main", "main_loop"));
-            spawnRouteName = routeLibrary.NormalizeRouteName(appConfig.GetString("Routes", "Spawn", "pit_entry"));
+            var rawMain = appConfig.GetString("Routes", "Main", string.Empty);
+            mainRouteName = string.IsNullOrWhiteSpace(rawMain)
+                ? string.Empty
+                : routeLibrary.NormalizeRouteName(rawMain);
+            var rawSpawn = appConfig.GetString("Routes", "Spawn", string.Empty);
+            spawnRouteName = string.IsNullOrWhiteSpace(rawSpawn)
+                ? string.Empty
+                : routeLibrary.NormalizeRouteName(rawSpawn);
             var rawAlt = appConfig.GetString("Routes", "MainAlt", string.Empty);
             mainAlternateRouteName = string.IsNullOrWhiteSpace(rawAlt)
                 ? string.Empty
                 : routeLibrary.NormalizeRouteName(rawAlt);
-            for (var i = 1; i <= 3; i++)
-            {
-                var detour = appConfig.GetString("Routes", $"Detour{i}", string.Empty);
-                if (string.IsNullOrWhiteSpace(detour)) continue;
-                var normalized = routeLibrary.NormalizeRouteName(detour);
-                if (!branchRouteNames.Exists(n => n.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
-                    branchRouteNames.Add(normalized);
-            }
-            currentRecordingRoute = routeLibrary.NormalizeRouteName(mainRouteName);
+            currentRecordingRoute = mainRouteName;
             pendingRouteName = currentRecordingRoute;
 
             initialAiCount = appConfig.GetInt("AI", "NumberOfAIs", 0);
@@ -288,6 +291,10 @@ namespace AHPP_AI
             stallPreventionRpm = appConfig.GetInt("AI", "StallPreventionRpm", 500);
             stallPreventionReleaseRpm = appConfig.GetInt("AI", "StallPreventionReleaseRpm", 900);
             stallPreventionHoldMs = appConfig.GetInt("AI", "StallPreventionHoldMs", 750);
+            launchThrottleValue = appConfig.GetInt("AI", "LaunchThrottleValue", 18000);
+            launchHoldMs = appConfig.GetInt("AI", "LaunchHoldMs", 400);
+            launchClutchReleaseMs = appConfig.GetInt("AI", "LaunchClutchReleaseMs", 3500);
+            gearConfirmationTimeoutMs = appConfig.GetInt("AI", "GearConfirmationTimeoutMs", 2000);
             wallRecoveryEnabled = appConfig.GetBool("AI", "WallRecoveryEnabled", true);
             waypointTimeoutSeconds = appConfig.GetInt("AI", "WaypointTimeoutSeconds", 30);
             progressCheckIntervalMs = appConfig.GetInt("AI", "ProgressCheckIntervalMs", 5000);
@@ -317,6 +324,8 @@ namespace AHPP_AI
             spawnMergeHoldDistanceMeters = appConfig.GetDouble("AI", "SpawnMergeHoldDistanceMeters", 15.0);
             var raceSection = "RaceMode";
             raceUseAutomaticTransmission = appConfig.GetBool(raceSection, "UseAutomaticTransmission", true);
+            maxSpawnInitialRouteDistanceMeters =
+                appConfig.GetDouble("AI", "MaxSpawnInitialRouteDistanceMeters", 100.0);
             trackSpawnScoreAdvantage = appConfig.GetDouble(raceSection, "TrackSpawnScoreAdvantage", 8.0);
             raceWaypointSpeedFactor = appConfig.GetDouble(raceSection, "WaypointSpeedFactor", 1.12);
             raceWaypointSpeedOffsetKmh = appConfig.GetDouble(raceSection, "WaypointSpeedOffsetKmh", 8.0);
@@ -424,6 +433,8 @@ namespace AHPP_AI
             visualizer.LayoutSelectionChanged += aiController.OnLayoutSelectionChanged;
             visualizer.LayoutObjectMoved += aiController.OnLayoutObjectMoved;
             aiController.ApplyRouteConfig(spawnRouteName, mainRouteName, mainAlternateRouteName, branchRouteNames);
+            currentRecordingRoute = aiController.MainRouteName;
+            pendingRouteName = currentRecordingRoute;
             aiController.SetNumberOfAIs(initialAiCount);
             aiController.SetSpawnDelayMs(Math.Max(0, spawnDelaySeconds) * 1000);
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
@@ -453,6 +464,11 @@ namespace AHPP_AI
                 stallPreventionRpm,
                 stallPreventionReleaseRpm,
                 stallPreventionHoldMs);
+            aiController.ConfigureLaunch(
+                launchThrottleValue,
+                launchHoldMs,
+                launchClutchReleaseMs,
+                gearConfirmationTimeoutMs);
             aiController.ConfigureGearbox(
                 shiftDelayMs,
                 gearUpshiftHysteresisKmh,
@@ -461,6 +477,7 @@ namespace AHPP_AI
                 gearSpeedThresholdsKmh);
             aiController.ConfigureRaceMode(
                 raceUseAutomaticTransmission,
+                maxSpawnInitialRouteDistanceMeters,
                 trackSpawnScoreAdvantage,
                 raceWaypointSpeedFactor,
                 raceWaypointSpeedOffsetKmh,
@@ -602,15 +619,6 @@ namespace AHPP_AI
                 InitializeInSim();
                 aiController.ConnectOutGauge(currentHost, outGaugePort);
 
-                // not sure if we need this, use logging to see if already call the layout, maybe on init
-                /*
-                insim.Send(new IS_TINY
-                {
-                    ReqI = 1,
-                    SubT = TinyType.TINY_AXM // Request layout from server
-                });
-                */
-
                 // Request all player information
                 GetPlayers();
 
@@ -687,12 +695,12 @@ namespace AHPP_AI
                         }
                     }
                     else
-                {
-                    logger.LogError("No AI cars found to visualize waypoints");
+                    {
+                        logger.LogError("No AI cars found to visualize waypoints");
+                    }
                 }
-            }
 
-            aiController.SyncLayoutToggleState();
+                aiController.SyncLayoutToggleState();
 
                 // Keep program running and listen for the 'q' key when console input is available.
                 if (IsConsoleKeyInputAvailable())
@@ -814,9 +822,9 @@ namespace AHPP_AI
             insim.IS_CNL += (sender, e) => aiController.OnConnectionLeave(e.Packet);
             insim.IS_NCN += (sender, e) => aiController.OnNewConnection(e.Packet);
 
-            // Car telemetry
-            if (useAiiTelemetry)
-                insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
+            // Car telemetry — IS_AII is always subscribed for gear feedback;
+            // UseAiiTelemetry only controls whether RPM is used for engine-running detection.
+            insim.IS_AII += (sender, e) => aiController.OnAII(e.Packet);
             insim.IS_MCI += (sender, e) => aiController.OnMCI(e.Packet);
             insim.IS_CON += (sender, e) => aiController.OnCollision(e.Packet);
 
@@ -886,7 +894,7 @@ namespace AHPP_AI
                     aiController.StartAllAIs();
                     break;
                 case MainUI.StartAutoAisId:
-                    aiController.EnableAutoPopulation();
+                    aiController.ToggleAutoPopulation();
                     break;
                 case MainUI.PitAllAisId:
                     aiController.PitAllAIs();
@@ -963,6 +971,22 @@ namespace AHPP_AI
                     insim.SendPrivateMessage(btt.UCID, "Enter a valid spawn delay in seconds.");
                 }
 
+                return;
+            }
+
+            if (btt.ClickID == MainUI.MaxAIsInputId)
+            {
+                if (int.TryParse(btt.Text, out var maxAis))
+                {
+                    var clamped = Math.Max(0, maxAis);
+                    aiController.SetMaxAIs(clamped);
+                    appConfig.SetString("AIManager", "MaxAIs", clamped.ToString(), true);
+                    insim.SendPrivateMessage(btt.UCID, $"Max auto AI set to {clamped}");
+                }
+                else
+                {
+                    insim.SendPrivateMessage(btt.UCID, "Enter a valid max AI count.");
+                }
                 return;
             }
 
@@ -1173,8 +1197,10 @@ namespace AHPP_AI
         /// </summary>
         private static void SetRecordingRoute(string routeName)
         {
-            var normalized = routeLibrary.NormalizeRouteName(
-                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            if (string.IsNullOrWhiteSpace(routeName))
+                return;
+
+            var normalized = routeLibrary.NormalizeRouteName(routeName);
             currentRecordingRoute = normalized;
             pendingRouteName = normalized;
             aiController.SetRecordingRouteSelection(currentRecordingRoute);
@@ -1203,13 +1229,6 @@ namespace AHPP_AI
             if (!string.IsNullOrWhiteSpace(mainAlternateRouteName)) names.Add(mainAlternateRouteName);
             names.AddRange(branchRouteNames);
             return names.Distinct(StringComparer.OrdinalIgnoreCase);
-        }
-
-        private static string GetBranchRoute(int index, string fallback)
-        {
-            if (index >= 0 && index < branchRouteNames.Count)
-                return branchRouteNames[index];
-            return fallback;
         }
 
         private static int GetAiManagerInt(string key, int defaultValue)

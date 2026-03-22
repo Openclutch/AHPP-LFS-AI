@@ -1,0 +1,5 @@
+C:\Users\lee_b\AHPP-LFS-AI\InSimDotNet\artifacts\testobj\Debug\net6.0\InSimDotNet.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\lee_b\AHPP-LFS-AI\InSimDotNet\artifacts\testobj\Debug\net6.0\InSimDotNet.AssemblyInfoInputs.cache
+C:\Users\lee_b\AHPP-LFS-AI\InSimDotNet\artifacts\testobj\Debug\net6.0\InSimDotNet.AssemblyInfo.cs
+C:\Users\lee_b\AHPP-LFS-AI\InSimDotNet\artifacts\testobj\Debug\net6.0\InSimDotNet.csproj.CoreCompileInputs.cache
+C:\Users\lee_b\AHPP-LFS-AI\InSimDotNet\artifacts\testobj\Debug\net6.0\InSimDotNet.sourcelink.json

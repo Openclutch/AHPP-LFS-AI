@@ -16,6 +16,7 @@ namespace AHPP_AI.AI
     {
         private const ushort HelpFlagAutoGears = 8;
         private const ushort HelpFlagAutoClutch = 512;
+        private const double StationaryReorientationBrakeHeadingErrorDegrees = 110.0;
 
         // Enumeration for engine start state machine
         public enum EngineStartState
@@ -69,6 +70,25 @@ namespace AHPP_AI.AI
             public int SteerDirection = 1;
             public string Reason = string.Empty;
             public bool ValidationActive;
+            public int StallReverseAttempts;
+        }
+
+        /// <summary>
+        ///     Represents the complete control frame the current driver state wants to send to LFS.
+        /// </summary>
+        private struct ControlIntent
+        {
+            public int Steering;
+            public int Throttle;
+            public int Brake;
+            public byte Gear;
+            public int ClutchValue;
+            public bool AutomaticTransmission;
+            public double SpeedKmh;
+            public bool LowRpmClutchActive;
+            public string Status;
+            public ushort? IgnitionValue;
+            public int? Handbrake;
         }
 
         private readonly AIConfig config;
@@ -94,6 +114,8 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, DateTime> lastCollisionLogTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, string> lastControlTraceSignature = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastControlTraceTime = new Dictionary<byte, DateTime>();
+        private readonly Dictionary<byte, string> lastLaunchDiagnosticSignature = new Dictionary<byte, string>();
+        private readonly Dictionary<byte, DateTime> lastLaunchDiagnosticTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
         private Action<byte>? recoveryFailedHandler;
@@ -174,8 +196,8 @@ namespace AHPP_AI.AI
             drivingModes[plid] = AIConfig.DrivingMode.Cruise;
             controlInputs[plid] = "T:0k B:0k G:0 C:0 S:0";
             controlStatuses[plid] = "Initializing";
-            engineRunning[plid] = false; // Always start with engine "not running" to trigger start procedure
-            engineStartStates[plid] = EngineStartState.PressClutch; // Start in clutch pressed state
+            engineRunning[plid] = true; // Engine is already running when AI spawns in LFS
+            engineStartStates[plid] = EngineStartState.Normal; // No ignition sequence needed
             engineStateTimers[plid] = DateTime.Now;
 
             // Reset lights and set a sensible default
@@ -194,6 +216,8 @@ namespace AHPP_AI.AI
             movementIssueCounts[plid] = 0;
             lastControlTraceTime.Remove(plid);
             lastControlTraceSignature.Remove(plid);
+            lastLaunchDiagnosticTime.Remove(plid);
+            lastLaunchDiagnosticSignature.Remove(plid);
 
             // Send initial controls to configure AI car
             SendAIControls(plid);
@@ -310,47 +334,8 @@ namespace AHPP_AI.AI
                         $"TargetPos=({waypointX:F1},{waypointY:F1})");
                 }
 
-                // Calculate throttle and brake based on speed and heading error
-                int throttle;
-                int brake;
-                var status = drivingMode == AIConfig.DrivingMode.Race ? "RACE: Route follow" : "CRUISE: Route follow";
-
-                // Reduce throttle for sharp turns, apply more throttle for straight driving
-                var errorMagnitude = Math.Abs(headingError) / (double)CoordinateUtils.HALF_CIRCLE;
-                if (errorMagnitude > 0.5) // More than 90 degrees off
-                {
-                    // We're facing more away than toward - reduce speed for sharper turn
-                    throttle = drivingMode == AIConfig.DrivingMode.Race ? 28000 : 20000;
-                    brake = 0;
-
-                    // Log severe heading errors
-                    if (DateTime.Now.Millisecond < 100) // Throttle logging
-                        logger.Log(
-                            $"PLID={plid} SHARP TURN: Heading={CoordinateUtils.NormalizeHeading((int)currentHeading)}, Target={desiredHeading}, Diff={headingError}, Steering={steering}");
-                }
-                else if (errorMagnitude > 0.25) // 45-90 degrees off
-                {
-                    throttle = drivingMode == AIConfig.DrivingMode.Race ? 42000 : 30000;
-                    brake = 0;
-                }
-                else
-                {
-                    // Normal driving, use throttle based on desired speed
-                    (throttle, brake) =
-                        waypointFollower.CalculateThrottleAndBrake(plid, speedKmh, headingError, drivingMode);
-                }
-
-                // Handle stationary vehicle 
-                if (speedKmh < 0.5)
-                {
-                    // Apply full throttle to escape if stuck
-                    throttle = 65000;
-                    status = "SLOW/STUCK: Launch assist";
-
-                    // Log when stuck
-                    if (DateTime.Now.Millisecond < 100) // Throttle logging
-                        logger.Log($"PLID={plid} SLOW/STUCK: Applying full throttle");
-                }
+                var intent = BuildRouteFollowIntent(plid, steering, speedKmh, headingError, drivingMode, currentHeading,
+                    desiredHeading);
 
                 // Log status periodically
                 if (DateTime.Now.Second % 5 == 0 && DateTime.Now.Millisecond < 100)
@@ -372,46 +357,54 @@ namespace AHPP_AI.AI
                 gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, drivingMode);
 
                 var lowRpmClutchActive = !automaticTransmission && gearboxController.IsLowRpmClutchActive(plid);
+                intent.LowRpmClutchActive = lowRpmClutchActive;
 
-                // Check if we should apply throttle based on clutch state
-                if (!automaticTransmission && !gearboxController.ShouldApplyThrottle(plid, speedKmh)) throttle = 0;
-
-                var forceClutch = false;
-                if (ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot,
-                        ref throttle, ref brake, out var trafficStatus, ref forceClutch))
-                {
-                    status = trafficStatus;
-                }
+                ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission);
+                ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot, ref intent);
 
                 // Check for potential collisions
                 var collisionDanger = DetectPotentialCollision(plid, car, allCars);
                 if (collisionDanger)
                 {
-                    // Override controls - stop the car
-                    throttle = 0;
-                    brake = 65535; // Full brake
-                    forceClutch = !automaticTransmission;
-                    status = "COLLISION AVOIDANCE: Stopping";
+                    intent = BuildControlIntent(
+                        steering,
+                        0,
+                        65535,
+                        automaticTransmission,
+                        speedKmh,
+                        "COLLISION AVOIDANCE: Stopping");
+                    ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch: !automaticTransmission);
                 }
 
-                if (!automaticTransmission)
-                    gearboxController.ApplyBrakingClutch(plid, brake);
-
-                // Get current gearbox state after braking adjustments
-                byte gear = 0;
-                var clutchValue = 0;
                 if (!automaticTransmission)
                 {
-                    (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
-                    if (forceClutch) clutchValue = 65535;
+                    var shiftStatus = gearboxController.GetShiftStatus(plid);
+                    if (!string.IsNullOrWhiteSpace(shiftStatus))
+                        intent.Status = shiftStatus;
                 }
 
-                if (lowRpmClutchActive) status = "Low RPM clutch";
-                controlStatuses[plid] = status;
+                if (lowRpmClutchActive)
+                    intent.Status = "Low RPM clutch";
+
+                controlStatuses[plid] = intent.Status;
 
                 // Send AI controls
-                ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh,
-                    lowRpmClutchActive);
+                ApplyControlIntent(plid, intent);
+                TraceLaunchDiagnostics(
+                    plid,
+                    speedKmh,
+                    currentRpm,
+                    distance,
+                    desiredHeading,
+                    headingError,
+                    intent.Steering,
+                    intent.Throttle,
+                    intent.Brake,
+                    intent.Gear,
+                    intent.ClutchValue,
+                    intent.AutomaticTransmission,
+                    intent.LowRpmClutchActive,
+                    movementIssue);
             }
             catch (Exception ex)
             {
@@ -420,27 +413,148 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Build the route-following control intent for the current tick before transmission and safety states refine it.
+        /// </summary>
+        private ControlIntent BuildRouteFollowIntent(
+            byte plid,
+            int steering,
+            double speedKmh,
+            int headingError,
+            AIConfig.DrivingMode drivingMode,
+            double currentHeading,
+            int desiredHeading)
+        {
+            int throttle;
+            int brake;
+            var status = drivingMode == AIConfig.DrivingMode.Race ? "RACE: Route follow" : "CRUISE: Route follow";
+
+            var errorMagnitude = Math.Abs(headingError) / (double)CoordinateUtils.HALF_CIRCLE;
+            if (errorMagnitude > 0.5)
+            {
+                throttle = drivingMode == AIConfig.DrivingMode.Race ? 28000 : 20000;
+                brake = 0;
+
+                if (DateTime.Now.Millisecond < 100)
+                    logger.Log(
+                        $"PLID={plid} SHARP TURN: Heading={CoordinateUtils.NormalizeHeading((int)currentHeading)}, Target={desiredHeading}, Diff={headingError}, Steering={steering}");
+            }
+            else if (errorMagnitude > 0.25)
+            {
+                throttle = drivingMode == AIConfig.DrivingMode.Race ? 42000 : 30000;
+                brake = 0;
+            }
+            else
+            {
+                (throttle, brake) = waypointFollower.CalculateThrottleAndBrake(plid, speedKmh, headingError, drivingMode);
+            }
+
+            if (speedKmh < 0.5)
+            {
+                var headingErrorDegrees = Math.Abs(headingError) * 360.0 / CoordinateUtils.FULL_CIRCLE;
+                if (headingErrorDegrees >= StationaryReorientationBrakeHeadingErrorDegrees)
+                {
+                    throttle = 0;
+                    brake = Math.Max(brake, config.BrakeBase);
+                    status = "SLOW/STUCK: Holding for recovery";
+
+                    if (DateTime.Now.Millisecond < 100)
+                        logger.Log(
+                            $"PLID={plid} SLOW/STUCK: Suppressing launch assist due to heading error {headingErrorDegrees:F1}deg");
+                }
+            }
+
+            return BuildControlIntent(steering, throttle, brake, UsesAutomaticTransmission(plid), speedKmh, status);
+        }
+
+        /// <summary>
+        /// Create a complete control intent with safe defaults for optional inputs.
+        /// </summary>
+        private static ControlIntent BuildControlIntent(
+            int steering,
+            int throttle,
+            int brake,
+            bool automaticTransmission,
+            double speedKmh,
+            string status)
+        {
+            return new ControlIntent
+            {
+                Steering = steering,
+                Throttle = throttle,
+                Brake = brake,
+                Gear = 0,
+                ClutchValue = 0,
+                AutomaticTransmission = automaticTransmission,
+                SpeedKmh = speedKmh,
+                LowRpmClutchActive = false,
+                Status = status,
+                IgnitionValue = null,
+                Handbrake = null
+            };
+        }
+
+        /// <summary>
+        /// Complete the transmission part of a control intent from the current gearbox state.
+        /// </summary>
+        private void ApplyTransmissionIntent(
+            byte plid,
+            ref ControlIntent intent,
+            double speedKmh,
+            bool automaticTransmission,
+            bool forceClutch = false)
+        {
+            if (automaticTransmission)
+                return;
+
+            gearboxController.ApplyBrakingClutch(plid, intent.Brake);
+            var (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
+
+            intent.Gear = gear;
+            intent.ClutchValue = forceClutch ? config.ClutchFullyPressed : clutchValue;
+
+            if (!gearboxController.ShouldApplyThrottle(plid, speedKmh))
+            {
+                intent.Throttle = 0;
+            }
+            else if (gearboxController.IsSpawnLaunchActive(plid))
+            {
+                // During spawn launch enforce a minimum throttle so the car can pull away.
+                intent.Throttle = Math.Max(intent.Throttle, config.LaunchThrottleValue);
+                if (!intent.Status.Contains("LAUNCH"))
+                    intent.Status = "SPAWN LAUNCH: clutch release";
+            }
+        }
+
+        /// <summary>
+        /// Record, trace, and send the full control intent selected for the current state.
+        /// </summary>
+        private void ApplyControlIntent(byte plid, ControlIntent intent)
+        {
+            ApplyControlFrame(
+                plid,
+                intent.Steering,
+                intent.Throttle,
+                intent.Brake,
+                intent.Gear,
+                intent.ClutchValue,
+                intent.AutomaticTransmission,
+                intent.SpeedKmh,
+                intent.LowRpmClutchActive,
+                intent.IgnitionValue,
+                intent.Handbrake);
+        }
+
+        /// <summary>
         /// Apply full braking to hold position while waiting for a safe merge.
         /// </summary>
         private void ApplyMergeHold(byte plid, int steering, double speedKmh, float currentRpm)
         {
-            const int throttle = 0;
-            const int brake = 65535;
             var automaticTransmission = UsesAutomaticTransmission(plid);
-            byte gear = 0;
-            var clutchValue = 0;
-
-            if (!automaticTransmission)
-            {
-                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
-                gearboxController.ApplyBrakingClutch(plid, brake);
-
-                (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
-                clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
-            }
-
-            controlStatuses[plid] = "MERGE YIELD: Waiting";
-            ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh);
+            var intent = BuildControlIntent(steering, 0, 65535, automaticTransmission, speedKmh, "MERGE YIELD: Waiting");
+            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
+            ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch: !automaticTransmission);
+            controlStatuses[plid] = intent.Status;
+            ApplyControlIntent(plid, intent);
         }
 
         /// <summary>
@@ -448,23 +562,12 @@ namespace AHPP_AI.AI
         /// </summary>
         private void ApplyWarmupHold(byte plid, int steering, double speedKmh, float currentRpm)
         {
-            const int throttle = 0;
-            const int brake = 65535;
             var automaticTransmission = UsesAutomaticTransmission(plid);
-            byte gear = 0;
-            var clutchValue = 0;
-
-            if (!automaticTransmission)
-            {
-                gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
-                gearboxController.ApplyBrakingClutch(plid, brake);
-
-                (gear, clutchValue, _) = gearboxController.GetGearboxInfo(plid);
-                clutchValue = Math.Max(clutchValue, config.ClutchFullyPressed);
-            }
-
-            controlStatuses[plid] = "WARMUP HOLD: Stabilizing";
-            ApplyControlFrame(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh);
+            var intent = BuildControlIntent(steering, 0, 65535, automaticTransmission, speedKmh, "WARMUP HOLD: Stabilizing");
+            gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
+            ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch: !automaticTransmission);
+            controlStatuses[plid] = intent.Status;
+            ApplyControlIntent(plid, intent);
         }
 
         /// <summary>
@@ -477,12 +580,8 @@ namespace AHPP_AI.AI
             double speedKmh,
             int carDirection,
             TrafficCarSnapshot[] trafficSnapshot,
-            ref int throttle,
-            ref int brake,
-            out string status,
-            ref bool forceClutch)
+            ref ControlIntent intent)
         {
-            status = string.Empty;
             if (trafficSnapshot == null || trafficSnapshot.Length == 0) return false;
 
             var path = waypointFollower.GetPath(plid);
@@ -499,10 +598,9 @@ namespace AHPP_AI.AI
             if (leadInfo.GapMeters <= config.MinimumSafetyDistanceM ||
                 (leadInfo.ClosingSpeedMps > 0 && leadInfo.TtcSeconds <= emergencyTtc))
             {
-                throttle = 0;
-                brake = 65535;
-                forceClutch = true;
-                status = $"TRAFFIC STOP: PLID {leadInfo.TargetPlid}";
+                intent.Throttle = 0;
+                intent.Brake = 65535;
+                intent.Status = $"TRAFFIC STOP: PLID {leadInfo.TargetPlid}";
                 LogTrafficWarning(plid,
                     $"TRAFFIC EMERGENCY: lead {leadInfo.TargetPlid} gap={leadInfo.GapMeters:F1}m ttc={leadInfo.TtcSeconds:F1}s");
                 return true;
@@ -514,9 +612,9 @@ namespace AHPP_AI.AI
                 var intensity = (brakeTtc - leadInfo.TtcSeconds) / brakeTtc;
                 intensity = Math.Max(0.0, Math.Min(1.0, intensity));
                 var targetBrake = config.BrakeBase + (int)Math.Round(intensity * (65535 - config.BrakeBase));
-                brake = Math.Max(brake, targetBrake);
-                throttle = 0;
-                status = $"TRAFFIC BRAKE: PLID {leadInfo.TargetPlid}";
+                intent.Brake = Math.Max(intent.Brake, targetBrake);
+                intent.Throttle = 0;
+                intent.Status = $"TRAFFIC BRAKE: PLID {leadInfo.TargetPlid}";
                 LogTrafficWarning(plid,
                     $"TRAFFIC BRAKE: lead {leadInfo.TargetPlid} gap={leadInfo.GapMeters:F1}m ttc={leadInfo.TtcSeconds:F1}s");
                 updated = true;
@@ -525,11 +623,11 @@ namespace AHPP_AI.AI
             {
                 var ratio = leadInfo.GapMeters / Math.Max(0.1, leadInfo.DesiredGapMeters);
                 ratio = Math.Max(0.0, Math.Min(1.0, ratio));
-                var throttleLimit = (int)Math.Round(throttle * ratio);
-                if (throttleLimit < throttle)
+                var throttleLimit = (int)Math.Round(intent.Throttle * ratio);
+                if (throttleLimit < intent.Throttle)
                 {
-                    throttle = throttleLimit;
-                    status = $"TRAFFIC FOLLOW: PLID {leadInfo.TargetPlid}";
+                    intent.Throttle = throttleLimit;
+                    intent.Status = $"TRAFFIC FOLLOW: PLID {leadInfo.TargetPlid}";
                     updated = true;
                 }
             }
@@ -870,8 +968,11 @@ namespace AHPP_AI.AI
                 var throttle = context.State == RecoveryState.ReverseLong ? 28000 : 20000;
 
                 var steer = config.SteeringCenter + context.SteerDirection * steerMagnitude;
-                controlStatuses[plid] = $"Recovery: {context.State}";
-                ApplyControlFrame(plid, steer, throttle, 4000, 0, config.ClutchReleased, false, 0);
+                var intent = BuildControlIntent(steer, throttle, 4000, false, 0, $"Recovery: {context.State}");
+                intent.Gear = 0;
+                intent.ClutchValue = config.ClutchReleased;
+                controlStatuses[plid] = intent.Status;
+                ApplyControlIntent(plid, intent);
                 return true;
             }
 
@@ -933,6 +1034,15 @@ namespace AHPP_AI.AI
                         stalls >= config.RecoveryStallReverseTrigger)
                     {
                         consecutiveStalls[plid] = 0;
+                        if (context.StallReverseAttempts > 0)
+                        {
+                            logger.LogWarning(
+                                $"PLID={plid} STALL REVERSE FAILED: Reverse did not help after {context.StallReverseAttempts} attempt(s), spectating");
+                            recoveryFailedHandler?.Invoke(plid);
+                            return true;
+                        }
+
+                        context.StallReverseAttempts++;
                         BeginReverseRecovery(
                             plid,
                             headingError,
@@ -950,9 +1060,17 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.PressClutch:
-                    controlStatuses[plid] = "Engine restart: clutch";
-                    ApplyControlFrame(plid, steering, 3000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false,
-                        0);
+                    var clutchIntent = BuildControlIntent(
+                        steering,
+                        3000 + throttleBoost,
+                        0,
+                        false,
+                        0,
+                        "Engine restart: clutch");
+                    clutchIntent.Gear = 2;
+                    clutchIntent.ClutchValue = config.ClutchFullyPressed;
+                    controlStatuses[plid] = clutchIntent.Status;
+                    ApplyControlIntent(plid, clutchIntent);
 
                     if (elapsed >= 500)
                     {
@@ -964,21 +1082,21 @@ namespace AHPP_AI.AI
                     return true;
 
                 case EngineStartState.TurnIgnition:
-                    controlStatuses[plid] = "Engine restart: ignition";
-                    ApplyControlFrame(plid, steering, 15000 + throttleBoost, 0, 2, config.ClutchFullyPressed, false,
-                        0);
+                    var ignitionIntent = BuildControlIntent(
+                        steering,
+                        15000 + throttleBoost,
+                        0,
+                        false,
+                        0,
+                        "Engine restart: ignition");
+                    ignitionIntent.Gear = 2;
+                    ignitionIntent.ClutchValue = config.ClutchFullyPressed;
 
                     if (elapsed < 300)
-                    {
-                        insim.Send(new IS_AIC(new List<AIInputVal>
-                                { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 2 } })
-                            { PLID = plid }, InSimClientExtensions.PacketPriority.High);
-                    }
+                        ignitionIntent.IgnitionValue = 2;
                     else if (elapsed >= 600)
                     {
-                        insim.Send(new IS_AIC(new List<AIInputVal>
-                                { new AIInputVal { Input = AicInputType.CS_IGNITION, Time = 0, Value = 3 } })
-                            { PLID = plid }, InSimClientExtensions.PacketPriority.High);
+                        ignitionIntent.IgnitionValue = 3;
 
                         if (elapsed >= 2000)
                         {
@@ -988,6 +1106,8 @@ namespace AHPP_AI.AI
                         }
                     }
 
+                    controlStatuses[plid] = ignitionIntent.Status;
+                    ApplyControlIntent(plid, ignitionIntent);
                     return true;
 
                 case EngineStartState.ReleaseClutch:
@@ -1000,8 +1120,11 @@ namespace AHPP_AI.AI
                     var throttle = Math.Min(30000, 20000 + throttleBoost);
                     byte gear = 2;
 
-                    controlStatuses[plid] = "Engine restart: release";
-                    ApplyControlFrame(plid, steering, throttle, 0, gear, clutchValue, false, 0);
+                    var releaseIntent = BuildControlIntent(steering, throttle, 0, false, 0, "Engine restart: release");
+                    releaseIntent.Gear = gear;
+                    releaseIntent.ClutchValue = clutchValue;
+                    controlStatuses[plid] = releaseIntent.Status;
+                    ApplyControlIntent(plid, releaseIntent);
 
                     if ((int)(elapsed / 1000) != (int)((elapsed - 20) / 1000))
                         logger.Log(
@@ -1024,8 +1147,17 @@ namespace AHPP_AI.AI
                         return false;
                     }
 
-                    controlStatuses[plid] = "Engine restart: recovery";
-                    ApplyControlFrame(plid, steering, 15000 + throttleBoost, 0, 2, 0, false, 0);
+                    var recoveryIntent = BuildControlIntent(
+                        steering,
+                        15000 + throttleBoost,
+                        0,
+                        false,
+                        0,
+                        "Engine restart: recovery");
+                    recoveryIntent.Gear = 2;
+                    recoveryIntent.ClutchValue = 0;
+                    controlStatuses[plid] = recoveryIntent.Status;
+                    ApplyControlIntent(plid, recoveryIntent);
                     return true;
                 default:
                     engineStartStates[plid] = EngineStartState.Normal;
@@ -1088,6 +1220,8 @@ namespace AHPP_AI.AI
             context.ValidationActive = false;
             context.AttemptCount = 0;
             context.FailureCount = 0;
+            context.StallReverseAttempts = 0;
+            consecutiveStalls[plid] = 0;
             movementIssueCounts[plid] = 0;
             movementIssues[plid] = MovementIssue.None;
             controlStatuses[plid] = $"Recovery success: {reason}";
@@ -1144,7 +1278,6 @@ namespace AHPP_AI.AI
             }
             else
             {
-                consecutiveStalls[plid] = 0;
                 engineStartStates[plid] = EngineStartState.Normal;
             }
 
@@ -1161,6 +1294,19 @@ namespace AHPP_AI.AI
                 return 0;
 
             return Math.Min(8000, steeringOffset / 4);
+        }
+
+        /// <summary>
+        ///     Convert an LFS gear index into a compact debug label.
+        /// </summary>
+        private static string FormatGearLabel(byte gear)
+        {
+            return gear switch
+            {
+                0 => "R",
+                1 => "N",
+                _ => (gear - 1).ToString()
+            };
         }
 
         /// <summary>
@@ -1192,6 +1338,10 @@ namespace AHPP_AI.AI
         /// </summary>
         public string GetStateDescription(byte plid)
         {
+            // Show spawn launch state before anything else so it's always visible.
+            if (gearboxController.IsSpawnLaunchActive(plid))
+                return "Spawn Launch";
+
             var recoveryContext = GetRecoveryContext(plid);
             if (recoveryContext.State == RecoveryState.EngineRestart)
                 return "Engine Restart";
@@ -1404,9 +1554,9 @@ namespace AHPP_AI.AI
                     { new AIInputVal { Input = AicInputType.CS_CLUTCH, Time = 0, Value = config.ClutchFullyPressed } })
                 { PLID = plid }, InSimClientExtensions.PacketPriority.High);
 
-            // Apply high throttle before starting (much higher than before)
+            // Keep throttle neutral at spawn so route classification can settle before the driver requests launch torque.
             insim.Send(new IS_AIC(new List<AIInputVal>
-                { new AIInputVal { Input = AicInputType.CS_THROTTLE, Time = 0, Value = 20000 } }) { PLID = plid },
+                { new AIInputVal { Input = AicInputType.CS_THROTTLE, Time = 0, Value = 0 } }) { PLID = plid },
                 InSimClientExtensions.PacketPriority.High);
 
             // Set initial gear to 1st
@@ -1445,7 +1595,9 @@ namespace AHPP_AI.AI
             int clutchValue,
             bool automaticTransmission,
             double speedKmh,
-            bool lowRpmClutchActive = false)
+            bool lowRpmClutchActive = false,
+            ushort? ignitionValue = null,
+            int? handbrake = null)
         {
             RecordControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
 
@@ -1454,7 +1606,8 @@ namespace AHPP_AI.AI
             TraceControlDecision(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, speedKmh,
                 stateLabel, status, lowRpmClutchActive);
 
-            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission);
+            SendControlInputs(plid, steering, throttle, brake, gear, clutchValue, automaticTransmission, ignitionValue,
+                handbrake);
         }
 
         /// <summary>
@@ -1528,10 +1681,94 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Emit a focused launch diagnostic when an AI is stationary or repeatedly trying to launch from spawn.
+        /// </summary>
+        private void TraceLaunchDiagnostics(
+            byte plid,
+            double speedKmh,
+            float currentRpm,
+            double distanceToWaypoint,
+            int desiredHeading,
+            int headingError,
+            int steering,
+            int throttle,
+            int brake,
+            byte appliedGear,
+            int appliedClutchValue,
+            bool automaticTransmission,
+            bool lowRpmClutchActive,
+            MovementIssue movementIssue)
+        {
+            var status = controlStatuses.TryGetValue(plid, out var currentStatus) ? currentStatus : "Unspecified";
+            var stateLabel = GetStateDescription(plid);
+            var launchRelevant = speedKmh < 2.0 ||
+                                 status.IndexOf("SLOW/STUCK", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                 status.IndexOf("Recovery", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!launchRelevant)
+                return;
+
+            var now = DateTime.UtcNow;
+            var intervalSatisfied = !lastLaunchDiagnosticTime.TryGetValue(plid, out var lastTime) ||
+                                    (now - lastTime).TotalMilliseconds >= 1000;
+
+            var targetWaypoint = waypointFollower.GetTargetWaypoint(plid);
+            var targetWaypointX = targetWaypoint.Position.X / 65536.0;
+            var targetWaypointY = targetWaypoint.Position.Y / 65536.0;
+            var (targetIndex, waypointCount, targetSpeed, inRecovery) = waypointFollower.GetFollowerInfo(plid);
+            var (gearboxGear, gearboxClutchValue, clutchState) = gearboxController.GetGearboxInfo(plid);
+            var gearboxDebug = gearboxController.GetGearboxDebugInfo(plid);
+            var effectiveGear = automaticTransmission ? appliedGear : gearboxGear;
+            var effectiveClutch = automaticTransmission ? appliedClutchValue : gearboxClutchValue;
+            var actualGearLabel = automaticTransmission
+                ? "Auto"
+                : gearboxDebug.ActualGearFresh
+                    ? FormatGearLabel(gearboxDebug.ActualGear)
+                    : "?";
+            var targetGearLabel = automaticTransmission ? "Auto" : FormatGearLabel(gearboxDebug.TargetGear);
+            var shouldApplyThrottle = automaticTransmission || gearboxController.ShouldApplyThrottle(plid, speedKmh);
+            var engineIsRunning = engineRunning.TryGetValue(plid, out var running) && running;
+            var engineState = engineStartStates.TryGetValue(plid, out var engineStateValue)
+                ? engineStateValue.ToString()
+                : "Unknown";
+            var recoveryState = recoveryContexts.TryGetValue(plid, out var recoveryContext)
+                ? recoveryContext.State.ToString()
+                : "Unknown";
+
+            var signature =
+                $"{stateLabel}|{status}|{effectiveGear}|{effectiveClutch}|{actualGearLabel}|{targetGearLabel}|{gearboxDebug.ShiftPhase}|{clutchState}|{throttle}|{brake}|{steering}|{engineState}|{recoveryState}|{movementIssue}|{inRecovery}|{lowRpmClutchActive}|{shouldApplyThrottle}";
+            var stateChanged = !lastLaunchDiagnosticSignature.TryGetValue(plid, out var previousSignature) ||
+                               !string.Equals(previousSignature, signature, StringComparison.Ordinal);
+            if (!intervalSatisfied && !stateChanged)
+                return;
+
+            logger.Log(
+                $"PLID={plid} LAUNCH DIAG: State={stateLabel}, Status={status}, Speed={speedKmh:F1}km/h, Rpm={currentRpm:F0}, " +
+                $"Engine={engineIsRunning}, EngineState={engineState}, RecoveryState={recoveryState}, FollowerRecovery={inRecovery}, " +
+                $"Warmup={IsWarmup(plid)}, WarmupHold={IsWarmupHoldActive(plid)}, MovementIssue={movementIssue}, " +
+                $"TargetIndex={targetIndex}/{waypointCount}, TargetSpeed={targetSpeed:F1}, TargetWaypoint=({targetWaypointX:F1},{targetWaypointY:F1}), " +
+                $"Distance={distanceToWaypoint:F1}m, DesiredHeading={desiredHeading}, HeadingError={headingError}, " +
+                $"Steering={steering}, Throttle={throttle}, Brake={brake}, Gear={(automaticTransmission ? "Auto" : effectiveGear.ToString())}, " +
+                $"ActualGear={actualGearLabel}, TargetGear={targetGearLabel}, ShiftPhase={gearboxDebug.ShiftPhase}, " +
+                $"Clutch={(automaticTransmission ? "Auto" : effectiveClutch.ToString())}, ClutchState={clutchState}, " +
+                $"LowRpmClutch={lowRpmClutchActive}, ShouldApplyThrottle={shouldApplyThrottle}");
+
+            lastLaunchDiagnosticTime[plid] = now;
+            lastLaunchDiagnosticSignature[plid] = signature;
+        }
+
+        /// <summary>
         ///     Send control inputs to the AI car
         /// </summary>
-        private void SendControlInputs(byte plid, int steering, int throttle, int brake, byte gear, int clutchValue,
-            bool automaticTransmission)
+        private void SendControlInputs(
+            byte plid,
+            int steering,
+            int throttle,
+            int brake,
+            byte gear,
+            int clutchValue,
+            bool automaticTransmission,
+            ushort? ignitionValue,
+            int? handbrake)
         {
             var inputs = AIControlDiagnostics.BuildInputPacket(
                 steering,
@@ -1541,6 +1778,12 @@ namespace AHPP_AI.AI
                 clutchValue,
                 automaticTransmission,
                 config.ResetInputsEveryTick);
+
+            if (handbrake.HasValue)
+                inputs.Add(new AIInputVal { Input = AicInputType.CS_HANDBRAKE, Value = handbrake.Value });
+
+            if (ignitionValue.HasValue)
+                inputs.Add(new AIInputVal { Input = AicInputType.CS_IGNITION, Value = ignitionValue.Value });
 
             insim.Send(new IS_AIC(inputs) { PLID = plid }, InSimClientExtensions.PacketPriority.High);
         }

@@ -66,6 +66,7 @@ namespace AHPP_AI.UI
         public const byte PitAllAisId = (byte)(ButtonIds.MainStart + 9);
         public const byte StartAutoAisId = (byte)(ButtonIds.MainStart + 65);
         public const byte SpawnDelayInputId = (byte)(ButtonIds.MainStart + 72);
+        public const byte MaxAIsInputId = (byte)(ButtonIds.MainStart + 59);
         public const byte AddAiDialogId = (byte)(ButtonIds.MainStart + 10);
         public const byte SpeedInputId = (byte)(ButtonIds.MainStart + 11);
         public const byte RecordingIntervalId = (byte)(ButtonIds.MainStart + 12);
@@ -128,8 +129,8 @@ namespace AHPP_AI.UI
         private readonly Dictionary<string, bool> routeRecordingStatus =
             new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
-        private string selectedRoute = "main_loop";
-        private string selectedVisualizationRoute = "main_loop";
+        private string selectedRoute = string.Empty;
+        private string selectedVisualizationRoute = string.Empty;
         private int currentAiCount;
         private int visualizationDetailStep = 2;
         private bool isRecording;
@@ -179,6 +180,7 @@ namespace AHPP_AI.UI
 
             row = 70;
             CreateInputButton(SpawnDelayInputId, RIGHT_COL, row, "Spawn Delay (s)"); row += ROW_HEIGHT;
+            CreateInputButton(MaxAIsInputId, RIGHT_COL, row, "Max Auto AI"); row += ROW_HEIGHT;
             CreateInputButton(AddAiDialogId, RIGHT_COL, row, "AI Count"); row += ROW_HEIGHT;
             CreateInputButton(SpeedInputId, RIGHT_COL, row, "AI Speed"); row += ROW_HEIGHT;
             CreateInputButton(RecordingIntervalId, RIGHT_COL, row, "Rec Meters"); row += ROW_HEIGHT;
@@ -253,7 +255,7 @@ namespace AHPP_AI.UI
         /// </summary>
         private string GetAutoAiButtonText()
         {
-            return autoPopulationEnabled ? "Auto AI: On" : "Start Auto AI";
+            return autoPopulationEnabled ? "Auto AI: On" : "Auto AI: Off";
         }
 
         /// <summary>
@@ -385,12 +387,6 @@ namespace AHPP_AI.UI
 
             RenderRecordingLabel();
 
-            if (routeButtons.Count == 0)
-            {
-                SetRouteOptions(new[] { ("main_loop", false), ("pit_entry", false) }, selectedRoute);
-                return;
-            }
-
             var pageSize = GetRouteButtonPageSize();
             var pageCount = GetRoutePageCount(pageSize);
             routePageIndex = Math.Max(0, Math.Min(routePageIndex, pageCount - 1));
@@ -515,9 +511,10 @@ namespace AHPP_AI.UI
         /// </summary>
         public void UpdateRecordingRouteSelection(string routeName)
         {
-            var normalized = string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName;
+            var normalized = string.IsNullOrWhiteSpace(routeName) ? selectedRoute : routeName;
             selectedRoute = normalized;
-            EnsureRouteButton(normalized);
+            if (!string.IsNullOrWhiteSpace(normalized))
+                EnsureRouteButton(normalized);
         }
 
         /// <summary>

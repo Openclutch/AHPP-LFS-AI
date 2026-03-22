@@ -261,7 +261,7 @@ namespace AHPP_AI.AI
                 var plannedSegments = PlanSpawnSegments(segmentCounts, segmentTargets, toSpawn);
                 if (plannedSegments.Count > 0)
                 {
-                    aiController.SpawnPlannedAICars(plannedSegments, false);
+                    aiController.SpawnPlannedAICars(plannedSegments, true);
                 }
             }
         }

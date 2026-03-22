@@ -23,6 +23,11 @@ namespace AHPP_AI.AI
     {
         private const double PreferredSpawnRouteDistanceThresholdMeters = 40.0;
         private const double PreferredSpawnRouteFallbackAdvantageMeters = 20.0;
+        private const double SpawnRouteFarDistanceThresholdMeters = 120.0;
+        private const double OnTrackSpawnScoreAdvantage = 25.0;
+        private const double MaxTrackInitialRouteDistanceMeters = 120.0;
+        private const double MaxTrackInitialHeadingErrorDegrees = 100.0;
+        private static readonly TimeSpan PlannedSpawnSegmentLifetime = TimeSpan.FromSeconds(15);
 
         private readonly List<byte> aiPLIDs = new List<byte>();
         private readonly Dictionary<byte, Vec> aiSpawnPositions = new Dictionary<byte, Vec>();
@@ -46,7 +51,6 @@ namespace AHPP_AI.AI
         private readonly RouteRecorder routeRecorder;
         private readonly RouteLibrary routeLibrary;
         private readonly AILightController lightController;
-        private readonly Dictionary<string, RouteMetadata> routePresets = new Dictionary<string, RouteMetadata>(StringComparer.OrdinalIgnoreCase);
         private readonly MainUI mainUI;
         private readonly AIPopulationManager populationManager;
         private readonly bool insimDebugLogging;
@@ -56,12 +60,12 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, string> aiAssignedRoutes = new Dictionary<byte, string>();
         private readonly Dictionary<byte, string> aiAssignedSegments = new Dictionary<byte, string>();
         private readonly object assignmentLock = new object();
-        private readonly Queue<PlannedAiSpawn> plannedSpawns = new Queue<PlannedAiSpawn>();
-        private readonly object plannedSpawnLock = new object();
         private readonly object aiPlidLock = new object();
+        private readonly object plannedSpawnLock = new object();
         private readonly Dictionary<byte, string> currentRoute = new Dictionary<byte, string>();
         private readonly Dictionary<byte, string> spawnRouteSelections = new Dictionary<byte, string>();
         private readonly Dictionary<byte, BranchRouteInfo> activeBranchSelections = new Dictionary<byte, BranchRouteInfo>();
+        private readonly Queue<PendingSpawnSegment> pendingPlannedSpawnSegments = new Queue<PendingSpawnSegment>();
         private readonly Dictionary<byte, string> aiNames = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastActiveWaypointUpdate = new Dictionary<byte, DateTime>();
         private readonly Random branchRandom = new Random();
@@ -80,8 +84,6 @@ namespace AHPP_AI.AI
         private int currentAiiIntervalHundredths;
         private readonly SemaphoreSlim spawnSemaphore = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim visualizationSemaphore = new SemaphoreSlim(1, 1);
-        private readonly object ownedSpawnLock = new object();
-        private readonly Queue<OwnedAiSpawnRequest> pendingOwnedAiSpawns = new Queue<OwnedAiSpawnRequest>();
         private readonly OutGauge outGauge;
         private readonly PerformanceTracker aiiPerformanceTracker = new PerformanceTracker();
         private readonly PerformanceTracker mciPerformanceTracker = new PerformanceTracker();
@@ -90,8 +92,8 @@ namespace AHPP_AI.AI
         private bool autoVisualizeWaypoints;
         private bool debugButtonsVisible = true;
         private bool raceInProgress;
-        private string recordingRouteName = "main_loop";
-        private string visualizationRouteName = "main_loop";
+        private string recordingRouteName = string.Empty;
+        private string visualizationRouteName = string.Empty;
         private int visualizationDetailStep = 2;
         private static readonly int[] VisualizationDetailSteps = { 1, 2, 4, 8, 16 };
         private int? selectedRouteNodeIndex;
@@ -102,11 +104,6 @@ namespace AHPP_AI.AI
         private byte playerPLID;
         private DateTime lastPerformanceLog = DateTime.UtcNow;
         private static readonly TimeSpan PerformanceLogWindow = TimeSpan.FromSeconds(5);
-        private const double PerformanceOnTimeMaxLoad = 0.20;
-        private const double PerformanceSlowingMaxLoad = 0.35;
-        private PerformanceHealth lastPerformanceHealth = PerformanceHealth.Waiting;
-        private double lastPerformanceLoad;
-
         // Car tracking
         private readonly object carStateLock = new object();
         private readonly Dictionary<byte, CompCar> carStates = new Dictionary<byte, CompCar>();
@@ -121,7 +118,6 @@ namespace AHPP_AI.AI
         private bool debugUIInitialized;
         private readonly CancellationTokenSource controlLoopCts = new CancellationTokenSource();
         private Task? controlLoopTask;
-        private int controlLoopCursor;
         private DateTime lastControlLogTime = DateTime.UtcNow;
         private double lastComputedControlHzPerAi;
         private int lastControlUpdatesPerTick;
@@ -131,16 +127,7 @@ namespace AHPP_AI.AI
         private readonly Queue<byte> pendingAiiIntervalUpdates = new Queue<byte>();
         private readonly HashSet<byte> pendingAiiIntervalSet = new HashSet<byte>();
         private static readonly TimeSpan TelemetryStaleAfter = TimeSpan.FromSeconds(1);
-        private static readonly TimeSpan OwnedAiAdmissionWindow = TimeSpan.FromSeconds(20);
         private DateTime lastAiiRebalance = DateTime.MinValue;
-
-        private enum PerformanceHealth
-        {
-            Waiting,
-            OnTime,
-            Slowing,
-            RunningSlow
-        }
 
         /// <summary>
         ///     Tracks the last nearby human target for pass-by reactions per AI.
@@ -155,6 +142,7 @@ namespace AHPP_AI.AI
         {
             public double Rpm;
             public AIFlags Flags;
+            public byte Gear;
             public DateTime Timestamp;
         }
 
@@ -176,39 +164,21 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Candidate route and driving profile chosen from the AI's actual spawn position.
-        /// </summary>
-        private sealed class InitialRouteCandidate
-        {
-            public string RouteLabel { get; set; } = "spawn";
-            public string RouteName { get; set; } = string.Empty;
-            public List<Util.Waypoint> Path { get; set; } = new List<Util.Waypoint>();
-            public int StartIndex { get; set; }
-            public bool IsLoop { get; set; }
-            public AIConfig.DrivingMode DrivingMode { get; set; } = AIConfig.DrivingMode.Cruise;
-            public BranchRouteInfo? BranchInfo { get; set; }
-            public double Score { get; set; } = double.MaxValue;
-        }
-
-        /// <summary>
         ///     Spawn-time car selection details resolved before issuing the /ai command.
         /// </summary>
         private sealed class PlannedAiSpawn
         {
-            public string AssignedRoute { get; set; } = string.Empty;
-            public string AssignedSegmentTag { get; set; } = string.Empty;
-            public string SelectedModName { get; set; } = string.Empty;
-            public AIConfig.PitSpawnModPresetConfig? ModPreset { get; set; }
-            public string SourceAreaTag { get; set; } = string.Empty;
+            public AIConfig.SpawnModConfig? Mod { get; set; }
+            public string SegmentTag { get; set; } = string.Empty;
         }
 
         /// <summary>
-        ///     Tracks a pending owned AI spawn request until the matching AI join arrives.
+        /// Store a planned population segment long enough to match the following local AI join.
         /// </summary>
-        private sealed class OwnedAiSpawnRequest
+        private struct PendingSpawnSegment
         {
-            public DateTime IssuedUtc { get; set; }
-            public PlannedAiSpawn PlannedSpawn { get; set; } = new PlannedAiSpawn();
+            public string AreaTag;
+            public DateTime QueuedAtUtc;
         }
 
         /// <summary>
@@ -245,6 +215,7 @@ namespace AHPP_AI.AI
             // Create configuration
             config = new AIConfig { DebugEnabled = debugEnabled };
             LoadPitSpawnConfiguration(appConfig);
+            LoadSpawnModsConfiguration(appConfig);
 
             pathManager = new PathManager(waypointManager, logger, routeLibrary);
             pathManager.LoadRoutes(config);
@@ -262,14 +233,13 @@ namespace AHPP_AI.AI
             gearboxController = new GearboxController(config, logger);
             lightController = new AILightController(insim, logger);
             driver = new AIDriver(config, logger, waypointFollower, gearboxController, insim, lightController);
-            driver.SetRecoveryFailedHandler(ResetAI);
+            driver.SetRecoveryFailedHandler(plid => ResetAI(plid));
             driver.SetRecoveryStartedHandler(OnRecoveryStarted);
             mainUI = new MainUI(insim, logger);
             mainUI.SetDebugButtonsVisible(debugButtonsVisible);
             routeRecorder = new RouteRecorder(logger, lfsLayout, debugUI, routeLibrary, mainUI);
             outGauge = new OutGauge();
             outGauge.PacketReceived += OnOutGauge;
-            InitializeRoutePresets();
             populationManager = new AIPopulationManager(this, config, logger);
         }
 
@@ -402,38 +372,32 @@ namespace AHPP_AI.AI
                 .Select(routeLibrary.NormalizeRouteName)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var allowedMods = SplitCsv(GetConfigValue(entries, "AllowedMods", string.Empty))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var modPresets = ParsePitSpawnModPresets(entries, tag);
-
             return new AIConfig.PitSpawnAreaConfig
             {
                 Tag = tag,
                 DisplayName = string.IsNullOrWhiteSpace(displayName) ? tag : displayName,
                 FillPercent = fillPercent,
-                RouteNames = routeNames,
-                AllowedMods = allowedMods,
-                ModPresets = modPresets
+                RouteNames = routeNames
             };
         }
 
         /// <summary>
         /// Parse per-mod setup and colour presets from a pit spawn area section.
         /// </summary>
-        /// <param name="entries">Section key/value pairs.</param>
-        /// <param name="areaTag">Area tag used for logging.</param>
-        /// <returns>Dictionary of mod name to setup/colour preset.</returns>
-        private Dictionary<string, AIConfig.PitSpawnModPresetConfig> ParsePitSpawnModPresets(
-            Dictionary<string, string> entries,
-            string areaTag)
+        /// <param name="sourceConfig">Application configuration source.</param>
+        private void LoadSpawnModsConfiguration(AppConfig? sourceConfig)
         {
-            var modPresets =
-                new Dictionary<string, AIConfig.PitSpawnModPresetConfig>(StringComparer.OrdinalIgnoreCase);
+            config.SpawnMods.Clear();
 
-            if (entries == null)
-                return modPresets;
+            if (sourceConfig == null)
+                return;
 
+            var entries = sourceConfig.GetSectionEntries("SpawnMods");
+            if (entries == null || entries.Count == 0)
+                return;
+
+            // Collect presets first (ModPreset.ModName=Setup,Colour)
+            var presets = new Dictionary<string, (int Setup, int Colour)>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in entries)
             {
                 if (!entry.Key.StartsWith("ModPreset.", StringComparison.OrdinalIgnoreCase))
@@ -441,48 +405,49 @@ namespace AHPP_AI.AI
 
                 var modName = entry.Key.Substring("ModPreset.".Length).Trim();
                 if (string.IsNullOrWhiteSpace(modName))
-                {
-                    logger.LogWarning($"PitSpawnArea.{areaTag} contains a ModPreset entry without a mod name.");
                     continue;
-                }
 
-                if (!TryParsePitSpawnModPreset(entry.Value, out var preset))
+                var parts = SplitCsv(entry.Value);
+                if (parts.Count == 2 &&
+                    int.TryParse(parts[0], out var setup) && setup >= 0 &&
+                    int.TryParse(parts[1], out var colour) && colour >= 0)
                 {
-                    logger.LogWarning(
-                        $"PitSpawnArea.{areaTag} has invalid ModPreset for '{modName}'. Expected Setup,Colour.");
-                    continue;
+                    presets[modName] = (setup, colour);
                 }
-
-                modPresets[modName] = preset;
+                else
+                {
+                    logger.LogWarning($"SpawnMods has invalid ModPreset for '{modName}'. Expected Setup,Colour.");
+                }
             }
 
-            return modPresets;
-        }
+            // Parse weight entries (ModName=Weight)
+            foreach (var entry in entries)
+            {
+                if (entry.Key.StartsWith("ModPreset.", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
-        /// <summary>
-        /// Parse a setup/colour pair from INI text.
-        /// </summary>
-        /// <param name="rawValue">Raw preset text in Setup,Colour format.</param>
-        /// <param name="preset">Parsed preset result.</param>
-        /// <returns>True when both numbers were parsed successfully.</returns>
-        private static bool TryParsePitSpawnModPreset(
-            string rawValue,
-            out AIConfig.PitSpawnModPresetConfig preset)
-        {
-            preset = new AIConfig.PitSpawnModPresetConfig();
-            var parts = SplitCsv(rawValue);
-            if (parts.Count != 2)
-                return false;
+                var modName = entry.Key.Trim();
+                if (string.IsNullOrWhiteSpace(modName))
+                    continue;
 
-            if (!int.TryParse(parts[0], out var setup) || setup < 0)
-                return false;
+                if (!int.TryParse(entry.Value, out var weight) || weight <= 0)
+                {
+                    logger.LogWarning($"SpawnMods entry '{modName}' has invalid weight '{entry.Value}'; skipping.");
+                    continue;
+                }
 
-            if (!int.TryParse(parts[1], out var colour) || colour < 0)
-                return false;
+                var mod = new AIConfig.SpawnModConfig { Name = modName, Weight = weight };
+                if (presets.TryGetValue(modName, out var preset))
+                {
+                    mod.Setup = preset.Setup;
+                    mod.Colour = preset.Colour;
+                }
 
-            preset.Setup = setup;
-            preset.Colour = colour;
-            return true;
+                config.SpawnMods.Add(mod);
+            }
+
+            if (config.SpawnMods.Count > 0)
+                logger.Log($"Loaded {config.SpawnMods.Count} spawn mod(s): {string.Join(", ", config.SpawnMods.Select(m => $"{m.Name}({m.Weight})"))}");
         }
 
         /// <summary>
@@ -546,92 +511,6 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Seed the default recording presets for the main loop, pit entry and detours.
-        /// </summary>
-        private void InitializeRoutePresets()
-        {
-            routePresets["main_loop"] = new RouteMetadata
-            {
-                Name = "main_loop",
-                Type = RouteType.MainLoop,
-                Description = "Primary loop that AIs can circulate on continuously.",
-                IsLoop = true,
-                DefaultSpeedLimit = 60
-            };
-
-            routePresets["pit_entry"] = new RouteMetadata
-            {
-                Name = "pit_entry",
-                Type = RouteType.PitEntry,
-                Description = "Route from pits or spawn to the main loop entry point.",
-                AttachMainIndex = 0,
-                DefaultSpeedLimit = 50
-            };
-
-            routePresets["main_alt"] = new RouteMetadata
-            {
-                Name = "main_alt",
-                Type = RouteType.AlternateMain,
-                Description = "Alternate lane for the main loop (e.g., highway inner lane).",
-                IsLoop = true,
-                DefaultSpeedLimit = 60
-            };
-
-            routePresets["detour1"] = new RouteMetadata
-            {
-                Name = "detour1",
-                Type = RouteType.Detour,
-                Description = "Optional detour route (slot 1).",
-                DefaultSpeedLimit = 60
-            };
-
-            routePresets["detour2"] = new RouteMetadata
-            {
-                Name = "detour2",
-                Type = RouteType.Detour,
-                Description = "Optional detour route (slot 2).",
-                DefaultSpeedLimit = 60
-            };
-
-            routePresets["detour3"] = new RouteMetadata
-            {
-                Name = "detour3",
-                Type = RouteType.Detour,
-                Description = "Optional detour route (slot 3).",
-                DefaultSpeedLimit = 60
-            };
-
-            // Legacy mappings to keep the debug buttons usable
-            routePresets["route1"] = CloneMetadata(routePresets["main_loop"]);
-            routePresets["route2"] = CloneMetadata(routePresets["pit_entry"]);
-            routePresets["route3"] = CloneMetadata(routePresets["detour1"]);
-        }
-
-        /// <summary>
-        /// Make a copy of route metadata to avoid mutating presets.
-        /// </summary>
-        private static RouteMetadata CloneMetadata(RouteMetadata metadata)
-        {
-            if (metadata == null) return new RouteMetadata();
-            return new RouteMetadata
-            {
-                Name = metadata.Name,
-                Type = metadata.Type,
-                Description = metadata.Description,
-                Track = metadata.Track,
-                Layout = metadata.Layout,
-                IsLoop = metadata.IsLoop,
-                AttachMainIndex = metadata.AttachMainIndex,
-                RejoinMainIndex = metadata.RejoinMainIndex,
-                DefaultSpeedLimit = metadata.DefaultSpeedLimit,
-                AiTargetCount = metadata.AiTargetCount,
-                AiTargetPercent = metadata.AiTargetPercent,
-                AiWeight = metadata.AiWeight,
-                AiEnabled = metadata.AiEnabled
-            };
-        }
-
-        /// <summary>
         /// Represents a scheduled lane change including its timing and target route.
         /// </summary>
         private class LaneChangeRequest
@@ -679,22 +558,13 @@ namespace AHPP_AI.AI
         private RouteMetadata BuildRecordingMetadata(string name, RouteType type, int? attachIndex, int? rejoinIndex)
         {
             var key = string.IsNullOrWhiteSpace(name) ? "route" : name;
-            RouteMetadata metadata;
-
-            if (routePresets.TryGetValue(key, out var preset) && preset != null)
+            var metadata = new RouteMetadata
             {
-                metadata = CloneMetadata(preset);
-            }
-            else
-            {
-                metadata = new RouteMetadata
-                {
-                    Name = key,
-                    Type = type == RouteType.Unknown ? routeLibrary.GuessRouteType(key) : type,
-                    IsLoop = type == RouteType.MainLoop,
-                    DefaultSpeedLimit = 60
-                };
-            }
+                Name = key,
+                Type = type == RouteType.Unknown ? routeLibrary.GuessRouteType(key) : type,
+                IsLoop = type == RouteType.MainLoop,
+                DefaultSpeedLimit = 60
+            };
 
             metadata.Name = routeLibrary.NormalizeRouteName(metadata.Name);
             if (type != RouteType.Unknown) metadata.Type = type;
@@ -769,8 +639,10 @@ namespace AHPP_AI.AI
         /// </summary>
         public void SetRecordingRouteSelection(string routeName)
         {
-            recordingRouteName = routeLibrary.NormalizeRouteName(
-                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            if (string.IsNullOrWhiteSpace(routeName))
+                return;
+
+            recordingRouteName = routeLibrary.NormalizeRouteName(routeName);
             mainUI?.UpdateRecordingRouteSelection(recordingRouteName);
             visualizationRouteName = recordingRouteName;
             mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
@@ -1080,6 +952,7 @@ namespace AHPP_AI.AI
         /// </summary>
         public void ConfigureRaceMode(
             bool useAutomaticTransmission,
+            double maxSpawnInitialRouteDistanceMeters,
             double trackSpawnScoreAdvantage,
             double waypointSpeedFactor,
             double waypointSpeedOffsetKmh,
@@ -1090,6 +963,7 @@ namespace AHPP_AI.AI
             double upshiftThresholdMultiplier)
         {
             config.RaceUseAutomaticTransmission = useAutomaticTransmission;
+            config.MaxSpawnInitialRouteDistanceMeters = Math.Max(1.0, maxSpawnInitialRouteDistanceMeters);
             config.TrackSpawnScoreAdvantage = Math.Max(0.0, trackSpawnScoreAdvantage);
             config.RaceWaypointSpeedFactor = Math.Max(1.0, waypointSpeedFactor);
             config.RaceWaypointSpeedOffsetKmh = Math.Max(0.0, waypointSpeedOffsetKmh);
@@ -1209,6 +1083,18 @@ namespace AHPP_AI.AI
             config.StallPreventionRpm = clampedStallRpm;
             config.StallPreventionReleaseRpm = Math.Max(clampedStallRpm, stallPreventionReleaseRpm);
             config.StallPreventionHoldMs = Math.Max(0, stallPreventionHoldMs);
+        }
+
+        /// <summary>
+        /// Configure spawn launch behavior — the clutch/throttle sequence used when the car first drives away.
+        /// </summary>
+        public void ConfigureLaunch(int launchThrottleValue, int launchHoldMs, int launchClutchReleaseMs,
+            int gearConfirmationTimeoutMs)
+        {
+            config.LaunchThrottleValue = Math.Max(0, Math.Min(65535, launchThrottleValue));
+            config.LaunchHoldMs = Math.Max(0, launchHoldMs);
+            config.LaunchClutchReleaseMs = Math.Max(100, launchClutchReleaseMs);
+            config.GearConfirmationTimeoutMs = Math.Max(0, gearConfirmationTimeoutMs);
         }
 
         /// <summary>
@@ -1512,9 +1398,9 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Reset a single AI by spectating it and queueing a replacement spawn so the server can pick a fresh pit slot.
+        /// Reset a single AI by spectating it and letting the active server population controller decide when to respawn it.
         /// </summary>
-        private void ResetAI(byte plid)
+        private void ResetAI(byte plid, string reason = "failed recovery")
         {
             lock (aiPlidLock)
             {
@@ -1531,26 +1417,8 @@ namespace AHPP_AI.AI
                 insim.Send(new IS_MST { Msg = $"/spec {nameForCmd}" });
 
             ForgetAi(plid, false);
-            QueueSingleAiRespawn(assignedSegment);
             logger.Log(
-                $"Reset AI {plid} after failed recovery; spectated it and queued a replacement spawn for segment={assignedSegment}");
-        }
-
-        /// <summary>
-        /// Queue one AI respawn on the existing spawn pipeline after a short delay so `/spec` can complete first.
-        /// </summary>
-        private void QueueSingleAiRespawn(string areaTag)
-        {
-            lock (plannedSpawnLock)
-            {
-                plannedSpawns.Enqueue(BuildPlannedAiSpawn(areaTag));
-            }
-
-            Task.Run(async () =>
-            {
-                await Task.Delay(250).ConfigureAwait(false);
-                SpawnAICarsInternal(1, false);
-            });
+                $"Reset AI {plid} after {reason}; spectated it and cleared local tracking for segment={assignedSegment}");
         }
 
         /// <summary>
@@ -2811,9 +2679,69 @@ namespace AHPP_AI.AI
             logger.Log($"PLID={plid} Route assignment: {reason}");
         }
 
+        /// <summary>
+        /// Queue the planned population segment for the next locally requested AI spawn.
+        /// </summary>
+        private void QueuePlannedSpawnSegment(string areaTag)
+        {
+            var normalized = string.IsNullOrWhiteSpace(areaTag)
+                ? string.Empty
+                : areaTag.Trim();
+
+            lock (plannedSpawnLock)
+            {
+                PruneExpiredPlannedSpawnSegments(DateTime.UtcNow);
+                pendingPlannedSpawnSegments.Enqueue(new PendingSpawnSegment
+                {
+                    AreaTag = normalized,
+                    QueuedAtUtc = DateTime.UtcNow
+                });
+            }
+        }
+
+        /// <summary>
+        /// Try to consume the oldest pending locally planned segment for a fresh AI join.
+        /// </summary>
+        private bool TryDequeuePlannedSpawnSegment(out string areaTag)
+        {
+            lock (plannedSpawnLock)
+            {
+                PruneExpiredPlannedSpawnSegments(DateTime.UtcNow);
+                if (pendingPlannedSpawnSegments.Count > 0)
+                {
+                    areaTag = pendingPlannedSpawnSegments.Dequeue().AreaTag;
+                    return true;
+                }
+            }
+
+            areaTag = string.Empty;
+            return false;
+        }
+
+        /// <summary>
+        /// Drop planned spawn entries that are too old to still match an upcoming local /ai join.
+        /// </summary>
+        private void PruneExpiredPlannedSpawnSegments(DateTime nowUtc)
+        {
+            while (pendingPlannedSpawnSegments.Count > 0)
+            {
+                var age = nowUtc - pendingPlannedSpawnSegments.Peek().QueuedAtUtc;
+                if (age <= PlannedSpawnSegmentLifetime)
+                    break;
+
+                pendingPlannedSpawnSegments.Dequeue();
+            }
+        }
+
         public void SetNumberOfAIs(int count)
         {
             config.NumberOfAIs = Math.Max(0, count);
+        }
+
+        public void SetMaxAIs(int maxAis)
+        {
+            config.MaxAIs = Math.Max(0, maxAis);
+            populationManager?.RefreshSettings();
         }
 
         /// <summary>
@@ -2860,6 +2788,14 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
+        /// Toggle automatic AI population on or off. When enabling, reconciles immediately.
+        /// </summary>
+        public void ToggleAutoPopulation()
+        {
+            SetAutoPopulationEnabled(!IsAutoPopulationEnabled, true);
+        }
+
+        /// <summary>
         /// Report whether automatic AI population adjustments are active.
         /// </summary>
         public bool IsAutoPopulationEnabled => populationManager?.AutoAdjustEnabled ?? false;
@@ -2891,26 +2827,23 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Spawn AI cars according to a planned segment list for population balancing.
+        /// Spawn AI cars without pre-assigning them to any local segment plan.
         /// </summary>
         public void SpawnPlannedAICars(List<string> segmentTags, bool useConfiguredDelay)
         {
             if (segmentTags == null || segmentTags.Count == 0) return;
 
-            lock (plannedSpawnLock)
-            {
-                foreach (var segmentTag in segmentTags)
-                {
-                    plannedSpawns.Enqueue(BuildPlannedAiSpawn(segmentTag));
-                }
-            }
-
-            SpawnAICarsInternal(segmentTags.Count, useConfiguredDelay);
+            SpawnAICarsInternal(segmentTags, useConfiguredDelay);
         }
 
         private void SpawnAICarsInternal(int count, bool useConfiguredDelay)
         {
-            if (count <= 0) return;
+            SpawnAICarsInternal(Enumerable.Repeat(string.Empty, count).ToList(), useConfiguredDelay);
+        }
+
+        private void SpawnAICarsInternal(List<string> segmentTags, bool useConfiguredDelay)
+        {
+            if (segmentTags.Count <= 0) return;
             if (!insim.IsConnected)
             {
                 logger.LogWarning("Cannot spawn AI cars: InSim is not connected.");
@@ -2930,9 +2863,9 @@ namespace AHPP_AI.AI
                     if (insimDebugLogging)
                     {
                         logger.Log(
-                            $"Spawn sequence starting: count={count}, useConfiguredDelay={useConfiguredDelay}, plannedSpawns={plannedSpawns.Count}");
+                            $"Spawn sequence starting: count={segmentTags.Count}, useConfiguredDelay={useConfiguredDelay}");
                     }
-                    await SpawnAICarsAsync(count, useConfiguredDelay).ConfigureAwait(false);
+                    await SpawnAICarsAsync(segmentTags, useConfiguredDelay).ConfigureAwait(false);
                     if (insimDebugLogging)
                     {
                         logger.Log("Spawn sequence completed");
@@ -2952,12 +2885,12 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Spawn AI cars without blocking the calling thread so InSim events keep flowing.
         /// </summary>
-        private async Task SpawnAICarsAsync(int count, bool useConfiguredDelay)
+        private async Task SpawnAICarsAsync(List<string> segmentTags, bool useConfiguredDelay)
         {
             var delayMs = useConfiguredDelay ? config.WaitTimeToSpawn : Math.Min(1000, config.WaitTimeToSpawn);
             delayMs = Math.Max(100, delayMs);
 
-            for (var i = 0; i < count; i++)
+            for (var i = 0; i < segmentTags.Count; i++)
             {
                 if (!insim.IsConnected)
                 {
@@ -2965,118 +2898,17 @@ namespace AHPP_AI.AI
                     return;
                 }
 
-                var plannedSpawn = DequeuePlannedSpawnOrDefault();
-                await ApplySpawnSelectionAsync(plannedSpawn).ConfigureAwait(false);
-                MarkOwnedAiSpawnRequested(plannedSpawn);
-                insim.Send(new IS_MST { Msg = "/ai" });
-                logger.Log(
-                    $"Spawned AI {i + 1} of {count} segment={plannedSpawn.AssignedSegmentTag} route={plannedSpawn.AssignedRoute}" +
-                    (string.IsNullOrWhiteSpace(plannedSpawn.SelectedModName)
-                        ? string.Empty
-                        : $" mod={plannedSpawn.SelectedModName}"));
-                if (i < count - 1)
-                    await Task.Delay(delayMs).ConfigureAwait(false);
-            }
-        }
-
-        /// <summary>
-        /// Record a newly issued spawn request so only our spawned AI cars are admitted for control.
-        /// </summary>
-        private void MarkOwnedAiSpawnRequested(PlannedAiSpawn plannedSpawn)
-        {
-            lock (ownedSpawnLock)
-            {
-                PurgeExpiredOwnedSpawnRequests_NoLock(DateTime.UtcNow);
-                pendingOwnedAiSpawns.Enqueue(new OwnedAiSpawnRequest
+                var plannedSpawn = new PlannedAiSpawn
                 {
-                    IssuedUtc = DateTime.UtcNow,
-                    PlannedSpawn = plannedSpawn
-                });
+                    Mod = TryPickSpawnMod(),
+                    SegmentTag = segmentTags[i]
+                };
+                await ApplySpawnSelectionAsync(plannedSpawn).ConfigureAwait(false);
+                QueuePlannedSpawnSegment(plannedSpawn.SegmentTag);
+                insim.Send(new IS_MST { Msg = "/ai" });
+                logger.Log($"Spawned AI {i + 1} of {segmentTags.Count}");
+                await Task.Delay(delayMs).ConfigureAwait(false);
             }
-        }
-
-        /// <summary>
-        /// Consume one pending owned spawn slot when an AI joins; returns false for unowned AI.
-        /// </summary>
-        private bool TryConsumeOwnedAiSpawnPlan(out PlannedAiSpawn plannedSpawn)
-        {
-            plannedSpawn = BuildPlannedAiSpawn(ResolveDefaultPopulationAreaTag());
-
-            lock (ownedSpawnLock)
-            {
-                PurgeExpiredOwnedSpawnRequests_NoLock(DateTime.UtcNow);
-                if (pendingOwnedAiSpawns.Count == 0)
-                    return false;
-
-                plannedSpawn = pendingOwnedAiSpawns.Dequeue().PlannedSpawn;
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// Drop stale spawn requests so delayed unrelated AI joins are never treated as owned.
-        /// </summary>
-        private void PurgeExpiredOwnedSpawnRequests_NoLock(DateTime nowUtc)
-        {
-            while (pendingOwnedAiSpawns.Count > 0)
-            {
-                var issued = pendingOwnedAiSpawns.Peek().IssuedUtc;
-                if ((nowUtc - issued) <= OwnedAiAdmissionWindow)
-                    break;
-
-                pendingOwnedAiSpawns.Dequeue();
-            }
-        }
-
-        /// <summary>
-        /// Get the next planned spawn request for a freshly spawned AI or default to the highest-priority segment.
-        /// </summary>
-        private PlannedAiSpawn DequeuePlannedSpawnOrDefault()
-        {
-            lock (plannedSpawnLock)
-            {
-                if (plannedSpawns.Count > 0)
-                    return plannedSpawns.Dequeue();
-
-                return BuildPlannedAiSpawn(ResolveDefaultPopulationAreaTag());
-            }
-        }
-
-        /// <summary>
-        /// Build a spawn plan for a configured segment, including any segment-matched mod preset.
-        /// </summary>
-        /// <param name="areaTag">Configured population segment tag for the pending AI.</param>
-        /// <returns>Resolved spawn plan.</returns>
-        private PlannedAiSpawn BuildPlannedAiSpawn(string areaTag)
-        {
-            var resolvedAreaTag = ResolvePopulationAreaTag(areaTag);
-            var plannedSpawn = new PlannedAiSpawn
-            {
-                AssignedSegmentTag = resolvedAreaTag,
-                // Route assignment is resolved from the nearest pit route after the car actually appears.
-                AssignedRoute = string.Empty,
-                SourceAreaTag = resolvedAreaTag
-            };
-
-            if (TryResolveSpawnModSelection(resolvedAreaTag, out var selectedModName, out var modPreset))
-            {
-                plannedSpawn.SelectedModName = selectedModName;
-                plannedSpawn.ModPreset = modPreset;
-            }
-
-            return plannedSpawn;
-        }
-
-        /// <summary>
-        /// Resolve a requested population area tag to a configured pit-area tag.
-        /// </summary>
-        private string ResolvePopulationAreaTag(string areaTag)
-        {
-            if (!string.IsNullOrWhiteSpace(areaTag) &&
-                config.PitSpawnAreas.ContainsKey(areaTag))
-                return areaTag;
-
-            return ResolveDefaultPopulationAreaTag();
         }
 
         /// <summary>
@@ -3333,73 +3165,53 @@ namespace AHPP_AI.AI
         /// <param name="plannedSpawn">Resolved spawn plan.</param>
         private async Task ApplySpawnSelectionAsync(PlannedAiSpawn plannedSpawn)
         {
-            if (string.IsNullOrWhiteSpace(plannedSpawn.SelectedModName))
+            if (plannedSpawn.Mod == null || string.IsNullOrWhiteSpace(plannedSpawn.Mod.Name))
                 return;
 
-            insim.Send(new IS_MST { Msg = $"/mod {plannedSpawn.SelectedModName}" });
+            insim.Send(new IS_MST { Msg = $"/mod {plannedSpawn.Mod.Name}" });
             await Task.Delay(100).ConfigureAwait(false);
 
-            if (plannedSpawn.ModPreset != null)
+            if (plannedSpawn.Mod.Setup.HasValue)
             {
-                insim.Send(new IS_MST { Msg = $"/setup {plannedSpawn.ModPreset.Setup}" });
-                await Task.Delay(100).ConfigureAwait(false);
-                insim.Send(new IS_MST { Msg = $"/colour {plannedSpawn.ModPreset.Colour}" });
+                insim.Send(new IS_MST { Msg = $"/setup {plannedSpawn.Mod.Setup.Value}" });
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
-            logger.Log(
-                $"Prepared AI spawn for segment={plannedSpawn.AssignedSegmentTag} route={plannedSpawn.AssignedRoute} area={plannedSpawn.SourceAreaTag} mod={plannedSpawn.SelectedModName}" +
-                (plannedSpawn.ModPreset == null
-                    ? string.Empty
-                    : $" setup={plannedSpawn.ModPreset.Setup} colour={plannedSpawn.ModPreset.Colour}"));
+            if (plannedSpawn.Mod.Colour.HasValue)
+            {
+                insim.Send(new IS_MST { Msg = $"/colour {plannedSpawn.Mod.Colour.Value}" });
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+
+            var presetInfo = (plannedSpawn.Mod.Setup.HasValue || plannedSpawn.Mod.Colour.HasValue)
+                ? $" setup={plannedSpawn.Mod.Setup} colour={plannedSpawn.Mod.Colour}"
+                : string.Empty;
+            logger.Log($"Prepared AI spawn mod={plannedSpawn.Mod.Name}{presetInfo}");
         }
 
         /// <summary>
-        /// Try to resolve a mod choice for the pending spawn from a configured population segment.
+        /// Pick a mod from the global weighted spawn pool.
         /// </summary>
-        /// <param name="areaTag">Configured pit-area tag assigned to the spawn.</param>
-        /// <param name="selectedModName">Chosen mod name.</param>
-        /// <param name="modPreset">Optional setup/colour preset for the chosen mod.</param>
-        /// <returns>True when a mod should be selected before spawning.</returns>
-        private bool TryResolveSpawnModSelection(
-            string areaTag,
-            out string selectedModName,
-            out AIConfig.PitSpawnModPresetConfig? modPreset)
+        /// <returns>The chosen mod entry, or null if no mods are configured.</returns>
+        private AIConfig.SpawnModConfig? TryPickSpawnMod()
         {
-            selectedModName = string.Empty;
-            modPreset = null;
+            if (config.SpawnMods == null || config.SpawnMods.Count == 0)
+                return null;
 
-            if (string.IsNullOrWhiteSpace(areaTag) || config.PitSpawnAreas == null || config.PitSpawnAreas.Count == 0)
-                return false;
+            var totalWeight = config.SpawnMods.Sum(m => m.Weight);
+            if (totalWeight <= 0)
+                return config.SpawnMods[branchRandom.Next(config.SpawnMods.Count)];
 
-            if (!config.PitSpawnAreas.TryGetValue(areaTag, out var areaConfig) || areaConfig == null)
-                return false;
-
-            if ((areaConfig.AllowedMods == null || areaConfig.AllowedMods.Count == 0) &&
-                (areaConfig.ModPresets == null || areaConfig.ModPresets.Count == 0))
-                return false;
-
-            var allowedMods = areaConfig.AllowedMods ?? new List<string>();
-            var modPresets = areaConfig.ModPresets ??
-                             new Dictionary<string, AIConfig.PitSpawnModPresetConfig>(StringComparer.OrdinalIgnoreCase);
-            var allowAnyMod = allowedMods.Any(mod => mod == "*");
-
-            var presetMods = modPresets.Keys
-                .Where(mod => allowAnyMod || allowedMods.Contains(mod, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-            if (presetMods.Count > 0)
+            var roll = branchRandom.Next(totalWeight);
+            var cumulative = 0;
+            foreach (var mod in config.SpawnMods)
             {
-                selectedModName = presetMods[branchRandom.Next(presetMods.Count)];
-                modPreset = modPresets[selectedModName];
-                return true;
+                cumulative += mod.Weight;
+                if (roll < cumulative)
+                    return mod;
             }
 
-            var explicitAllowedMods = allowedMods.Where(mod => mod != "*").ToList();
-            if (explicitAllowedMods.Count == 0)
-                return false;
-
-            selectedModName = explicitAllowedMods[branchRandom.Next(explicitAllowedMods.Count)];
-            return true;
+            return config.SpawnMods[config.SpawnMods.Count - 1];
         }
 
         public void RemoveLastAICar()
@@ -3711,13 +3523,6 @@ namespace AHPP_AI.AI
             if ((npl.PType & PlayerTypes.PLT_AI) == PlayerTypes.PLT_AI &&
                 !npl.PName.Contains("Track")) // and not tracks
             {
-                if (!TryConsumeOwnedAiSpawnPlan(out var plannedSpawn))
-                {
-                    logger.Log(
-                        $"Ignoring non-owned AI join: PLID={npl.PLID}, UCID={npl.UCID}, Name={npl.PName}");
-                    return;
-                }
-
                 var plid = npl.PLID;
                 var isNewAi = false;
 
@@ -3737,12 +3542,18 @@ namespace AHPP_AI.AI
                     aiSpawnTimes[plid] = DateTime.UtcNow;
                     engineStateMap[plid] = true; // Assume engine starts running
                     aiNames[plid] = npl.PName;
-                    var assignedRoute = plannedSpawn.AssignedRoute;
 
                     // Initialize the driver
                     driver.InitializeDriver(plid);
                     driver.SetDrivingMode(plid, AIConfig.DrivingMode.Cruise);
                     driver.StartWarmup(plid, config.TelemetryWarmupMs, config.WarmupBrakeHoldMs);
+
+                    if (TryDequeuePlannedSpawnSegment(out var plannedAreaTag) &&
+                        !string.IsNullOrWhiteSpace(plannedAreaTag))
+                    {
+                        SetAssignedSegment(plid, plannedAreaTag);
+                        logger.Log($"PLID={plid} Applied planned spawn segment {plannedAreaTag}");
+                    }
 
                     if (config.UseAiiTelemetry)
                     {
@@ -3760,9 +3571,6 @@ namespace AHPP_AI.AI
                     waypointFollower.SetPath(plid, pathManager.SpawnRoute);
                     currentRoute[plid] = "spawn";
                     initialRouteResolved.Remove(plid);
-                    SetAssignedSegment(plid, plannedSpawn.AssignedSegmentTag);
-                    SetAssignedRoute(plid, assignedRoute);
-                    populationManager?.UnregisterHuman(0, npl.UCID);
                     populationManager?.OnAiJoined(plid);
 
                     // Set debug UI to track this AI if enabled
@@ -3858,8 +3666,8 @@ namespace AHPP_AI.AI
         /// </summary>
         private int UpdateAiiRefreshInterval(bool enqueueAll = false)
         {
-            if (!config.UseAiiTelemetry)
-                return 0;
+            // Always request AII updates for gear feedback even when full telemetry is disabled.
+            // UseAiiTelemetry only controls whether RPM is used for engine-running detection.
 
             var activeCount = GetActiveAiCount();
             var intervalHundredths = CalculateAiiIntervalHundredths(activeCount);
@@ -3922,7 +3730,6 @@ namespace AHPP_AI.AI
         private void EnqueueAiiIntervalUpdates(IEnumerable<byte> plids)
         {
             if (plids == null) return;
-            if (!config.UseAiiTelemetry) return;
 
             foreach (var plid in plids)
             {
@@ -3935,7 +3742,6 @@ namespace AHPP_AI.AI
         /// </summary>
         private void SendAiiRefreshInterval(byte plid, int intervalHundredths)
         {
-            if (!config.UseAiiTelemetry) return;
             var clamped = ClampAiiIntervalToByte(intervalHundredths);
 
             insim.Send(new IS_AIC(new List<AIInputVal>
@@ -3949,7 +3755,6 @@ namespace AHPP_AI.AI
         /// </summary>
         private void RequestAIInfo(byte plid, int? intervalOverrideHundredths = null)
         {
-            if (!config.UseAiiTelemetry) return;
             var intervalHundredths = intervalOverrideHundredths ?? GetCurrentAiiIntervalHundredths();
             SendAiiRefreshInterval(plid, intervalHundredths);
         }
@@ -4897,7 +4702,6 @@ namespace AHPP_AI.AI
             var stopwatch = Stopwatch.StartNew();
             try
             {
-                if (!config.UseAiiTelemetry) return;
                 if (aii == null) return;
 
                 var plid = aii.PLID;
@@ -4913,12 +4717,15 @@ namespace AHPP_AI.AI
                     {
                         Rpm = aii.RPM,
                         Flags = aii.Flags,
+                        Gear = aii.Gear,
                         Timestamp = DateTime.UtcNow
                     };
                 }
 
-                // Only update engine state on positive RPM; low RPM is handled with speed-aware checks elsewhere.
-                if (aii.RPM >= 0.1f)
+                gearboxController.UpdateActualGear(plid, aii.Gear);
+
+                // Only use AII RPM as an engine-running signal when AII telemetry is enabled for control logic.
+                if (config.UseAiiTelemetry && aii.RPM >= 0.1f)
                     driver.UpdateEngineState(plid, true);
             }
             catch (Exception ex)
@@ -4985,14 +4792,25 @@ namespace AHPP_AI.AI
                 ? activeSpawnPath.Count
                 : pathManager.SpawnRoute.Count;
 
-            if (routeName == "spawn" && activeSpawnLength > 0 &&
-                IsNearSpawnRouteEnd(activeSpawnPath ?? pathManager.SpawnRoute, car, config.SpawnMergeHoldDistanceMeters))
+            if (routeName == "spawn" && activeSpawnLength > 0)
             {
+                var selectedSpawn = spawnRouteSelections.TryGetValue(plid, out var sel) ? sel : string.Empty;
+                var transitionDecision = SpawnRouteTransitionPlanner.Evaluate(
+                    activeSpawnPath ?? pathManager.SpawnRoute,
+                    car.X / 65536.0,
+                    car.Y / 65536.0,
+                    config.SpawnMergeHoldDistanceMeters,
+                    config.PathLoopClosureDistanceMeters,
+                    selectedSpawn,
+                    ResolveDrivingRouteForSpawnRoute);
+
+                if (transitionDecision.Action == SpawnTransitionAction.StayOnSpawnRoute)
+                    return;
+
                 if (holdForMerge)
                     return;
 
-                var selectedSpawn = spawnRouteSelections.TryGetValue(plid, out var sel) ? sel : string.Empty;
-                if (TryTransitionFromSpawnRoute(plid, car, selectedSpawn))
+                if (TryTransitionFromSpawnRoute(plid, car, transitionDecision))
                     return;
 
                 var bestIndex = FindClosestIndex(pathManager.MainRoute, car);
@@ -5143,7 +4961,10 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Execute one scheduler tick and update a round-robin slice of the AI pool.
+        /// Execute one scheduler tick and update a priority-ordered slice of the AI pool.
+        /// AIs are processed in spawn order (earliest first) so that when the packet budget
+        /// is exceeded, the most recently spawned AIs are the ones dropped rather than
+        /// degrading all AIs equally.
         /// </summary>
         private void RunControlTick()
         {
@@ -5163,10 +4984,12 @@ namespace AHPP_AI.AI
             var updatesThisTick = schedule.UpdatesPerTick;
             var updated = 0;
 
-            for (var i = 0; i < updatesThisTick && activeCount > 0; i++)
+            // Process AIs in spawn order (earliest first). When the budget allows fewer
+            // updates than the total AI count, only the first-spawned AIs receive control
+            // inputs. The last-spawned AIs are simply skipped until budget permits.
+            for (var i = 0; i < updatesThisTick && i < activeCount; i++)
             {
-                var index = (controlLoopCursor + i) % activeCount;
-                var plid = activePlids[index];
+                var plid = activePlids[i];
 
                 if (TryGetLatestTelemetry(plid, out var car, out var rpm, out var flags,
                         out var hasAiiRpm, out var hasAiiFlags, out var wasStale, out var carTimestamp))
@@ -5191,7 +5014,6 @@ namespace AHPP_AI.AI
                 }
             }
 
-            controlLoopCursor = activeCount == 0 ? 0 : (controlLoopCursor + updatesThisTick) % activeCount;
             lastComputedControlHzPerAi = schedule.EffectiveControlHzPerAi;
             lastControlUpdatesPerTick = updated;
             LogControlSnapshot(activeCount, schedule.EffectiveControlHzPerAi, updated);
@@ -5296,6 +5118,8 @@ namespace AHPP_AI.AI
             telemetrySkippedCount = 0;
             recoveryEntryCount = 0;
             lastControlLogTime = now;
+
+            UpdateControlStatusUi(activeCount, controlHzPerAi);
         }
 
         /// <summary>
@@ -5319,36 +5143,61 @@ namespace AHPP_AI.AI
 
             var position = new Vec(car.X, car.Y, car.Z);
             var hasSpawnCandidate = TryBuildSpawnInitialRouteCandidate(plid, position, car.Heading, out var spawnCandidate);
-            InitialRouteCandidate? trackCandidate = null;
-            var hasTrackCandidate = false;
-            if (ShouldAllowAutomaticRaceMode(plid))
-                hasTrackCandidate = TryBuildTrackInitialRouteCandidate(position, car, out trackCandidate);
+            var hasTrackCandidate = TryBuildTrackInitialRouteCandidate(
+                position,
+                car,
+                DetermineTrackSpawnDrivingMode(plid),
+                out var trackCandidate);
 
-            var selected = SelectInitialRouteCandidate(
+            var decision = InitialRoutePlanner.SelectInitialRoute(
                 hasSpawnCandidate ? spawnCandidate : null,
-                hasTrackCandidate ? trackCandidate : null);
-            if (selected == null)
+                hasTrackCandidate ? trackCandidate : null,
+                SpawnRouteFarDistanceThresholdMeters,
+                OnTrackSpawnScoreAdvantage,
+                config.TrackSpawnScoreAdvantage);
+            LogInitialRouteDecision(plid, decision);
+            if (decision.SelectedCandidate == null)
+            {
+                waypointFollower.SetPath(plid, null);
+                currentRoute.Remove(plid);
+                TryResetAiForUnresolvedInitialRoute(plid, hasSpawnCandidate, hasTrackCandidate);
                 return;
+            }
 
-            ApplyInitialRouteCandidate(plid, selected);
+            ApplyInitialRouteCandidate(plid, decision.SelectedCandidate);
         }
 
         /// <summary>
-        /// Allow automatic race-mode classification only during active races for non-pit-area starts.
-        /// Normal pit traffic should remain in cruise mode.
+        /// Spectate and respawn an AI if it still has no valid initial route after the spawn warmup window.
         /// </summary>
-        private bool ShouldAllowAutomaticRaceMode(byte plid)
+        private void TryResetAiForUnresolvedInitialRoute(byte plid, bool hasSpawnCandidate, bool hasTrackCandidate)
         {
-            if (!raceInProgress)
-                return false;
+            if (!aiSpawnTimes.TryGetValue(plid, out var spawnTime))
+                return;
 
-            return !TryGetAssignedSegment(plid, out var areaTag) || string.IsNullOrWhiteSpace(areaTag);
+            var unresolvedMs = (DateTime.UtcNow - spawnTime).TotalMilliseconds;
+            if (unresolvedMs <= config.TelemetryWarmupMs)
+                return;
+
+            logger.LogWarning(
+                $"PLID={plid} Initial route unresolved after {unresolvedMs:F0}ms (spawnCandidate={hasSpawnCandidate}, trackCandidate={hasTrackCandidate}); spectating and retrying spawn");
+            ResetAI(plid, "unresolved initial routing");
+        }
+
+        /// <summary>
+        /// Determine which driving mode should be used when an AI is classified onto an on-track route at spawn time.
+        /// </summary>
+        private AIConfig.DrivingMode DetermineTrackSpawnDrivingMode(byte plid)
+        {
+            return raceInProgress && (!TryGetAssignedSegment(plid, out var areaTag) || string.IsNullOrWhiteSpace(areaTag))
+                ? AIConfig.DrivingMode.Race
+                : AIConfig.DrivingMode.Cruise;
         }
 
         /// <summary>
         /// Build the pit/spawn-route candidate for a newly spawned AI by choosing the closest recorded spawn route.
         /// </summary>
-        private bool TryBuildSpawnInitialRouteCandidate(byte plid, Vec position, int heading, out InitialRouteCandidate? candidate)
+        private bool TryBuildSpawnInitialRouteCandidate(byte plid, Vec position, int heading, out RouteCandidate? candidate)
         {
             candidate = null;
 
@@ -5357,14 +5206,14 @@ namespace AHPP_AI.AI
                 : string.Empty;
             var preferredRouteNames = GetPreferredSpawnRouteNamesForArea(plannedAreaTag);
 
-            InitialRouteCandidate? preferredCandidate = null;
+            RouteCandidate? preferredCandidate = null;
             var preferredDistance = double.MaxValue;
             if (preferredRouteNames.Count > 0 &&
                 pathManager.TrySelectSpawnRoute(position, heading, preferredRouteNames, out var preferredName,
                     out var preferredPath, out var preferredStartIndex, out var preferredClockwise,
                     out var preferredIsLoop, out preferredDistance))
             {
-                preferredCandidate = CreateInitialRouteCandidate(
+                preferredCandidate = InitialRoutePlanner.CreateCandidate(
                     "spawn",
                     preferredName,
                     preferredPath,
@@ -5374,17 +5223,19 @@ namespace AHPP_AI.AI
                     AIConfig.DrivingMode.Cruise,
                     null,
                     position,
-                    heading);
+                    heading,
+                    waypointManager.ScoreRouteFit,
+                    waypointManager.CalculateWaypointDistance);
             }
 
             if (!pathManager.TrySelectSpawnRoute(position, heading, null, out var selectedName, out var path,
-                    out var startIndex, out var clockwise, out var isLoop, out var liveDistance))
+                     out var startIndex, out var clockwise, out var isLoop, out var liveDistance))
             {
                 candidate = preferredCandidate;
                 return candidate != null;
             }
 
-            var liveCandidate = CreateInitialRouteCandidate(
+            var liveCandidate = InitialRoutePlanner.CreateCandidate(
                 "spawn",
                 selectedName,
                 path,
@@ -5394,164 +5245,147 @@ namespace AHPP_AI.AI
                 AIConfig.DrivingMode.Cruise,
                 null,
                 position,
-                heading);
+                heading,
+                waypointManager.ScoreRouteFit,
+                waypointManager.CalculateWaypointDistance);
             if (liveCandidate == null)
             {
                 candidate = preferredCandidate;
                 return candidate != null;
             }
 
-            candidate = SelectSpawnInitialRouteCandidate(
-                plid,
-                plannedAreaTag,
+            var selection = InitialRoutePlanner.SelectSpawnRouteCandidate(
                 preferredCandidate,
                 preferredDistance,
                 liveCandidate,
-                liveDistance);
+                liveDistance,
+                PreferredSpawnRouteDistanceThresholdMeters,
+                PreferredSpawnRouteFallbackAdvantageMeters);
+
+            LogSpawnRouteSelection(plid, plannedAreaTag, selection);
+            candidate = selection.SelectedCandidate;
+
+            if (!InitialRoutePlanner.IsViableSpawnCandidate(candidate, config.MaxSpawnInitialRouteDistanceMeters))
+            {
+                if (candidate != null)
+                {
+                    logger.Log(
+                        $"Rejected spawn initial route {candidate.RouteName}: distance={candidate.NearestDistance:F1}m exceeds limit={config.MaxSpawnInitialRouteDistanceMeters:F1}m");
+                }
+
+                candidate = null;
+            }
+
             return candidate != null;
         }
 
         /// <summary>
-        /// Prefer the planned pit area's spawn routes when they still fit the live spawn, otherwise fall back to the
-        /// physically nearest recorded pit route so LFS slot remaps still recover cleanly.
+        /// Emit one structured log entry describing how planned and live spawn-route candidates were resolved.
         /// </summary>
-        private InitialRouteCandidate? SelectSpawnInitialRouteCandidate(
-            byte plid,
-            string plannedAreaTag,
-            InitialRouteCandidate? preferredCandidate,
-            double preferredDistance,
-            InitialRouteCandidate? liveCandidate,
-            double liveDistance)
+        private void LogSpawnRouteSelection(byte plid, string plannedAreaTag, SpawnRouteSelectionResult selection)
         {
-            if (preferredCandidate == null)
-                return liveCandidate;
-            if (liveCandidate == null)
-                return preferredCandidate;
+            var preferredRoute = selection.PreferredCandidate?.RouteName ?? "<none>";
+            var liveRoute = selection.LiveCandidate?.RouteName ?? "<none>";
+            var selectedRoute = selection.SelectedCandidate?.RouteName ?? "<none>";
 
-            if (preferredCandidate.RouteName.Equals(liveCandidate.RouteName, StringComparison.OrdinalIgnoreCase))
-                return preferredCandidate;
-
-            if (preferredDistance <= PreferredSpawnRouteDistanceThresholdMeters)
-                return preferredCandidate;
-
-            if (liveDistance + PreferredSpawnRouteFallbackAdvantageMeters < preferredDistance)
-            {
-                logger.Log(
-                    $"PLID={plid} Spawn route fallback: plannedArea={plannedAreaTag} preferred={preferredCandidate.RouteName} ({preferredDistance:F1}m) live={liveCandidate.RouteName} ({liveDistance:F1}m)");
-                return liveCandidate;
-            }
-
-            return preferredCandidate;
+            logger.Log(
+                $"PLID={plid} spawn selection reason={selection.ReasonCode} plannedArea={plannedAreaTag} preferred={preferredRoute} preferredDistance={selection.PreferredDistance:F1} live={liveRoute} liveDistance={selection.LiveDistance:F1} selected={selectedRoute}");
         }
 
         /// <summary>
         /// Build the best on-track candidate from the configured main routes for a newly spawned AI.
         /// </summary>
-        private bool TryBuildTrackInitialRouteCandidate(Vec position, CompCar car, out InitialRouteCandidate? candidate)
+        private bool TryBuildTrackInitialRouteCandidate(
+            Vec position,
+            CompCar car,
+            AIConfig.DrivingMode drivingMode,
+            out RouteCandidate? candidate)
         {
             candidate = null;
 
-            var mainCandidate = CreateInitialRouteCandidate(
+            var mainCandidate = InitialRoutePlanner.CreateCandidate(
                 "main",
                 config.MainRouteName,
                 pathManager.MainRoute,
                 null,
                 true,
                 pathManager.MainRouteMetadata?.IsLoop ?? true,
-                AIConfig.DrivingMode.Race,
+                drivingMode,
                 null,
                 position,
-                car.Heading);
-            candidate = mainCandidate;
+                car.Heading,
+                waypointManager.ScoreRouteFit,
+                waypointManager.CalculateWaypointDistance);
+            if (InitialRoutePlanner.IsViableTrackCandidate(
+                    mainCandidate,
+                    MaxTrackInitialRouteDistanceMeters,
+                    MaxTrackInitialHeadingErrorDegrees))
+            {
+                candidate = mainCandidate;
+            }
+            else if (mainCandidate != null)
+            {
+                var headingErrorDegrees = Math.Abs(mainCandidate.HeadingError) * 360.0 / CoordinateUtils.FULL_CIRCLE;
+                logger.Log(
+                    $"Rejected on-track initial route {mainCandidate.RouteName}: distance={mainCandidate.NearestDistance:F1}m headingError={headingErrorDegrees:F1}deg");
+            }
 
             var alternate = pathManager.MainAlternateRoute;
             if (alternate?.Path != null && alternate.Path.Count > 0)
             {
-                var alternateCandidate = CreateInitialRouteCandidate(
+                var alternateCandidate = InitialRoutePlanner.CreateCandidate(
                     "branch",
                     alternate.Name,
                     alternate.Path,
                     null,
                     true,
                     alternate.Metadata?.IsLoop ?? false,
-                    AIConfig.DrivingMode.Race,
+                    drivingMode,
                     alternate,
                     position,
-                    car.Heading);
+                    car.Heading,
+                    waypointManager.ScoreRouteFit,
+                    waypointManager.CalculateWaypointDistance);
 
                 if (alternateCandidate != null &&
+                    InitialRoutePlanner.IsViableTrackCandidate(
+                        alternateCandidate,
+                        MaxTrackInitialRouteDistanceMeters,
+                        MaxTrackInitialHeadingErrorDegrees) &&
                     (candidate == null || alternateCandidate.Score < candidate.Score))
                     candidate = alternateCandidate;
+                else if (alternateCandidate != null &&
+                         !InitialRoutePlanner.IsViableTrackCandidate(
+                             alternateCandidate,
+                             MaxTrackInitialRouteDistanceMeters,
+                             MaxTrackInitialHeadingErrorDegrees))
+                {
+                    var headingErrorDegrees = Math.Abs(alternateCandidate.HeadingError) * 360.0 / CoordinateUtils.FULL_CIRCLE;
+                    logger.Log(
+                        $"Rejected on-track initial route {alternateCandidate.RouteName}: distance={alternateCandidate.NearestDistance:F1}m headingError={headingErrorDegrees:F1}deg");
+                }
             }
 
             return candidate != null;
         }
 
         /// <summary>
-        /// Score a route candidate, reversing it when needed so the AI starts aligned with its heading.
+        /// Emit one structured log entry for the final initial-route decision used to classify a fresh spawn.
         /// </summary>
-        private InitialRouteCandidate? CreateInitialRouteCandidate(
-            string routeLabel,
-            string routeName,
-            List<Util.Waypoint> path,
-            int? preferredStartIndex,
-            bool assumeClockwise,
-            bool isLoop,
-            AIConfig.DrivingMode drivingMode,
-            BranchRouteInfo? branchInfo,
-            Vec position,
-            int heading)
+        private void LogInitialRouteDecision(byte plid, InitialRouteDecision decision)
         {
-            if (path == null || path.Count < 2)
-                return null;
+            var spawnRoute = decision.SpawnCandidate?.RouteName ?? "<none>";
+            var trackRoute = decision.TrackCandidate?.RouteName ?? "<none>";
+            var selectedRoute = decision.SelectedCandidate?.RouteName ?? "<none>";
 
-            var (score, scoredIndex, clockwise) = waypointManager.ScoreRouteFit(position, heading, path, isLoop, false);
-            var startIndex = preferredStartIndex ?? scoredIndex;
-            var appliedPath = path;
-            var appliedIndex = Math.Max(0, Math.Min(path.Count - 1, startIndex));
-            var useClockwise = preferredStartIndex.HasValue ? assumeClockwise : clockwise;
-
-            if (!useClockwise)
-            {
-                appliedPath = new List<Util.Waypoint>(path);
-                appliedPath.Reverse();
-                appliedIndex = appliedPath.Count - 1 - appliedIndex;
-            }
-
-            return new InitialRouteCandidate
-            {
-                RouteLabel = routeLabel,
-                RouteName = routeName,
-                Path = appliedPath,
-                StartIndex = appliedIndex,
-                IsLoop = isLoop,
-                DrivingMode = drivingMode,
-                BranchInfo = branchInfo,
-                Score = score
-            };
-        }
-
-        /// <summary>
-        /// Prefer the track candidate only when it beats the spawn-route candidate by the configured score margin.
-        /// </summary>
-        private InitialRouteCandidate? SelectInitialRouteCandidate(
-            InitialRouteCandidate? spawnCandidate,
-            InitialRouteCandidate? trackCandidate)
-        {
-            if (trackCandidate == null)
-                return spawnCandidate;
-            if (spawnCandidate == null)
-                return trackCandidate;
-
-            return trackCandidate.Score + config.TrackSpawnScoreAdvantage < spawnCandidate.Score
-                ? trackCandidate
-                : spawnCandidate;
+            logger.Log(
+                $"PLID={plid} initial route decision reason={decision.ReasonCode} spawn={spawnRoute} spawnScore={decision.SpawnCandidate?.Score ?? double.MaxValue:F1} spawnDistance={decision.SpawnCandidate?.NearestDistance ?? double.MaxValue:F1} track={trackRoute} trackScore={decision.TrackCandidate?.Score ?? double.MaxValue:F1} trackDistance={decision.TrackCandidate?.NearestDistance ?? double.MaxValue:F1} selected={selectedRoute}");
         }
 
         /// <summary>
         /// Apply the chosen initial route and driving mode and mark the AI as classified.
         /// </summary>
-        private void ApplyInitialRouteCandidate(byte plid, InitialRouteCandidate candidate)
+        private void ApplyInitialRouteCandidate(byte plid, RouteCandidate candidate)
         {
             waypointFollower.SetPath(plid, candidate.Path, candidate.StartIndex, candidate.IsLoop);
             driver.SetDrivingMode(plid, candidate.DrivingMode);
@@ -5593,7 +5427,7 @@ namespace AHPP_AI.AI
             initialRouteResolved.Add(plid);
             mainUI.UpdateAIList(GetAiListEntries());
             logger.Log(
-                $"PLID={plid} initial route={candidate.RouteName} label={candidate.RouteLabel} mode={candidate.DrivingMode} startIndex={candidate.StartIndex} score={candidate.Score:F1}");
+                $"PLID={plid} initial route={candidate.RouteName} label={candidate.RouteLabel} mode={candidate.DrivingMode} startIndex={candidate.StartIndex} distance={candidate.NearestDistance:F1} score={candidate.Score:F1}");
         }
 
         /// <summary>
@@ -5603,7 +5437,11 @@ namespace AHPP_AI.AI
         {
             if (TryGetCurrentCar(plid, out var car) &&
                 car != null &&
-                TryBuildTrackInitialRouteCandidate(new Vec(car.X, car.Y, car.Z), car, out var trackCandidate) &&
+                TryBuildTrackInitialRouteCandidate(
+                    new Vec(car.X, car.Y, car.Z),
+                    car,
+                    AIConfig.DrivingMode.Race,
+                    out var trackCandidate) &&
                 trackCandidate != null)
             {
                 ApplyInitialRouteCandidate(plid, trackCandidate);
@@ -5656,26 +5494,6 @@ namespace AHPP_AI.AI
         /// Determine if the AI is close enough to the end of the active spawn path to switch to the main route.
         /// Uses path projection distance to the end rather than relying solely on waypoint index so mid-lane spawns stay on the lane.
         /// </summary>
-        private bool IsNearSpawnRouteEnd(List<Util.Waypoint> spawnPath, CompCar car, double thresholdMeters)
-        {
-            if (spawnPath == null || spawnPath.Count < 2) return true;
-
-            var geometry = PathProjection.GetGeometry(spawnPath, config.PathLoopClosureDistanceMeters);
-            if (geometry == null || geometry.TotalLength <= 0) return true;
-            if (geometry.IsLoop) return true;
-
-            if (!PathProjection.TryProjectToPath(
-                    spawnPath,
-                    geometry,
-                    car.X / 65536.0,
-                    car.Y / 65536.0,
-                    out var projection))
-                return true;
-
-            var distanceToEnd = geometry.TotalLength - projection.DistanceAlongPathMeters;
-            return distanceToEnd <= Math.Max(1.0, thresholdMeters);
-        }
-
         /// <summary>
         ///     Emit aggregated timing stats for AII and MCI handlers on a rolling window.
         /// </summary>
@@ -5687,10 +5505,6 @@ namespace AHPP_AI.AI
             var hasAii = aiiPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var aiiSnapshot);
             var hasMci = mciPerformanceTracker.TryGetSnapshot(PerformanceLogWindow, out var mciSnapshot);
             if (!hasAii && !hasMci) return;
-
-            UpdatePerformanceStatusUi(
-                hasAii ? (PerformanceSnapshot?)aiiSnapshot : null,
-                hasMci ? (PerformanceSnapshot?)mciSnapshot : null);
 
             if (performanceLogging)
             {
@@ -5719,71 +5533,29 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Update the main UI with a traffic-safe performance health indicator.
+        /// Update the main UI performance button to show active AI count and control Hz.
+        /// Green = full rate, yellow = degraded but above minimum, red = below minimum.
         /// </summary>
-        private void UpdatePerformanceStatusUi(PerformanceSnapshot? aiiSnapshot, PerformanceSnapshot? mciSnapshot)
+        private void UpdateControlStatusUi(int activeCount, double controlHz)
         {
-            var load = GetWorstPerformanceLoad(aiiSnapshot, mciSnapshot);
-            var health = EvaluatePerformanceHealth(aiiSnapshot.HasValue || mciSnapshot.HasValue, load);
-            if (health == lastPerformanceHealth && Math.Abs(load - lastPerformanceLoad) < 0.01) return;
-
-            lastPerformanceHealth = health;
-            lastPerformanceLoad = load;
-            mainUI.UpdatePerformanceStatus(BuildPerformanceStatusLabel(health, load));
+            var label = BuildControlStatusLabel(activeCount, controlHz);
+            mainUI.UpdatePerformanceStatus(label);
         }
 
         /// <summary>
-        /// Determine the worst handler load ratio across recent snapshots.
+        /// Build the color-coded UI label showing AI count and control Hz.
         /// </summary>
-        private static double GetWorstPerformanceLoad(
-            PerformanceSnapshot? aiiSnapshot,
-            PerformanceSnapshot? mciSnapshot)
+        private string BuildControlStatusLabel(int activeCount, double controlHz)
         {
-            var worst = 0.0;
-            if (aiiSnapshot.HasValue)
-                worst = Math.Max(worst, GetSnapshotLoad(aiiSnapshot.Value));
-            if (mciSnapshot.HasValue)
-                worst = Math.Max(worst, GetSnapshotLoad(mciSnapshot.Value));
-            return Math.Max(0.0, worst);
-        }
+            if (activeCount == 0)
+                return "^7AI: 0 (idle)";
 
-        /// <summary>
-        /// Convert a snapshot to a normalized load ratio for the window.
-        /// </summary>
-        private static double GetSnapshotLoad(PerformanceSnapshot snapshot)
-        {
-            var elapsedMs = Math.Max(1.0, snapshot.Elapsed.TotalMilliseconds);
-            return snapshot.TotalMs / elapsedMs;
-        }
-
-        /// <summary>
-        /// Map load ratio to a health label for the UI.
-        /// </summary>
-        private static PerformanceHealth EvaluatePerformanceHealth(bool hasSamples, double load)
-        {
-            if (!hasSamples) return PerformanceHealth.Waiting;
-            if (load <= PerformanceOnTimeMaxLoad) return PerformanceHealth.OnTime;
-            if (load <= PerformanceSlowingMaxLoad) return PerformanceHealth.Slowing;
-            return PerformanceHealth.RunningSlow;
-        }
-
-        /// <summary>
-        /// Build the color-coded UI label for the performance indicator.
-        /// </summary>
-        private static string BuildPerformanceStatusLabel(PerformanceHealth health, double load)
-        {
-            var percent = Math.Max(0, Math.Min(999, (int)Math.Round(load * 100)));
-            switch (health)
-            {
-                case PerformanceHealth.OnTime:
-                    return $"^2AI Perf: On Time ({percent}%)";
-                case PerformanceHealth.Slowing:
-                    return $"^3AI Perf: Slowing ({percent}%)";
-                case PerformanceHealth.RunningSlow:
-                    return $"^1AI Perf: Running Slow ({percent}%)";
-                default:
-                    return "^7AI Perf: waiting";
-            }
+            var hzStr = controlHz.ToString("F1");
+            if (controlHz >= config.MaxControlHzPerAi - 0.05)
+                return $"^2AI: {activeCount} @ {hzStr}Hz";
+            if (controlHz >= config.MinControlHzPerAi)
+                return $"^3AI: {activeCount} @ {hzStr}Hz";
+            return $"^1AI: {activeCount} @ {hzStr}Hz";
         }
 
         private void OnOutGauge(object? sender, OutGaugeEventArgs e)
@@ -5814,39 +5586,49 @@ namespace AHPP_AI.AI
         /// <summary>
         /// Transfer an AI from its selected pit route onto the matching recorded loop or alternate route.
         /// </summary>
-        private bool TryTransitionFromSpawnRoute(byte plid, CompCar car, string spawnRouteName)
+        private bool TryTransitionFromSpawnRoute(byte plid, CompCar car, SpawnTransitionDecision decision)
         {
-            var targetRoute = ResolveDrivingRouteForSpawnRoute(spawnRouteName);
-            if (string.IsNullOrWhiteSpace(targetRoute))
+            if (decision.Action != SpawnTransitionAction.TransitionToDrivingRoute ||
+                string.IsNullOrWhiteSpace(decision.TargetRouteName))
+            {
+                logger.Log(
+                    $"PLID={plid} spawn transition skipped reason={decision.ReasonCode} spawn={decision.SpawnRouteName}");
                 return false;
+            }
 
-            waypointManager.LoadTrafficRoute(targetRoute);
-            var targetPath = waypointManager.GetTrafficRoute(targetRoute);
+            waypointManager.LoadTrafficRoute(decision.TargetRouteName);
+            var targetPath = waypointManager.GetTrafficRoute(decision.TargetRouteName);
             if (targetPath == null || targetPath.Count < 2)
+            {
+                logger.LogWarning(
+                    $"PLID={plid} spawn transition failed reason=target-path-missing spawn={decision.SpawnRouteName} target={decision.TargetRouteName}");
                 return false;
+            }
 
             var bestIndex = FindClosestIndex(targetPath, car);
             var (alignedIndex, _, _) = FindAlignedWaypointIndex(targetPath, car, bestIndex, 12);
-            var metadata = waypointManager.GetRecordedRoute(targetRoute)?.Metadata;
+            var metadata = waypointManager.GetRecordedRoute(decision.TargetRouteName)?.Metadata;
             waypointFollower.SetPath(plid, targetPath, alignedIndex, metadata?.IsLoop ?? true);
 
-            if (targetRoute.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
+            if (decision.TargetRouteName.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase))
             {
                 currentRoute[plid] = "main";
                 activeBranchSelections.Remove(plid);
             }
-            else if (pathManager.TryGetBranchByName(targetRoute, out var branchInfo) && branchInfo != null)
+            else if (pathManager.TryGetBranchByName(decision.TargetRouteName, out var branchInfo) && branchInfo != null)
             {
                 currentRoute[plid] = "branch";
                 activeBranchSelections[plid] = branchInfo;
             }
             else
             {
-                currentRoute[plid] = targetRoute;
+                currentRoute[plid] = decision.TargetRouteName;
                 activeBranchSelections.Remove(plid);
             }
 
-            SetAssignedRoute(plid, targetRoute);
+            logger.Log(
+                $"PLID={plid} spawn transition reason={decision.ReasonCode} spawn={decision.SpawnRouteName} target={decision.TargetRouteName} distanceToEnd={decision.DistanceToEndMeters:F1}");
+            SetAssignedRoute(plid, decision.TargetRouteName);
             return true;
         }
 
@@ -6009,8 +5791,10 @@ namespace AHPP_AI.AI
         /// </summary>
         public void SetVisualizationRouteSelection(string routeName)
         {
-            visualizationRouteName = routeLibrary.NormalizeRouteName(
-                string.IsNullOrWhiteSpace(routeName) ? "main_loop" : routeName);
+            if (string.IsNullOrWhiteSpace(routeName))
+                return;
+
+            visualizationRouteName = routeLibrary.NormalizeRouteName(routeName);
             mainUI?.UpdateVisualizationRouteSelection(visualizationRouteName);
             ClearLayoutSelection();
         }

@@ -90,6 +90,20 @@ namespace AHPP_AI.Waypoint
         }
 
         /// <summary>
+        /// Measure the world-space distance in metres from a position to a specific waypoint.
+        /// </summary>
+        public double CalculateWaypointDistance(Vec position, Util.Waypoint waypoint)
+        {
+            var posX = position.X / 65536.0;
+            var posY = position.Y / 65536.0;
+            var wpX = waypoint.Position.X / 65536.0;
+            var wpY = waypoint.Position.Y / 65536.0;
+            var dx = wpX - posX;
+            var dy = wpY - posY;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        /// <summary>
         /// Find the waypoint that is both near the car and aligns with its current heading.
         /// Returns the index and whether the path should be used in its recorded (clockwise) order.
         /// </summary>

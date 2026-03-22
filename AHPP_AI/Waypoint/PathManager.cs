@@ -69,9 +69,20 @@ namespace AHPP_AI.Waypoint
             spawnRoutes.Clear();
             spawnRouteLoops.Clear();
 
-            waypointManager.LoadTrafficRoute(config.SpawnRouteName);
-            SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
-            var spawnMetaCandidate = waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
+            if (string.IsNullOrWhiteSpace(config.SpawnRouteName))
+            {
+                AddValidationIssue(RouteValidationSeverity.Warning,
+                    "No recorded spawn route was resolved for the active layout.");
+            }
+            else
+            {
+                waypointManager.LoadTrafficRoute(config.SpawnRouteName);
+                SpawnRoute = waypointManager.GetTrafficRoute(config.SpawnRouteName);
+            }
+
+            var spawnMetaCandidate = string.IsNullOrWhiteSpace(config.SpawnRouteName)
+                ? null
+                : waypointManager.GetRecordedRoute(config.SpawnRouteName)?.Metadata;
             if (spawnMetaCandidate != null && spawnMetaCandidate.Type == RouteType.Unknown) spawnMetaCandidate.Type = RouteType.PitEntry;
             if (spawnMetaCandidate != null && (!spawnMetaCandidate.AiWeight.HasValue || spawnMetaCandidate.AiWeight < 0))
                 spawnMetaCandidate.AiWeight = 0;
@@ -94,9 +105,20 @@ namespace AHPP_AI.Waypoint
 
             DiscoverAdditionalSpawnRoutes(config);
 
-            waypointManager.LoadTrafficRoute(config.MainRouteName);
-            MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
-            var mainMetaCandidate = waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
+            if (string.IsNullOrWhiteSpace(config.MainRouteName))
+            {
+                AddValidationIssue(RouteValidationSeverity.Error,
+                    "No recorded main route was resolved for the active layout.");
+            }
+            else
+            {
+                waypointManager.LoadTrafficRoute(config.MainRouteName);
+                MainRoute = waypointManager.GetTrafficRoute(config.MainRouteName);
+            }
+
+            var mainMetaCandidate = string.IsNullOrWhiteSpace(config.MainRouteName)
+                ? null
+                : waypointManager.GetRecordedRoute(config.MainRouteName)?.Metadata;
             if (mainMetaCandidate != null && mainMetaCandidate.Type == RouteType.Unknown) mainMetaCandidate.Type = RouteType.MainLoop;
             if (mainMetaCandidate != null && (!mainMetaCandidate.AiWeight.HasValue || mainMetaCandidate.AiWeight <= 0))
                 mainMetaCandidate.AiWeight = 1.0;
@@ -270,7 +292,9 @@ namespace AHPP_AI.Waypoint
             string label,
             string? excludedName = null)
         {
-            var normalizedConfigured = routeLibrary.NormalizeRouteName(configuredName);
+            var normalizedConfigured = string.IsNullOrWhiteSpace(configuredName)
+                ? string.Empty
+                : routeLibrary.NormalizeRouteName(configuredName);
             var matchingConfigured = recordedRoutes.FirstOrDefault(route =>
                 RouteMatchesName(route, normalizedConfigured));
             if (matchingConfigured != null)
@@ -286,8 +310,16 @@ namespace AHPP_AI.Waypoint
             if (resolved?.Metadata?.Name == null)
                 return normalizedConfigured;
 
-            logger.Log(
-                $"Resolved {label} route {normalizedConfigured} -> {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            if (!string.IsNullOrWhiteSpace(normalizedConfigured))
+            {
+                logger.Log(
+                    $"Resolved {label} route {normalizedConfigured} -> {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            }
+            else
+            {
+                logger.Log(
+                    $"Resolved {label} route to {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            }
             return resolved.Metadata.Name;
         }
 
@@ -426,18 +458,11 @@ namespace AHPP_AI.Waypoint
 
         /// <summary>
         /// Build the list of detour branches from config and any recorded detour routes.
+        /// Alternate-main routes are handled separately and are not returned here.
         /// </summary>
         private List<string> BuildBranchList(AIConfig config)
         {
             var names = new List<string>();
-
-            if (config?.BranchRouteNames != null)
-            {
-                foreach (var configured in config.BranchRouteNames)
-                {
-                    TryAddUnique(names, configured, "config");
-                }
-            }
 
             try
             {
@@ -448,6 +473,17 @@ namespace AHPP_AI.Waypoint
                         $"Duplicate recorded route name \"{duplicate}\" detected. Only the first instance is used.");
                 }
 
+                if (config?.BranchRouteNames != null)
+                {
+                    foreach (var configured in config.BranchRouteNames)
+                    {
+                        if (!TryResolveConfiguredBranchName(configured, config, recorded, out var resolvedName))
+                            continue;
+
+                        TryAddUnique(names, resolvedName, "config");
+                    }
+                }
+
                 foreach (var route in recorded)
                 {
                     var meta = route?.Metadata;
@@ -455,6 +491,9 @@ namespace AHPP_AI.Waypoint
                     if (string.IsNullOrWhiteSpace(meta.Name)) continue;
                     if (meta.Name.Equals(config.MainRouteName, StringComparison.OrdinalIgnoreCase)) continue;
                     if (meta.Name.Equals(config.SpawnRouteName, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrWhiteSpace(config.MainAlternateRouteName) &&
+                        meta.Name.Equals(config.MainAlternateRouteName, StringComparison.OrdinalIgnoreCase))
+                        continue;
 
                     var type = meta.Type == RouteType.Unknown
                         ? routeLibrary.GuessRouteType(meta.Name)
@@ -462,8 +501,8 @@ namespace AHPP_AI.Waypoint
 
                     if (type == RouteType.Unknown) type = RouteType.Detour;
 
-                    if (type == RouteType.Detour || type == RouteType.AlternateMain)
-                        TryAddUnique(names, meta.Name, "recorded file");
+                    if (type == RouteType.Detour && !ContainsRouteName(names, meta.Name))
+                        names.Add(meta.Name);
                 }
             }
             catch (Exception ex)
@@ -472,6 +511,38 @@ namespace AHPP_AI.Waypoint
             }
 
             return names;
+        }
+
+        /// <summary>
+        /// Resolve a configured branch name to a recorded detour for the active layout.
+        /// Legacy alternate-main aliases are mapped to the dedicated alternate route and then excluded.
+        /// Missing optional placeholders are ignored instead of being treated as broken branch files.
+        /// </summary>
+        private bool TryResolveConfiguredBranchName(
+            string configuredName,
+            AIConfig config,
+            IReadOnlyCollection<RecordedRoute> recordedRoutes,
+            out string resolvedName)
+        {
+            resolvedName = string.Empty;
+            var normalizedConfigured = routeLibrary.NormalizeRouteName(configuredName);
+            if (string.IsNullOrWhiteSpace(normalizedConfigured))
+                return false;
+
+            var directMatch = recordedRoutes.FirstOrDefault(route => RouteMatchesName(route, normalizedConfigured));
+            if (directMatch?.Metadata?.Name != null)
+                resolvedName = directMatch.Metadata.Name;
+            else
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(config.MainAlternateRouteName) &&
+                resolvedName.Equals(config.MainAlternateRouteName, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var type = directMatch?.Metadata?.Type ?? routeLibrary.GuessRouteType(resolvedName);
+            if (type == RouteType.Unknown) type = RouteType.Detour;
+
+            return type == RouteType.Detour;
         }
 
         /// <summary>
@@ -768,6 +839,14 @@ namespace AHPP_AI.Waypoint
 
             list.Add(value);
             return true;
+        }
+
+        /// <summary>
+        /// Check whether a route name already exists in a list using case-insensitive matching.
+        /// </summary>
+        private static bool ContainsRouteName(List<string> list, string value)
+        {
+            return list.Exists(v => v.Equals(value, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

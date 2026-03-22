@@ -37,16 +37,18 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Describes the setup and colour to apply when spawning a specific mod.
+        ///     A mod entry in the global spawn pool with a weight and optional setup/colour preset.
         /// </summary>
-        public sealed class PitSpawnModPresetConfig
+        public sealed class SpawnModConfig
         {
-            public int Setup { get; set; }
-            public int Colour { get; set; }
+            public string Name { get; set; } = string.Empty;
+            public int Weight { get; set; } = 1;
+            public int? Setup { get; set; }
+            public int? Colour { get; set; }
         }
 
         /// <summary>
-        ///     Describes the population share, routes, and allowed mods for a logical pit spawn area.
+        ///     Describes the population share and routes for a logical pit spawn area.
         /// </summary>
         public sealed class PitSpawnAreaConfig
         {
@@ -54,9 +56,6 @@ namespace AHPP_AI.AI
             public string DisplayName { get; set; } = string.Empty;
             public double FillPercent { get; set; }
             public List<string> RouteNames { get; set; } = new List<string>();
-            public List<string> AllowedMods { get; set; } = new List<string>();
-            public Dictionary<string, PitSpawnModPresetConfig> ModPresets { get; set; } =
-                new Dictionary<string, PitSpawnModPresetConfig>(StringComparer.OrdinalIgnoreCase);
             public List<int> SlotNumbers { get; set; } = new List<int>();
         }
 
@@ -73,6 +72,7 @@ namespace AHPP_AI.AI
             new Dictionary<int, PitSpawnSlotConfig>();
         public Dictionary<string, PitSpawnAreaConfig> PitSpawnAreas { get; set; } =
             new Dictionary<string, PitSpawnAreaConfig>(StringComparer.OrdinalIgnoreCase);
+        public List<SpawnModConfig> SpawnMods { get; set; } = new List<SpawnModConfig>();
 
         // Population manager settings
         public int MaxPlayers { get; set; } = 48;
@@ -102,11 +102,11 @@ namespace AHPP_AI.AI
 
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;
 
-        public string TrafficRouteName { get; set; } = "main_loop";
+        public string TrafficRouteName { get; set; } = string.Empty;
 
         // Advanced route settings
-        public string SpawnRouteName { get; set; } = "pit_entry";
-        public string MainRouteName { get; set; } = "main_loop";
+        public string SpawnRouteName { get; set; } = string.Empty;
+        public string MainRouteName { get; set; } = string.Empty;
         public string MainAlternateRouteName { get; set; } = string.Empty;
         public List<string> BranchRouteNames { get; set; } = new List<string>();
 
@@ -158,6 +158,7 @@ namespace AHPP_AI.AI
 
         // Race mode settings
         public bool RaceUseAutomaticTransmission { get; set; } = true;
+        public double MaxSpawnInitialRouteDistanceMeters { get; set; } = 100.0;
         public double TrackSpawnScoreAdvantage { get; set; } = 8.0;
         public double RaceWaypointSpeedFactor { get; set; } = 1.12;
         public double RaceWaypointSpeedOffsetKmh { get; set; } = 8.0;
@@ -206,6 +207,14 @@ namespace AHPP_AI.AI
         public int StallPreventionRpm { get; set; } = 500;
         public int StallPreventionReleaseRpm { get; set; } = 900;
         public int StallPreventionHoldMs { get; set; } = 750;
+
+        // Spawn launch settings (initial takeoff when engine is already running)
+        public int LaunchThrottleValue { get; set; } = 18000;   // ~27% throttle (0-65535)
+        public int LaunchHoldMs { get; set; } = 400;            // Hold clutch in before releasing
+        public int LaunchClutchReleaseMs { get; set; } = 3500;  // Time to fully release clutch
+
+        // Gear confirmation timeout (fallback if AII packets are not available)
+        public int GearConfirmationTimeoutMs { get; set; } = 2000;
 
         // Waypoint and recovery settings
         public bool WallRecoveryEnabled { get; set; } = true;

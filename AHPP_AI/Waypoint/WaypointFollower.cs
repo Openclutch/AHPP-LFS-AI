@@ -81,13 +81,14 @@ namespace AHPP_AI.Waypoint
         public bool InitializePath(byte plid, CompCar car, WaypointManager waypointManager, AIConfig config,
             List<ObjectInfo> layoutObjects)
         {
-            // If a non-empty path already exists, just return. Empty paths should be rebuilt.
+            // If a non-empty path already exists, just return.
+            // If the key exists but the path is null/empty, it was intentionally cleared — do not rebuild.
             if (aiPaths.TryGetValue(plid, out var existingPath))
             {
                 if (existingPath != null && existingPath.Count > 0)
                     return true;
 
-                logger.LogWarning($"PLID={plid} Existing path is empty, rebuilding from recorded route or fallback");
+                return false;
             }
 
             var currentPos = new Vec(car.X, car.Y, car.Z);

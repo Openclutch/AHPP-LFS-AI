@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(sort -t= -k2 -n)",
+      "Bash(ls -lt /c/Users/lee_b/AHPP-LFS-AI/artifacts/*.log /c/Users/lee_b/AHPP-LFS-AI/*.log /c/Users/lee_b/AHPP-LFS-AI/AHPP_AI/bin/Debug/net6.0/log.txt)",
+      "Bash(python3:*)"
+    ]
+  }
+}

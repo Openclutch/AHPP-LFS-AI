@@ -81,16 +81,6 @@ namespace AHPP_AI.Debug
             { "RouteInfo", 225 }
         };
 
-        private readonly Dictionary<string, string> recordButtonMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "route1", "RecRoute1" },
-            { "main_loop", "RecRoute1" },
-            { "route2", "RecRoute2" },
-            { "pit_entry", "RecRoute2" },
-            { "route3", "RecRoute3" },
-            { "detour1", "RecRoute3" }
-        };
-
         private byte aiPLID;
 
         private bool debugUIInitialized;
