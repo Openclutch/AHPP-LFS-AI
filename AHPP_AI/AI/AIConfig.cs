@@ -153,6 +153,12 @@ namespace AHPP_AI.AI
         public double TrafficLookaheadMinMeters { get; set; } = 15.0;
         public double TrafficBrakeTtcSeconds { get; set; } = 2.5;
         public double TrafficEmergencyTtcSeconds { get; set; } = 1.0;
+        public bool TrafficSpacingEqualizerEnabled { get; set; } = true;
+        public int TrafficSpacingEqualizerMinCars { get; set; } = 4;
+        public double TrafficSpacingEqualizerGainKmh { get; set; } = 6.0;
+        public double TrafficSpacingEqualizerMaxBiasKmh { get; set; } = 6.0;
+        public double TrafficSpacingEqualizerVariationPercent { get; set; } = 0.10;
+        public double TrafficSpacingEqualizerSmoothing { get; set; } = 0.12;
         public int SpawnMergeHoldLookaheadWaypoints { get; set; } = 3;
         public double SpawnMergeHoldDistanceMeters { get; set; } = 15.0;
 

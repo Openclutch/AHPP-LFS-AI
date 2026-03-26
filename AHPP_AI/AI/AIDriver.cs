@@ -55,6 +55,15 @@ namespace AHPP_AI.AI
             public double DesiredGapMeters;
         }
 
+        private struct TrafficSpacingBiasInfo
+        {
+            public int CarCount;
+            public double IdealGapMeters;
+            public double FrontGapMeters;
+            public double RearGapMeters;
+            public double BiasKmh;
+        }
+
         private class RecoveryContext
         {
             public RecoveryState State = RecoveryState.Driving;
@@ -117,6 +126,7 @@ namespace AHPP_AI.AI
         private readonly Dictionary<byte, string> lastLaunchDiagnosticSignature = new Dictionary<byte, string>();
         private readonly Dictionary<byte, DateTime> lastLaunchDiagnosticTime = new Dictionary<byte, DateTime>();
         private readonly Dictionary<byte, double> lastProgressDistance = new Dictionary<byte, double>();
+        private readonly Dictionary<byte, double> spacingBiasKmh = new Dictionary<byte, double>();
         private readonly Dictionary<byte, DateTime> lastStuckCheckTime = new Dictionary<byte, DateTime>();
         private Action<byte>? recoveryFailedHandler;
         private Action<byte, string>? recoveryStartedHandler;
@@ -218,6 +228,7 @@ namespace AHPP_AI.AI
             lastControlTraceSignature.Remove(plid);
             lastLaunchDiagnosticTime.Remove(plid);
             lastLaunchDiagnosticSignature.Remove(plid);
+            spacingBiasKmh[plid] = 0.0;
 
             // Send initial controls to configure AI car
             SendAIControls(plid);
@@ -334,8 +345,18 @@ namespace AHPP_AI.AI
                         $"TargetPos=({waypointX:F1},{waypointY:F1})");
                 }
 
-                var intent = BuildRouteFollowIntent(plid, steering, speedKmh, headingError, drivingMode, currentHeading,
-                    desiredHeading);
+                var intent = BuildRouteFollowIntent(
+                    plid,
+                    steering,
+                    speedKmh,
+                    headingError,
+                    drivingMode,
+                    currentHeading,
+                    desiredHeading,
+                    carX,
+                    carY,
+                    car.Direction,
+                    trafficSnapshot);
 
                 // Log status periodically
                 if (DateTime.Now.Second % 5 == 0 && DateTime.Now.Millisecond < 100)
@@ -422,7 +443,11 @@ namespace AHPP_AI.AI
             int headingError,
             AIConfig.DrivingMode drivingMode,
             double currentHeading,
-            int desiredHeading)
+            int desiredHeading,
+            double carX,
+            double carY,
+            int carDirection,
+            TrafficCarSnapshot[] trafficSnapshot)
         {
             int throttle;
             int brake;
@@ -445,7 +470,17 @@ namespace AHPP_AI.AI
             }
             else
             {
-                (throttle, brake) = waypointFollower.CalculateThrottleAndBrake(plid, speedKmh, headingError, drivingMode);
+                var spacingBias = ResolveTrafficSpacingBias(plid, carX, carY, carDirection, trafficSnapshot);
+                (throttle, brake) = waypointFollower.CalculateThrottleAndBrake(
+                    plid,
+                    speedKmh,
+                    headingError,
+                    drivingMode,
+                    spacingBias.BiasKmh);
+
+                if (drivingMode == AIConfig.DrivingMode.Cruise && Math.Abs(spacingBias.BiasKmh) >= 0.25)
+                    status =
+                        $"CRUISE: Route fill ({spacingBias.BiasKmh:+0.0;-0.0} km/h, {spacingBias.CarCount} cars)";
             }
 
             if (speedKmh < 0.5)
@@ -571,7 +606,156 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Adjust throttle and braking to maintain safe spacing on the current lane.
+        ///     Calculate a small route-spacing speed bias so cruise traffic naturally redistributes around looped paths.
+        /// </summary>
+        /// <remarks>
+        ///     Uses whole-loop occupancy on the current path to nudge cruise traffic toward a more even distribution.
+        /// </remarks>
+        private TrafficSpacingBiasInfo ResolveTrafficSpacingBias(
+            byte plid,
+            double carX,
+            double carY,
+            int carDirection,
+            TrafficCarSnapshot[] trafficSnapshot)
+        {
+            var previousBias = spacingBiasKmh.TryGetValue(plid, out var storedBias) ? storedBias : 0.0;
+            var result = new TrafficSpacingBiasInfo
+            {
+                BiasKmh = previousBias
+            };
+
+            if (!config.TrafficSpacingEqualizerEnabled || GetDrivingMode(plid) != AIConfig.DrivingMode.Cruise)
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            var path = waypointFollower.GetPath(plid);
+            if (path == null || path.Count < 2)
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            var geometry = PathProjection.GetGeometry(path, config.PathLoopClosureDistanceMeters);
+            if (geometry == null || !geometry.IsLoop || geometry.TotalLength <= 1.0)
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            if (!PathProjection.TryProjectToPath(path, geometry, carX, carY, out var selfProjection))
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            var laneHalfWidth = Math.Max(0.1, config.TrafficLaneHalfWidthMeters);
+            var selfDirection = GetDirectionVector(carDirection);
+            var selfAlignment = selfDirection.x * selfProjection.DirectionX + selfDirection.y * selfProjection.DirectionY;
+            if (selfAlignment < 0.2)
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            var carCount = 1;
+            var bestFrontGap = geometry.TotalLength;
+            var bestRearGap = geometry.TotalLength;
+
+            foreach (var snapshot in trafficSnapshot)
+            {
+                if (snapshot.PLID == 0 || snapshot.PLID == plid) continue;
+
+                if (!PathProjection.TryProjectToPath(path, geometry, snapshot.XMeters, snapshot.YMeters, out var otherProjection))
+                    continue;
+
+                if (Math.Abs(otherProjection.LateralOffsetMeters) > laneHalfWidth) continue;
+
+                var otherDirection = GetDirectionVector(snapshot.Direction);
+                var otherAlignment =
+                    otherDirection.x * otherProjection.DirectionX + otherDirection.y * otherProjection.DirectionY;
+                if (otherAlignment < 0.2) continue;
+
+                carCount++;
+
+                var forwardGap = PathProjection.GetForwardDistance(
+                    geometry,
+                    selfProjection.DistanceAlongPathMeters,
+                    otherProjection.DistanceAlongPathMeters);
+                if (forwardGap > 0.1 && forwardGap < bestFrontGap)
+                    bestFrontGap = forwardGap;
+
+                var rearGap = PathProjection.GetBackwardDistance(
+                    geometry,
+                    selfProjection.DistanceAlongPathMeters,
+                    otherProjection.DistanceAlongPathMeters);
+                if (rearGap > 0.1 && rearGap < bestRearGap)
+                    bestRearGap = rearGap;
+            }
+
+            if (carCount < Math.Max(2, config.TrafficSpacingEqualizerMinCars) ||
+                bestFrontGap >= geometry.TotalLength ||
+                bestRearGap >= geometry.TotalLength)
+            {
+                result.BiasKmh = SmoothSpacingBias(previousBias, 0.0);
+                spacingBiasKmh[plid] = result.BiasKmh;
+                return result;
+            }
+
+            var idealGap = geometry.TotalLength / carCount;
+            var desiredBalance = GetSpacingVariationBalance(plid, idealGap);
+            var normalizedBalanceError = ((bestFrontGap - bestRearGap) - desiredBalance) / Math.Max(1.0, idealGap);
+            var targetBias =
+                Math.Max(-config.TrafficSpacingEqualizerMaxBiasKmh,
+                    Math.Min(
+                        config.TrafficSpacingEqualizerMaxBiasKmh,
+                        normalizedBalanceError * config.TrafficSpacingEqualizerGainKmh));
+
+            result = new TrafficSpacingBiasInfo
+            {
+                CarCount = carCount,
+                IdealGapMeters = idealGap,
+                FrontGapMeters = bestFrontGap,
+                RearGapMeters = bestRearGap,
+                BiasKmh = SmoothSpacingBias(previousBias, targetBias)
+            };
+
+            spacingBiasKmh[plid] = result.BiasKmh;
+            return result;
+        }
+
+        /// <summary>
+        ///     Blend spacing bias changes over time so loop equalization remains subtle and avoids new shockwaves.
+        /// </summary>
+        private double SmoothSpacingBias(double currentBias, double targetBias)
+        {
+            var smoothing = Math.Max(0.01, Math.Min(1.0, config.TrafficSpacingEqualizerSmoothing));
+            var blended = currentBias + (targetBias - currentBias) * smoothing;
+            return Math.Abs(blended) < 0.05 ? 0.0 : blended;
+        }
+
+        /// <summary>
+        ///     Give each AI a small stable offset so the route settles into natural-looking spacing rather than perfection.
+        /// </summary>
+        private double GetSpacingVariationBalance(byte plid, double idealGapMeters)
+        {
+            var variation = Math.Max(0.0, Math.Min(0.45, config.TrafficSpacingEqualizerVariationPercent));
+            if (variation <= 0.0 || idealGapMeters <= 0.0) return 0.0;
+
+            var normalized = ((plid * 73) % 1000) / 999.0;
+            var centered = normalized * 2.0 - 1.0;
+            var offsetMeters = idealGapMeters * variation * centered;
+            return offsetMeters * 2.0;
+        }
+
+        /// <summary>
+        ///     Adjust throttle and braking to maintain safe spacing on the current lane.
         /// </summary>
         private bool ApplyTrafficSpacing(
             byte plid,
@@ -1338,6 +1522,9 @@ namespace AHPP_AI.AI
         /// </summary>
         public string GetStateDescription(byte plid)
         {
+            if (IsWarmupHoldActive(plid))
+                return "Warmup Hold";
+
             // Show spawn launch state before anything else so it's always visible.
             if (gearboxController.IsSpawnLaunchActive(plid))
                 return "Spawn Launch";
@@ -1371,6 +1558,9 @@ namespace AHPP_AI.AI
 
                 if (info.IndexOf("Recovery", StringComparison.OrdinalIgnoreCase) >= 0)
                     return "Recovery";
+
+                if (info.StartsWith("MERGE YIELD", StringComparison.OrdinalIgnoreCase))
+                    return "Merge Yield";
             }
 
             var movementLabel = GetMovementIssueLabel(plid);

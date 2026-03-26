@@ -182,6 +182,32 @@ namespace AHPP_AI.Debug
         }
 
         /// <summary>
+        ///     Clear the current AI debug selection and reset the HUD values until another AI is selected.
+        /// </summary>
+        public void ClearAIPLID()
+        {
+            if (aiPLID == 0)
+            {
+                ClearAIDebugDisplay();
+                return;
+            }
+
+            aiPLID = 0;
+            ClearAIDebugDisplay();
+            insim.SendPrivateMessage("Debug tracking AI cleared.");
+            logger.Log("Cleared debug tracking for AI");
+        }
+
+        /// <summary>
+        ///     Check whether the supplied AI is currently selected in the debug HUD.
+        /// </summary>
+        /// <param name="plid">AI player ID to compare.</param>
+        public bool IsTrackingAIPLID(byte plid)
+        {
+            return aiPLID == plid && plid != 0;
+        }
+
+        /// <summary>
         ///     Update the AI status button with the provided state label.
         /// </summary>
         /// <param name="stateLabel">State text to display on the AI_ST button.</param>
@@ -222,16 +248,6 @@ namespace AHPP_AI.Debug
 
             try
             {
-                // Find first valid AI car if not set
-                if (aiPLID == 0 && aiTargetWaypointIndices != null)
-                    foreach (var kvp in aiTargetWaypointIndices)
-                        if (kvp.Key > 0 && Array.Exists(allCars, c => c.PLID == kvp.Key))
-                        {
-                            aiPLID = kvp.Key;
-                            insim.SendPrivateMessage($"Auto-detected AI PLID: {aiPLID}");
-                            break;
-                        }
-
                 // Update AI data if available
                 if (aiPLID > 0 && aiTargetWaypointIndices != null && aiPaths != null && aiTargetSpeeds != null)
                     UpdateAIDebugInfo(allCars, aiTargetWaypointIndices, aiPaths, aiTargetSpeeds, aiControlInfo,
@@ -483,7 +499,7 @@ namespace AHPP_AI.Debug
             {
                 // Skip noisy stack traces when AI data goes stale under heavy load; allow re-detection next tick.
                 logger.LogException(ex, $"Error updating AI debug info for PLID {aiPLID}");
-                aiPLID = 0;
+                ClearAIPLID();
             }
         }
 
@@ -507,13 +523,13 @@ namespace AHPP_AI.Debug
             {
                 if (aiPLID == 0) return false;
                 if (aiTargetWaypointIndices == null || aiPaths == null || aiTargetSpeeds == null) return false;
-                if (aiTargetWaypointIndices.Count == 0 || aiPaths.Count == 0) { aiPLID = 0; return false; }
+                if (aiTargetWaypointIndices.Count == 0 || aiPaths.Count == 0) { ClearAIPLID(); return false; }
                 if (allCars == null || allCars.Length == 0) return false;
 
                 var foundCar = Array.Find(allCars, c => c.PLID == aiPLID);
                 if (foundCar == null || foundCar.PLID == 0)
                 {
-                    aiPLID = 0;
+                    ClearAIPLID();
                     return false;
                 }
                 car = foundCar;
@@ -521,20 +537,20 @@ namespace AHPP_AI.Debug
                 if (!aiTargetWaypointIndices.TryGetValue(aiPLID, out targetIndex) ||
                     targetIndex < 0)
                 {
-                    aiPLID = 0;
+                    ClearAIPLID();
                     return false;
                 }
 
                 if (!aiPaths.TryGetValue(aiPLID, out var resolvedPath) || resolvedPath == null || resolvedPath.Count == 0)
                 {
-                    aiPLID = 0;
+                    ClearAIPLID();
                     return false;
                 }
                 path = resolvedPath;
 
                 if (targetIndex >= path.Count)
                 {
-                    aiPLID = 0;
+                    ClearAIPLID();
                     return false;
                 }
 
@@ -549,8 +565,24 @@ namespace AHPP_AI.Debug
             catch (Exception)
             {
                 // Swallow transient errors when AI is removed mid-update; we reset tracking and continue.
-                aiPLID = 0;
+                ClearAIPLID();
                 return false;
+            }
+        }
+
+        /// <summary>
+        ///     Reset the AI debug HUD text to placeholder values without changing button visibility.
+        /// </summary>
+        private void ClearAIDebugDisplay()
+        {
+            if (!debugUIInitialized || !buttonsVisible) return;
+
+            foreach (var entry in aiButtonIds)
+            {
+                var prefix = entry.Key.Equals("State", StringComparison.OrdinalIgnoreCase)
+                    ? "AI_ST"
+                    : $"AI_{entry.Key.Substring(0, Math.Min(4, entry.Key.Length))}";
+                UpdateDebugButton(entry.Value, $"{prefix}: --");
             }
         }
 

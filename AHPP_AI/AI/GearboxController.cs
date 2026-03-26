@@ -138,7 +138,10 @@ namespace AHPP_AI.AI
             if (engineRpm > 0 && engineRpm < config.StallPreventionReleaseRpm && GetReferenceGear(plid) > 2)
                 desiredGear = (byte)Math.Max(2, GetReferenceGear(plid) - 1);
 
-            if (HandleLowRpmClutch(plid, engineRpm))
+            // Don't let low-RPM clutch protection interrupt the spawn launch sequence —
+            // SpawnLaunch already manages the clutch release; the protection would fight it
+            // by pressing the clutch back in and then overwriting the phase to ReleaseClutch.
+            if (shiftPhases[plid] != GearShiftPhase.SpawnLaunch && HandleLowRpmClutch(plid, engineRpm))
                 return;
 
             AdvanceShiftState(plid, desiredGear);
@@ -362,8 +365,8 @@ namespace AHPP_AI.AI
                     {
                         var releaseElapsed = elapsedMs - config.LaunchHoldMs;
                         var releaseProgress = Math.Min(1.0, releaseElapsed / Math.Max(1, config.LaunchClutchReleaseMs));
-                        // Smooth ease-in curve: slow start, faster finish
-                        var curve = releaseProgress * releaseProgress;
+                        // Smooth ease-out curve: faster initial release to build momentum, gentle finish
+                        var curve = Math.Sqrt(releaseProgress);
                         currentClutchValues[plid] = (int)(config.ClutchFullyPressed * (1.0 - curve));
                         clutchStates[plid] = currentClutchValues[plid] > 0 ? ClutchState.Releasing : ClutchState.Released;
 

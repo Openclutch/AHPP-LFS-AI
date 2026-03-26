@@ -60,66 +60,6 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Prefer a planned spawn route while it still plausibly matches the live position, otherwise fall back to
-        ///     the physically nearest recorded spawn route.
-        /// </summary>
-        public static SpawnRouteSelectionResult SelectSpawnRouteCandidate(
-            RouteCandidate? preferredCandidate,
-            double preferredDistance,
-            RouteCandidate? liveCandidate,
-            double liveDistance,
-            double preferredDistanceThresholdMeters,
-            double fallbackAdvantageMeters)
-        {
-            var result = new SpawnRouteSelectionResult
-            {
-                PreferredCandidate = preferredCandidate,
-                LiveCandidate = liveCandidate,
-                PreferredDistance = preferredDistance,
-                LiveDistance = liveDistance
-            };
-
-            if (preferredCandidate == null)
-            {
-                result.SelectedCandidate = liveCandidate;
-                result.ReasonCode = liveCandidate == null ? "spawn-no-candidate" : "spawn-live-only";
-                return result;
-            }
-
-            if (liveCandidate == null)
-            {
-                result.SelectedCandidate = preferredCandidate;
-                result.ReasonCode = "spawn-preferred-only";
-                return result;
-            }
-
-            if (preferredCandidate.RouteName.Equals(liveCandidate.RouteName, StringComparison.OrdinalIgnoreCase))
-            {
-                result.SelectedCandidate = preferredCandidate;
-                result.ReasonCode = "spawn-preferred-matches-live";
-                return result;
-            }
-
-            if (preferredDistance <= preferredDistanceThresholdMeters)
-            {
-                result.SelectedCandidate = preferredCandidate;
-                result.ReasonCode = "spawn-preferred-close-enough";
-                return result;
-            }
-
-            if (liveDistance + fallbackAdvantageMeters < preferredDistance)
-            {
-                result.SelectedCandidate = liveCandidate;
-                result.ReasonCode = "spawn-live-overrides-preferred";
-                return result;
-            }
-
-            result.SelectedCandidate = preferredCandidate;
-            result.ReasonCode = "spawn-preferred-kept";
-            return result;
-        }
-
-        /// <summary>
         ///     Reject on-track candidates that are too far from the spawn position or require a large heading flip.
         /// </summary>
         public static bool IsViableTrackCandidate(

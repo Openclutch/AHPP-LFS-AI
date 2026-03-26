@@ -1,5 +1,35 @@
 # Changelog
 
+- Raised all recorded `AHPP_AI` route node heights in `AHPP_AI/bin/Debug/net6.0/Routes` by 2 meters on the Z axis to match the Live for Speed map height update.
+
+- Fixed `AHPP_AI` initial route classification so fresh AI now use the nearest pit route again, then transition from that pit route to its matching loop route. On-track fallback no longer forces bots onto the global main route like `bmw_route_loop` when no plausible route is found; the AI is left unresolved in place so bad spawns can be debugged instead of being hidden by a fallback.
+
+- Fixed `AHPP_AI` AI join/control state handling so per-AI runtime dictionaries used by spawn, initial-route selection, and the control loop are now synchronized. This prevents the collection-corruption errors that could start after a new AI joined and then cascade into repeated control update failures.
+
+- Fixed `AHPP_AI` spawn-route classification so newly spawned AI once again prefer the configured pit route(s) for their assigned area tag instead of always taking the physically nearest `_pit` route. The nearest-route fallback still applies when the planned route is missing or implausibly far away.
+
+- Fixed `AHPP_AI` route loading so the resolved alternate main route must share the same family tag as the resolved main route. Pairings like `bmw_route_loop` with `highway_route_alt` are now rejected, so loop and `_alt` routes only pair within the same tag such as `bmw_` or `highway_`.
+
+- Fixed `AHPP_AI` initial on-track route classification so fresh AI no longer start directly on `_route_alt` lanes. Bots now begin on the primary loop route and only move to a parallel alternate lane through the existing lane-change safety checks.
+
+- Fixed `AHPP_AI` alternate-lane switching so `_route_alt` merges now only run when an AI is actually following the paired main route path. This stops cars on unrelated loops like `island_route_loop` from trying to jump across the map into `highway_route_alt`.
+
+- Added a loop-route traffic spacing equalizer in `AHPP_AI` cruise driving so cars now apply a small smoothed speed bias from whole-route occupancy, helping long-running traffic spread back out instead of permanently bunching behind the slowest lead car. The new behavior includes stable per-car spacing variation and new `config.ini` tuning options for enable/min-cars/gain/max-bias/variation/smoothing.
+
+- Updated `AHPP_AI` logging so the app now writes into a `Logs` folder and appends each startup session to a dated log file instead of overwriting the previous `log.txt` on launch.
+
+- Fixed `AHPP_AI` route-editor node selection so move/edit actions now resolve against the subset of markers actually rendered in LFS, and looped routes no longer place a duplicate closing marker on top of node `0`, which could stop the first node from being repositioned reliably.
+
+- Simplified `AHPP_AI` spawn classification so new AI now always attach to the physically nearest `_pit` route regardless of heading, and removed the planned-vs-live spawn-route guessing/remap logic that could send cars onto the wrong route.
+
+- Adjusted `AHPP_AI` initial track-route classification so if no heading-qualified route can be chosen, it now falls back to the physically closest on-track route instead of leaving the AI unresolved.
+
+- Added a cumulative `AHPP_AI` spawn-route validation metric that logs the percentage of AI spawns which successfully resolve a valid initial route, and exposed the same percentage as a new `Spawn Route` status label in the main UI.
+
+- Fixed `AHPP_AI` debug AI selection so spawning a new bot no longer steals the active debug target. The HUD now stays on the AI you picked from the list, and if that selected AI is spectated or otherwise removed its debug buttons are cleared until you manually choose another AI.
+
+- Fixed the `AHPP_AI` control scheduler starving newer AI cars when the per-tick packet budget was lower than the active AI count. Control updates now rotate round-robin across the spawn-ordered pool instead of always servicing the first few PLIDs, and the periodic `CONTROL` log now reports how many AIs were deferred in each window so stuck cars like late spawns are easier to diagnose.
+
 - Fixed `AHPP_AI` planned auto-population spawns dropping their target pit-area segment before `/ai` was issued, which meant fresh bots were always classified only from whatever live slot LFS happened to use and could all pile onto routes like `bmw_route_loop`. Planned segment tags are now queued through spawn and applied on the matching AI join before initial route selection runs.
 
 - Refactored `AHPP_AI` driving so each active driver state now produces a complete control intent for the tick instead of stacking single-input overrides afterward. Normal route following, warmup hold, merge yield, reverse recovery, and engine restart now all flow through the same full-frame apply path, with ignition toggles included in the engine-restart state output.

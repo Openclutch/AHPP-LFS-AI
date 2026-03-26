@@ -33,14 +33,18 @@ namespace AHPP_AI.Debug
         /// <param name="minimumLevel">Minimum log level to emit</param>
         public Logger(string filePath, bool enableConsole = true, LogLevel minimumLevel = LogLevel.Info)
         {
-            this.filePath = filePath;
+            this.filePath = ResolveLogFilePath(filePath);
             consoleLogging = enableConsole;
             this.minimumLevel = minimumLevel;
 
             try
             {
-                // Clear previous log file
-                File.WriteAllText(filePath, $"=== Log started at {DateTime.Now} ===\r\n");
+                var directory = Path.GetDirectoryName(this.filePath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+
+                File.AppendAllText(this.filePath,
+                    $"{Environment.NewLine}=== Log session started at {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} ==={Environment.NewLine}");
             }
             catch (Exception ex)
             {
@@ -169,6 +173,30 @@ namespace AHPP_AI.Debug
                 default:
                     return fallback;
             }
+        }
+
+        /// <summary>
+        ///     Resolve the final log file path and default bare filenames into a daily file under Logs.
+        /// </summary>
+        private static string ResolveLogFilePath(string configuredPath)
+        {
+            var trimmedPath = string.IsNullOrWhiteSpace(configuredPath) ? "log.txt" : configuredPath.Trim();
+            var configuredDirectory = Path.GetDirectoryName(trimmedPath);
+            if (string.IsNullOrWhiteSpace(configuredDirectory))
+            {
+                var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                var logsDirectory = Path.Combine(baseDirectory, "Logs");
+                var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(trimmedPath);
+                var extension = Path.GetExtension(trimmedPath);
+
+                if (string.IsNullOrWhiteSpace(extension))
+                    extension = ".txt";
+
+                return Path.Combine(logsDirectory,
+                    $"{fileNameWithoutExtension}_{DateTime.Now:yyyy-MM-dd}{extension}");
+            }
+
+            return trimmedPath;
         }
 
         /// <summary>

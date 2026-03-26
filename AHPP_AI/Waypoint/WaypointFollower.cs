@@ -603,8 +603,12 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Calculate throttle and brake values based on current speed and target speed
         /// </summary>
-        public (int throttle, int brake) CalculateThrottleAndBrake(byte plid, double speedKmh, double headingError,
-            AIConfig.DrivingMode drivingMode)
+        public (int throttle, int brake) CalculateThrottleAndBrake(
+            byte plid,
+            double speedKmh,
+            double headingError,
+            AIConfig.DrivingMode drivingMode,
+            double targetSpeedBiasKmh = 0.0)
         {
             // Initialize dictionary values if missing
             if (!targetSpeeds.ContainsKey(plid))
@@ -631,6 +635,9 @@ namespace AHPP_AI.Waypoint
                     Math.Max(0.0, config.RaceWaypointSpeedOffsetKmh),
                     Math.Max(1.0, config.RaceWaypointSpeedCapKmh));
             }
+
+            if (!hasManualTarget && !isFirstApproach[plid] && Math.Abs(targetSpeedBiasKmh) > 0.01)
+                targetSpeed = Math.Max(0.0, targetSpeed + targetSpeedBiasKmh);
 
             // Adjust target speed based on heading error
             var headingErrorDeg = Math.Abs(headingError) * 360.0 / 65536.0;

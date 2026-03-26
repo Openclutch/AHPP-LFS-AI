@@ -22,19 +22,6 @@ namespace AHPP_AI.AI
     }
 
     /// <summary>
-    ///     Captures how spawn-route preference was resolved between planned and live route candidates.
-    /// </summary>
-    internal sealed class SpawnRouteSelectionResult
-    {
-        public RouteCandidate? SelectedCandidate { get; set; }
-        public RouteCandidate? PreferredCandidate { get; set; }
-        public RouteCandidate? LiveCandidate { get; set; }
-        public string ReasonCode { get; set; } = string.Empty;
-        public double PreferredDistance { get; set; } = double.MaxValue;
-        public double LiveDistance { get; set; } = double.MaxValue;
-    }
-
-    /// <summary>
     ///     Captures the final spawn-time route decision between spawn and on-track candidates.
     /// </summary>
     internal sealed class InitialRouteDecision

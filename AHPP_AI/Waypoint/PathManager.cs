@@ -270,15 +270,63 @@ namespace AHPP_AI.Waypoint
                           route.Metadata.Name.EndsWith("_loop", StringComparison.OrdinalIgnoreCase)),
                 "main");
 
-            config.MainAlternateRouteName = ResolvePrimaryRouteName(
+            config.MainAlternateRouteName = ResolveAlternateMainRouteName(
                 config.MainAlternateRouteName,
                 recordedRoutes,
-                route => route.Metadata?.Type == RouteType.AlternateMain,
-                route => (route.Metadata?.Name?.IndexOf("_route_alt", StringComparison.OrdinalIgnoreCase) >= 0) ||
-                         (route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
-                          route.Metadata.Name.IndexOf("_alt", StringComparison.OrdinalIgnoreCase) >= 0),
-                "alternate main",
                 config.MainRouteName);
+        }
+
+        /// <summary>
+        /// Resolve the alternate main route and require it to share the same family tag as the active main route.
+        /// </summary>
+        private string ResolveAlternateMainRouteName(
+            string configuredName,
+            List<RecordedRoute> recordedRoutes,
+            string mainRouteName)
+        {
+            var normalizedConfigured = string.IsNullOrWhiteSpace(configuredName)
+                ? string.Empty
+                : routeLibrary.NormalizeRouteName(configuredName);
+            var requiredFamily = GetRouteFamilyTag(mainRouteName);
+
+            if (!string.IsNullOrWhiteSpace(normalizedConfigured))
+            {
+                var configuredMatch = recordedRoutes.FirstOrDefault(route =>
+                    RouteMatchesName(route, normalizedConfigured));
+                if (configuredMatch?.Metadata?.Name != null)
+                {
+                    if (RouteMatchesFamily(configuredMatch.Metadata.Name, requiredFamily))
+                        return configuredMatch.Metadata.Name;
+
+                    logger.LogWarning(
+                        $"Ignoring alternate main route {configuredMatch.Metadata.Name} because it does not match main route family {mainRouteName}.");
+                }
+            }
+
+            var resolved = recordedRoutes.FirstOrDefault(route =>
+                               route.Metadata?.Type == RouteType.AlternateMain &&
+                               RouteMatchesFamily(route.Metadata?.Name, requiredFamily)) ??
+                           recordedRoutes.FirstOrDefault(route =>
+                               ((route.Metadata?.Name?.IndexOf("_route_alt", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                                (route.Metadata?.Name?.StartsWith("route_", StringComparison.OrdinalIgnoreCase) == true &&
+                                 route.Metadata.Name.IndexOf("_alt", StringComparison.OrdinalIgnoreCase) >= 0)) &&
+                               RouteMatchesFamily(route.Metadata?.Name, requiredFamily));
+
+            if (resolved?.Metadata?.Name == null)
+                return string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(normalizedConfigured))
+            {
+                logger.Log(
+                    $"Resolved alternate main route {normalizedConfigured} -> {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            }
+            else
+            {
+                logger.Log(
+                    $"Resolved alternate main route to {resolved.Metadata.Name} for {routeLibrary.TrackCode}/{routeLibrary.LayoutName}");
+            }
+
+            return resolved.Metadata.Name;
         }
 
         /// <summary>
@@ -332,6 +380,37 @@ namespace AHPP_AI.Waypoint
                 return false;
 
             return route.Metadata.Name.Equals(routeName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Extract the family tag used to pair related routes such as `bmw_route_loop` and `bmw_route_alt`.
+        /// </summary>
+        private string GetRouteFamilyTag(string routeName)
+        {
+            if (string.IsNullOrWhiteSpace(routeName))
+                return string.Empty;
+
+            var normalized = routeLibrary.NormalizeRouteName(routeName);
+            var separators = new[] { "_route_", "_pit" };
+            foreach (var separator in separators)
+            {
+                var index = normalized.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
+                if (index > 0)
+                    return normalized.Substring(0, index);
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Check whether a route belongs to the required family tag.
+        /// </summary>
+        private bool RouteMatchesFamily(string? routeName, string requiredFamily)
+        {
+            if (string.IsNullOrWhiteSpace(requiredFamily) || string.IsNullOrWhiteSpace(routeName))
+                return false;
+
+            return GetRouteFamilyTag(routeName).Equals(requiredFamily, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -547,7 +626,7 @@ namespace AHPP_AI.Waypoint
 
         /// <summary>
         /// Choose the nearest spawn route for a given position among all recorded pit-entry routes.
-        /// Returns the path plus the best heading-aligned merge direction once the route is chosen.
+        /// Spawn-route selection intentionally ignores heading and always starts from the physically nearest waypoint.
         /// </summary>
         public bool TrySelectSpawnRoute(Vec position, int heading, out string routeName, out List<Util.Waypoint> path,
             out int startIndex, out bool clockwise, out bool isLoop)
@@ -558,12 +637,13 @@ namespace AHPP_AI.Waypoint
 
         /// <summary>
         /// Choose the nearest spawn route for a given position, optionally limiting the search to specific route names.
-        /// Returns the nearest waypoint distance for the selected route so callers can compare planned and live fits.
+        /// Returns the nearest waypoint distance for the selected route.
         /// </summary>
         public bool TrySelectSpawnRoute(Vec position, int heading, IEnumerable<string>? candidateRouteNames,
             out string routeName, out List<Util.Waypoint> path, out int startIndex, out bool clockwise, out bool isLoop,
             out double nearestDistance)
         {
+            _ = heading;
             routeName = SpawnRouteMetadata?.Name ?? string.Empty;
             path = SpawnRoute;
             startIndex = 0;
@@ -607,17 +687,46 @@ namespace AHPP_AI.Waypoint
                 if (candidateDistance >= nearestDistance)
                     continue;
 
-                var (_, index, forward) = waypointManager.ScoreRouteFit(position, heading, candidatePath, loop, false);
                 nearestDistance = candidateDistance;
                 routeName = kvp.Key;
                 path = candidatePath;
-                startIndex = index;
-                clockwise = forward;
+                startIndex = FindNearestWaypointIndex(position, candidatePath);
+                clockwise = true;
                 isLoop = loop;
                 found = true;
             }
 
             return found;
+        }
+
+        /// <summary>
+        /// Find the index of the waypoint closest to the provided world position.
+        /// </summary>
+        private static int FindNearestWaypointIndex(Vec position, List<Util.Waypoint> path)
+        {
+            if (path == null || path.Count == 0)
+                return 0;
+
+            var posX = position.X / 65536.0;
+            var posY = position.Y / 65536.0;
+            var bestDistance = double.MaxValue;
+            var bestIndex = 0;
+
+            for (var i = 0; i < path.Count; i++)
+            {
+                var wpX = path[i].Position.X / 65536.0;
+                var wpY = path[i].Position.Y / 65536.0;
+                var dx = wpX - posX;
+                var dy = wpY - posY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+                if (distance >= bestDistance)
+                    continue;
+
+                bestDistance = distance;
+                bestIndex = i;
+            }
+
+            return bestIndex;
         }
 
         /// <summary>

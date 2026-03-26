@@ -244,8 +244,12 @@ namespace AHPP_AI.Debug
             var markerType = CHALK_AHEAD;
             var markerFlags = route.Metadata.Type == RouteType.PitEntry ? CHALK_COLOR_RED : CHALK_COLOR_WHITE;
             var batch = new List<ObjectInfo>();
+            var skipClosingLoopNode = ShouldSkipDuplicateLoopClosureNode(route);
             for (var i = 0; i < nodes.Count && count < MaxVisibleWaypoints; i += effectiveStep)
             {
+                if (skipClosingLoopNode && i == nodes.Count - 1)
+                    continue;
+
                 var heading = CalculateHeadingForNode(nodes, i, route.Metadata.IsLoop);
                 PlaceEditableWaypoint(plid, nodes[i], heading, markerType, markerFlags, batch);
                 if (batch.Count >= AXM_BATCH_SIZE) FlushBatch(batch);
@@ -255,6 +259,21 @@ namespace AHPP_AI.Debug
 
             WaypointsVisualized = true;
             insim.SendPrivateMessage($"Visualized {count} nodes for {route.Metadata.Name}");
+        }
+
+        /// <summary>
+        /// Avoid placing a duplicate marker when a loop route repeats its first node as the last point.
+        /// </summary>
+        private static bool ShouldSkipDuplicateLoopClosureNode(RecordedRoute route)
+        {
+            if (route?.Metadata?.IsLoop != true || route.Nodes == null || route.Nodes.Count < 2)
+                return false;
+
+            var first = route.Nodes[0];
+            var last = route.Nodes[route.Nodes.Count - 1];
+            return Math.Abs(first.X - last.X) < 0.05 &&
+                   Math.Abs(first.Y - last.Y) < 0.05 &&
+                   Math.Abs(first.Z - last.Z) < 0.05;
         }
 
         /// <summary>

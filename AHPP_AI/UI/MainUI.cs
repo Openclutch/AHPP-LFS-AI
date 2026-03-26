@@ -40,6 +40,7 @@ namespace AHPP_AI.UI
         private const byte INSIM_STATUS_ROW = 85;
         private const byte PERFORMANCE_STATUS_ROW = 100;
         private const byte TRACK_LAYOUT_STATUS_ROW = (byte)(PERFORMANCE_STATUS_ROW + ROW_HEIGHT);
+        private const byte SPAWN_ROUTE_STATUS_ROW = (byte)(TRACK_LAYOUT_STATUS_ROW + ROW_HEIGHT);
         private const byte REMOVE_BTN_W = 5;
         private const byte AI_LABEL_W = 14;
         private const byte AI_MODE_W = 8;
@@ -82,6 +83,7 @@ namespace AHPP_AI.UI
         public const byte ToggleDebugButtonsId = (byte)(ButtonIds.MainStart + 69);
         public const byte PerformanceStatusId = (byte)(ButtonIds.MainStart + 70);
         public const byte TrackLayoutStatusId = (byte)(ButtonIds.MainStart + 71);
+        public const byte SpawnRouteStatusId = (byte)(ButtonIds.MainStart + 55);
         public const byte RoutePagePreviousId = (byte)(ButtonIds.MainStart + 56);
         public const byte RoutePageLabelId = (byte)(ButtonIds.MainStart + 57);
         public const byte RoutePageNextId = (byte)(ButtonIds.MainStart + 58);
@@ -148,6 +150,7 @@ namespace AHPP_AI.UI
         private bool debugButtonsVisible = true;
         private string performanceStatusLabel = "AI Perf: waiting";
         private string trackLayoutStatusLabel = "Track: pending";
+        private string spawnRouteStatusLabel = "Spawn Route: waiting";
         private string selectedTrackLayoutName = "DefaultLayout";
         private bool trackLayoutDropdownExpanded;
         private int routePageIndex;
@@ -177,6 +180,7 @@ namespace AHPP_AI.UI
             CreateButton(RefreshSelectionFeedId, "Refresh AXM", LEFT_COL, (byte)(row + ROW_HEIGHT * 3));
             RenderPerformanceStatus();
             RenderTrackLayoutStatus();
+            RenderSpawnRouteStatus();
 
             row = 70;
             CreateInputButton(SpawnDelayInputId, RIGHT_COL, row, "Spawn Delay (s)"); row += ROW_HEIGHT;
@@ -757,6 +761,15 @@ namespace AHPP_AI.UI
         }
 
         /// <summary>
+        /// Update the spawn-route validity summary shown beneath the track/layout status.
+        /// </summary>
+        public void UpdateSpawnRouteStatus(string label)
+        {
+            spawnRouteStatusLabel = string.IsNullOrWhiteSpace(label) ? "Spawn Route: waiting" : label.Trim();
+            RenderSpawnRouteStatus();
+        }
+
+        /// <summary>
         /// Update the selectable layouts shown beneath the active track button.
         /// </summary>
         public void SetTrackLayoutOptions(IEnumerable<string> layouts, string selectedLayout)
@@ -852,6 +865,18 @@ namespace AHPP_AI.UI
             CreateButton(TrackLayoutStatusId, trackLayoutStatusLabel, LEFT_COL, TRACK_LAYOUT_STATUS_ROW, LAYOUT_STATUS_W,
                 ROW_HEIGHT);
             RenderTrackLayoutOptions();
+        }
+
+        /// <summary>
+        /// Render the current spawn-route validity status beneath the track/layout indicator.
+        /// </summary>
+        private void RenderSpawnRouteStatus()
+        {
+            if (!uiInitialized || uiHidden) return;
+
+            DeleteButton(SpawnRouteStatusId);
+            CreateButton(SpawnRouteStatusId, spawnRouteStatusLabel, LEFT_COL, SPAWN_ROUTE_STATUS_ROW, LAYOUT_STATUS_W,
+                ROW_HEIGHT, false);
         }
 
         /// <summary>

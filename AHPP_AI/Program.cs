@@ -24,7 +24,8 @@ namespace AHPP_AI
         private static readonly InSimClient insim = new InSimClient();
 
         // Core components
-        private static readonly Logger logger = new Logger("log.txt");
+        private static readonly Logger logger = new Logger(Path.Combine("Logs",
+            $"log_{DateTime.Now:yyyy-MM-dd}.txt"));
         private static readonly AppConfig appConfig;
         private static readonly RouteLibrary routeLibrary;
         private static readonly WaypointManager waypointManager;
@@ -164,6 +165,12 @@ namespace AHPP_AI
         private static readonly double trafficLookaheadMinMeters;
         private static readonly double trafficBrakeTtcSeconds;
         private static readonly double trafficEmergencyTtcSeconds;
+        private static readonly bool trafficSpacingEqualizerEnabled;
+        private static readonly int trafficSpacingEqualizerMinCars;
+        private static readonly double trafficSpacingEqualizerGainKmh;
+        private static readonly double trafficSpacingEqualizerMaxBiasKmh;
+        private static readonly double trafficSpacingEqualizerVariationPercent;
+        private static readonly double trafficSpacingEqualizerSmoothing;
         private static readonly int spawnMergeHoldLookaheadWaypoints;
         private static readonly double spawnMergeHoldDistanceMeters;
         private static readonly bool raceUseAutomaticTransmission;
@@ -320,6 +327,14 @@ namespace AHPP_AI
             trafficLookaheadMinMeters = appConfig.GetDouble("AI", "TrafficLookaheadMinMeters", 15.0);
             trafficBrakeTtcSeconds = appConfig.GetDouble("AI", "TrafficBrakeTtcSeconds", 2.5);
             trafficEmergencyTtcSeconds = appConfig.GetDouble("AI", "TrafficEmergencyTtcSeconds", 1.0);
+            trafficSpacingEqualizerEnabled = appConfig.GetBool("AI", "TrafficSpacingEqualizerEnabled", true);
+            trafficSpacingEqualizerMinCars = appConfig.GetInt("AI", "TrafficSpacingEqualizerMinCars", 4);
+            trafficSpacingEqualizerGainKmh = appConfig.GetDouble("AI", "TrafficSpacingEqualizerGainKmh", 6.0);
+            trafficSpacingEqualizerMaxBiasKmh = appConfig.GetDouble("AI", "TrafficSpacingEqualizerMaxBiasKmh", 6.0);
+            trafficSpacingEqualizerVariationPercent =
+                appConfig.GetDouble("AI", "TrafficSpacingEqualizerVariationPercent", 0.10);
+            trafficSpacingEqualizerSmoothing =
+                appConfig.GetDouble("AI", "TrafficSpacingEqualizerSmoothing", 0.12);
             spawnMergeHoldLookaheadWaypoints = appConfig.GetInt("AI", "SpawnMergeHoldLookaheadWaypoints", 3);
             spawnMergeHoldDistanceMeters = appConfig.GetDouble("AI", "SpawnMergeHoldDistanceMeters", 15.0);
             var raceSection = "RaceMode";
@@ -549,6 +564,12 @@ namespace AHPP_AI
                 trafficLookaheadMinMeters,
                 trafficBrakeTtcSeconds,
                 trafficEmergencyTtcSeconds,
+                trafficSpacingEqualizerEnabled,
+                trafficSpacingEqualizerMinCars,
+                trafficSpacingEqualizerGainKmh,
+                trafficSpacingEqualizerMaxBiasKmh,
+                trafficSpacingEqualizerVariationPercent,
+                trafficSpacingEqualizerSmoothing,
                 spawnMergeHoldLookaheadWaypoints,
                 spawnMergeHoldDistanceMeters);
             aiController.ConfigurePassByReactions(
