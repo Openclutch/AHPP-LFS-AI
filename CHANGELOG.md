@@ -1,5 +1,15 @@
 # Changelog
 
+- Removed the `AHPP_AI` timed spawn-launch clutch release for fresh AI and changed spawn warmup to request first gear during the one-second wait before normal driving takeoff starts.
+
+- Moved `AHPP_AI` `ModLoadDelayMs` out of `[SpawnMods]` and into `[AI]` so spawn timing config is kept separate from the weighted mod pool entries.
+
+- Fixed `AHPP_AI` `SpawnMods` parsing so `ModLoadDelayMs` is treated as section configuration only and is no longer mistakenly added to the weighted mod spawn pool.
+
+- Added `AHPP_AI` spawn-command logging so mod AI creation now records each LFS text command it sends, including `/mod`, `/setup`, `/colour`, and `/ai`.
+
+- Fixed `AHPP_AI` AI spawn mod preparation so `/setup` and `/colour` now wait on a dedicated configurable post-`/mod` delay before being sent, preventing LFS from falling back to stock setup or colour when a mod takes longer to load.
+
 - Raised all recorded `AHPP_AI` route node heights in `AHPP_AI/bin/Debug/net6.0/Routes` by 2 meters on the Z axis to match the Live for Speed map height update.
 
 - Fixed `AHPP_AI` initial route classification so fresh AI now use the nearest pit route again, then transition from that pit route to its matching loop route. On-track fallback no longer forces bots onto the global main route like `bmw_route_loop` when no plausible route is found; the AI is left unresolved in place so bad spawns can be debugged instead of being hidden by a fallback.

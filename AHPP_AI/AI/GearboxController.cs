@@ -91,7 +91,7 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        ///     Initialize a new car's gearbox and enter the spawn launch phase to smoothly release the clutch.
+        ///     Initialize a new car's gearbox by requesting first gear during the spawn warmup wait.
         /// </summary>
         public void InitializeGearbox(byte plid)
         {
@@ -102,11 +102,11 @@ namespace AHPP_AI.AI
             lowRpmClutchActive[plid] = false;
             lowRpmClutchTimers[plid] = DateTime.MinValue;
             brakingClutchActive[plid] = false;
-            shiftPhases[plid] = GearShiftPhase.SpawnLaunch;
+            shiftPhases[plid] = GearShiftPhase.WaitForGearConfirmation;
             shiftPhaseStartedAt[plid] = DateTime.UtcNow;
             clutchTimers[plid] = DateTime.UtcNow;
             lastShiftTimes[plid] = DateTime.MinValue;
-            logger.Log($"PLID={plid} GEARBOX INIT: entering SpawnLaunch (hold={config.LaunchHoldMs}ms release={config.LaunchClutchReleaseMs}ms throttle={config.LaunchThrottleValue})");
+            logger.Log($"PLID={plid} GEARBOX INIT: waiting for first gear during spawn warmup");
         }
 
         /// <summary>

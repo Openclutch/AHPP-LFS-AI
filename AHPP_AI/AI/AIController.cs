@@ -409,6 +409,8 @@ namespace AHPP_AI.AI
             if (sourceConfig == null)
                 return;
 
+            config.SpawnModLoadDelayMs = Math.Max(100, sourceConfig.GetInt("AI", "ModLoadDelayMs", 1500));
+
             var entries = sourceConfig.GetSectionEntries("SpawnMods");
             if (entries == null || entries.Count == 0)
                 return;
@@ -440,7 +442,8 @@ namespace AHPP_AI.AI
             // Parse weight entries (ModName=Weight)
             foreach (var entry in entries)
             {
-                if (entry.Key.StartsWith("ModPreset.", StringComparison.OrdinalIgnoreCase))
+                if (entry.Key.StartsWith("ModPreset.", StringComparison.OrdinalIgnoreCase) ||
+                    entry.Key.Equals("ModLoadDelayMs", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var modName = entry.Key.Trim();
@@ -3019,7 +3022,7 @@ namespace AHPP_AI.AI
                 };
                 await ApplySpawnSelectionAsync(plannedSpawn).ConfigureAwait(false);
                 QueuePlannedSpawnSegment(plannedSpawn.SegmentTag);
-                insim.Send(new IS_MST { Msg = "/ai" });
+                SendSpawnCommand("/ai");
                 logger.Log($"Spawned AI {i + 1} of {segmentTags.Count}");
                 await Task.Delay(delayMs).ConfigureAwait(false);
             }
@@ -3192,25 +3195,39 @@ namespace AHPP_AI.AI
             if (plannedSpawn.Mod == null || string.IsNullOrWhiteSpace(plannedSpawn.Mod.Name))
                 return;
 
-            insim.Send(new IS_MST { Msg = $"/mod {plannedSpawn.Mod.Name}" });
-            await Task.Delay(100).ConfigureAwait(false);
+            SendSpawnCommand($"/mod {plannedSpawn.Mod.Name}");
+            await Task.Delay(config.SpawnModLoadDelayMs).ConfigureAwait(false);
 
             if (plannedSpawn.Mod.Setup.HasValue)
             {
-                insim.Send(new IS_MST { Msg = $"/setup {plannedSpawn.Mod.Setup.Value}" });
+                SendSpawnCommand($"/setup {plannedSpawn.Mod.Setup.Value}");
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
             if (plannedSpawn.Mod.Colour.HasValue)
             {
-                insim.Send(new IS_MST { Msg = $"/colour {plannedSpawn.Mod.Colour.Value}" });
+                SendSpawnCommand($"/colour {plannedSpawn.Mod.Colour.Value}");
                 await Task.Delay(100).ConfigureAwait(false);
             }
 
             var presetInfo = (plannedSpawn.Mod.Setup.HasValue || plannedSpawn.Mod.Colour.HasValue)
                 ? $" setup={plannedSpawn.Mod.Setup} colour={plannedSpawn.Mod.Colour}"
                 : string.Empty;
-            logger.Log($"Prepared AI spawn mod={plannedSpawn.Mod.Name}{presetInfo}");
+            logger.Log(
+                $"Prepared AI spawn mod={plannedSpawn.Mod.Name}{presetInfo} modLoadDelayMs={config.SpawnModLoadDelayMs}");
+        }
+
+        /// <summary>
+        /// Send an LFS text command used by the AI spawn flow and record it in the log.
+        /// </summary>
+        /// <param name="command">Exact command text sent to LFS.</param>
+        private void SendSpawnCommand(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return;
+
+            logger.Log($"Spawn command -> {command}");
+            insim.Send(new IS_MST { Msg = command });
         }
 
         /// <summary>

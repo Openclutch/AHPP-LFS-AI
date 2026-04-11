@@ -553,8 +553,10 @@ namespace AHPP_AI.AI
             }
             else if (gearboxController.IsSpawnLaunchActive(plid))
             {
-                // During spawn launch enforce a minimum throttle so the car can pull away.
-                intent.Throttle = Math.Max(intent.Throttle, config.LaunchThrottleValue);
+                intent.Throttle = clutchValue >= config.ClutchFullyPressed
+                    ? 0
+                    : Math.Min(intent.Throttle, config.LaunchThrottleValue);
+
                 if (!intent.Status.Contains("LAUNCH"))
                     intent.Status = "SPAWN LAUNCH: clutch release";
             }
@@ -593,14 +595,14 @@ namespace AHPP_AI.AI
         }
 
         /// <summary>
-        /// Apply a short brake hold during spawn warmup to stabilize the AI.
+        /// Apply a short neutral hold during spawn warmup before normal driving starts.
         /// </summary>
         private void ApplyWarmupHold(byte plid, int steering, double speedKmh, float currentRpm)
         {
             var automaticTransmission = UsesAutomaticTransmission(plid);
-            var intent = BuildControlIntent(steering, 0, 65535, automaticTransmission, speedKmh, "WARMUP HOLD: Stabilizing");
+            var intent = BuildControlIntent(steering, 0, 0, automaticTransmission, speedKmh, "WARMUP HOLD: Waiting");
             gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, GetDrivingMode(plid));
-            ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch: !automaticTransmission);
+            ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission);
             controlStatuses[plid] = intent.Status;
             ApplyControlIntent(plid, intent);
         }

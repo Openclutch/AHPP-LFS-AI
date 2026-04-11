@@ -63,6 +63,7 @@ namespace AHPP_AI.AI
         public int NumberOfAIs { get; set; } = 0;
 
         public int WaitTimeToSpawn { get; set; } = 10000;
+        public int SpawnModLoadDelayMs { get; set; } = 1500;
 
         // Pit spawn settings
         public int AiReservedRangeStart { get; set; } = 41;
@@ -97,7 +98,7 @@ namespace AHPP_AI.AI
         public int MaxControlHzPerAi { get; set; } = 10;
         public double AiiTargetHz { get; set; } = 1.0;
         public int TelemetryWarmupMs { get; set; } = 2000;
-        public int WarmupBrakeHoldMs { get; set; } = 0;
+        public int WarmupBrakeHoldMs { get; set; } = 1000;
         public bool ResetInputsEveryTick { get; set; } = false;
 
         public RouteMode WaypointSource { get; set; } = RouteMode.Recorded;

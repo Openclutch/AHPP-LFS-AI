@@ -428,7 +428,7 @@ namespace AHPP_AI
             packetRateReservePerSecond = Math.Max(0, appConfig.GetInt("AI", "PacketRateReservePerSecond", 80));
             packetsPerAiiUpdate = Math.Max(1, appConfig.GetInt("AI", "PacketsPerAIIUpdate", 2));
             telemetryWarmupMs = Math.Max(0, appConfig.GetInt("AI", "TelemetryWarmupMs", 2000));
-            warmupBrakeHoldMs = Math.Max(0, appConfig.GetInt("AI", "WarmupBrakeHoldMs", 0));
+            warmupBrakeHoldMs = Math.Max(0, appConfig.GetInt("AI", "WarmupBrakeHoldMs", 1000));
             controlTraceLoggingEnabled = appConfig.GetBool("DebugAI", "ControlTraceLogging", false);
             controlTraceIntervalMs = Math.Max(100, appConfig.GetInt("DebugAI", "ControlTraceIntervalMs", 1000));
             controlTraceLogOnStateChange =
