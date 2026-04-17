@@ -2017,7 +2017,8 @@ namespace AHPP_AI.AI
             CompCar mergingCar,
             List<Util.Waypoint> targetPath,
             int targetIndex,
-            TrafficCarSnapshot[] snapshot)
+            TrafficCarSnapshot[] snapshot,
+            bool aiTrafficOnly = false)
         {
             if (targetPath == null || targetPath.Count == 0) return false;
 
@@ -2044,6 +2045,7 @@ namespace AHPP_AI.AI
             foreach (var car in snapshot)
             {
                 if (car.PLID == 0 || car.PLID == plid) continue;
+                if (aiTrafficOnly && !car.IsAi) continue;
 
                 if (!PathProjection.TryProjectToPath(targetPath, geometry, car.XMeters, car.YMeters,
                         out var otherProjection))
@@ -2105,29 +2107,70 @@ namespace AHPP_AI.AI
         /// </summary>
         private bool ShouldHoldForSpawnMerge(byte plid, CompCar car, int targetIndex, TrafficCarSnapshot[] snapshot)
         {
-            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
-            if (pathManager.MainRoute == null || pathManager.MainRoute.Count < 2) return false;
-            if (!IsSpawnMergeWindow(car, targetIndex)) return false;
+            var spawnPath = waypointFollower.GetPath(plid);
+            if (spawnPath == null || spawnPath.Count < 2)
+                spawnPath = pathManager.SpawnRoute;
+            if (spawnPath == null || spawnPath.Count < 2) return false;
+            if (!TryResolveSpawnMergeTargetPath(plid, out var targetPath) || targetPath == null) return false;
+            if (!IsSpawnMergeWindow(car, targetIndex, spawnPath)) return false;
 
-            var mergeIndex = FindClosestIndex(pathManager.MainRoute, car);
-            return !IsTargetLaneClear(plid, car, pathManager.MainRoute, mergeIndex, snapshot);
+            var mergeIndex = FindClosestIndex(targetPath, car);
+            return !IsTargetLaneClear(plid, car, targetPath, mergeIndex, snapshot, aiTrafficOnly: true);
+        }
+
+        /// <summary>
+        /// Resolve the active spawn route's matching driving route for merge-clearance checks.
+        /// </summary>
+        private bool TryResolveSpawnMergeTargetPath(byte plid, out List<Util.Waypoint>? targetPath)
+        {
+            targetPath = null;
+
+            string? selectedSpawn;
+            lock (runtimeStateLock)
+            {
+                spawnRouteSelections.TryGetValue(plid, out selectedSpawn);
+            }
+
+            var targetRouteName = ResolveDrivingRouteForSpawnRoute(selectedSpawn ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(targetRouteName))
+                targetRouteName = config.MainRouteName;
+
+            targetPath = waypointManager.GetTrafficRoute(targetRouteName);
+            if (targetPath == null || targetPath.Count < 2)
+            {
+                waypointManager.LoadTrafficRoute(targetRouteName);
+                targetPath = waypointManager.GetTrafficRoute(targetRouteName);
+            }
+
+            if (targetPath != null && targetPath.Count >= 2)
+                return true;
+
+            if (!string.Equals(targetRouteName, config.MainRouteName, StringComparison.OrdinalIgnoreCase) &&
+                pathManager.MainRoute != null &&
+                pathManager.MainRoute.Count >= 2)
+            {
+                targetPath = pathManager.MainRoute;
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
         /// Check whether the car is within the configured hold window near the end of the spawn route.
         /// </summary>
-        private bool IsSpawnMergeWindow(CompCar car, int targetIndex)
+        private bool IsSpawnMergeWindow(CompCar car, int targetIndex, List<Util.Waypoint> spawnPath)
         {
-            if (pathManager.SpawnRoute == null || pathManager.SpawnRoute.Count < 2) return false;
+            if (spawnPath == null || spawnPath.Count < 2) return false;
 
             var holdLookahead = Math.Max(1, config.SpawnMergeHoldLookaheadWaypoints);
-            if (targetIndex >= pathManager.SpawnRoute.Count - holdLookahead) return true;
+            if (targetIndex >= spawnPath.Count - holdLookahead) return true;
 
-            var geometry = PathProjection.GetGeometry(pathManager.SpawnRoute, config.PathLoopClosureDistanceMeters);
+            var geometry = PathProjection.GetGeometry(spawnPath, config.PathLoopClosureDistanceMeters);
             if (geometry == null || geometry.TotalLength <= 0) return false;
 
             if (!PathProjection.TryProjectToPath(
-                    pathManager.SpawnRoute,
+                    spawnPath,
                     geometry,
                     car.X / 65536.0,
                     car.Y / 65536.0,

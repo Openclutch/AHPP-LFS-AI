@@ -292,6 +292,12 @@ namespace AHPP_AI.AI
                 var (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
                     plid, carX, carY, (int)currentHeading);
 
+                if (waypointFollower.CheckWaypointReached(plid, carX, carY, distance, speedKmh))
+                {
+                    (distance, desiredHeading, headingError) = waypointFollower.CalculateTargetData(
+                        plid, carX, carY, (int)currentHeading);
+                }
+
                 // Calculate steering early so merge holds can keep the car aligned to the lane.
                 var steering = CalculateSteering(plid, carX, carY, currentHeading, speedKmh, headingError);
 
@@ -371,20 +377,17 @@ namespace AHPP_AI.AI
                         $"Distance={distance:F1}m, Speed={speedKmh:F1}km/h, Recovery={inRecovery}, Engine={engineRunning[plid]}");
                 }
 
-                // Check if we've reached the waypoint
-                waypointFollower.CheckWaypointReached(plid, distance, speedKmh);
-
                 // Update gearbox (gears and clutch)
                 gearboxController.UpdateGearbox(plid, speedKmh, currentRpm, drivingMode);
 
                 var lowRpmClutchActive = !automaticTransmission && gearboxController.IsLowRpmClutchActive(plid);
                 intent.LowRpmClutchActive = lowRpmClutchActive;
 
-                ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission);
                 ApplyTrafficSpacing(plid, carX, carY, speedKmh, car.Direction, trafficSnapshot, ref intent);
 
                 // Check for potential collisions
                 var collisionDanger = DetectPotentialCollision(plid, car, allCars);
+                var forceClutch = false;
                 if (collisionDanger)
                 {
                     intent = BuildControlIntent(
@@ -394,8 +397,10 @@ namespace AHPP_AI.AI
                         automaticTransmission,
                         speedKmh,
                         "COLLISION AVOIDANCE: Stopping");
-                    ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch: !automaticTransmission);
+                    forceClutch = !automaticTransmission;
                 }
+
+                ApplyTransmissionIntent(plid, ref intent, speedKmh, automaticTransmission, forceClutch);
 
                 if (!automaticTransmission)
                 {
@@ -548,6 +553,10 @@ namespace AHPP_AI.AI
             intent.ClutchValue = forceClutch ? config.ClutchFullyPressed : clutchValue;
 
             if (!gearboxController.ShouldApplyThrottle(plid, speedKmh))
+            {
+                intent.Throttle = 0;
+            }
+            else if (intent.Brake > config.BrakeBase * 2)
             {
                 intent.Throttle = 0;
             }
@@ -1249,7 +1258,7 @@ namespace AHPP_AI.AI
                     var clutchIntent = BuildControlIntent(
                         steering,
                         3000 + throttleBoost,
-                        0,
+                        65535,
                         false,
                         0,
                         "Engine restart: clutch");
@@ -1271,7 +1280,7 @@ namespace AHPP_AI.AI
                     var ignitionIntent = BuildControlIntent(
                         steering,
                         15000 + throttleBoost,
-                        0,
+                        65535,
                         false,
                         0,
                         "Engine restart: ignition");

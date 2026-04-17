@@ -1,5 +1,13 @@
 # Changelog
 
+- Fixed `AHPP_AI` route following so cars that carry too much speed past a waypoint can advance to a nearby forward waypoint instead of steering back toward a missed point, which could make highway-route AI swerve into a wall and enter recovery.
+
+- Fixed `AHPP_AI` spawn merge yielding so grouped pit routes like `highway_pit` check for clearance on their matching driving route such as `highway_route_loop`, using the AI's active spawn path and nearby AI projected onto that target lane instead of the global main/spawn route.
+
+- Fixed `AHPP_AI` manual gearbox braking during traffic stops and collision avoidance so hard braking is applied before final clutch/throttle gating. This keeps stopped highway AI from trying to throttle through a fully braked/low-RPM state and helps prevent hill-start stalls from cascading into traffic jams.
+
+- Fixed `AHPP_AI` engine restart recovery so stalled manual-gearbox cars hold full brake while pressing the clutch and pulsing ignition, preventing cars from rolling backward on hills before the clutch release phase begins.
+
 - Removed the `AHPP_AI` timed spawn-launch clutch release for fresh AI and changed spawn warmup to request first gear during the one-second wait before normal driving takeoff starts.
 
 - Moved `AHPP_AI` `ModLoadDelayMs` out of `[SpawnMods]` and into `[AI]` so spawn timing config is kept separate from the weighted mod pool entries.

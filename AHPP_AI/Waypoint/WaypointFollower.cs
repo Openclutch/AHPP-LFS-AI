@@ -493,10 +493,10 @@ namespace AHPP_AI.Waypoint
         /// <summary>
         ///     Check if car has reached waypoint threshold and advance to next waypoint if needed
         /// </summary>
-        public void CheckWaypointReached(byte plid, double distanceCurrent, double speedKmh)
+        public bool CheckWaypointReached(byte plid, double carX, double carY, double distanceCurrent, double speedKmh)
         {
             if (!aiPaths.ContainsKey(plid) || aiPaths[plid] == null)
-                return;
+                return false;
 
             // Initialize dictionary values if missing
             if (!isFirstApproach.ContainsKey(plid))
@@ -526,9 +526,11 @@ namespace AHPP_AI.Waypoint
                     // Reset approach point index to ensure we don't try to continue using curve points
                     if (currentApproachPointIndex.ContainsKey(plid))
                         currentApproachPointIndex[plid] = 0;
+
+                    return true;
                 }
 
-                return;
+                return false;
             }
 
             // Rest of the method remains unchanged
@@ -536,14 +538,93 @@ namespace AHPP_AI.Waypoint
             if (DateTime.Now - waypointTimers[plid] > waypointTimeout)
             {
                 AdvanceToNextWaypoint(plid, "WAYPOINT TIMEOUT");
-                return;
+                return true;
             }
 
             var threshold = config.CalculateWaypointThreshold(speedKmh);
 
             if (distanceCurrent < threshold)
+            {
                 AdvanceToNextWaypoint(plid,
                     $"WAYPOINT REACHED: Distance={distanceCurrent:F1}m, Threshold={threshold:F1}m");
+                return true;
+            }
+
+            return AdvancePastMissedWaypoint(plid, carX, carY, distanceCurrent, threshold, speedKmh);
+        }
+
+        /// <summary>
+        ///     Advance to a nearby forward waypoint when speed carries the AI past the current target without entering the proximity threshold.
+        /// </summary>
+        private bool AdvancePastMissedWaypoint(
+            byte plid,
+            double carX,
+            double carY,
+            double distanceCurrent,
+            double threshold,
+            double speedKmh)
+        {
+            if (!aiPaths.TryGetValue(plid, out var path) || path == null || path.Count < 3)
+                return false;
+
+            if (!targetWaypointIndices.TryGetValue(plid, out var currentIndex))
+                return false;
+
+            if (distanceCurrent <= threshold)
+                return false;
+
+            var loop = pathIsLoop.TryGetValue(plid, out var isLoop) && isLoop;
+            var searchAhead = Math.Max(2, Math.Min(12, (int)Math.Ceiling(speedKmh / 12.0)));
+            var bestIndex = currentIndex;
+            var bestDistance = distanceCurrent;
+
+            for (var offset = 1; offset <= searchAhead; offset++)
+            {
+                var candidateIndex = currentIndex + offset;
+                if (candidateIndex >= path.Count)
+                {
+                    if (!loop) break;
+                    candidateIndex %= path.Count;
+                }
+
+                var waypoint = path[candidateIndex];
+                var dx = waypoint.Position.X / 65536.0 - carX;
+                var dy = waypoint.Position.Y / 65536.0 - carY;
+                var distance = Math.Sqrt(dx * dx + dy * dy);
+
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    bestIndex = candidateIndex;
+                }
+            }
+
+            if (bestIndex == currentIndex)
+                return false;
+
+            var allowedMissDistance = threshold * 1.5;
+            var significantImprovement = bestDistance + threshold < distanceCurrent;
+            if (bestDistance > allowedMissDistance && !significantImprovement)
+                return false;
+
+            logger.Log(
+                $"PLID={plid} WAYPOINT MISSED: Distance={distanceCurrent:F1}m, next best={bestDistance:F1}m: Moving from {currentIndex} to {bestIndex}");
+
+            targetWaypointIndices[plid] = bestIndex;
+            UpdateLookaheadIndex(plid);
+
+            if (!targetSpeeds.ContainsKey(plid))
+                targetSpeeds[plid] = 30.0;
+
+            targetSpeeds[plid] = path[bestIndex].SpeedLimit;
+            waypointTimers[plid] = DateTime.Now;
+            lastDistanceToWaypoint[plid] = double.MaxValue;
+            lastProgressCheckTimes[plid] = DateTime.Now;
+            movingAwayCounts[plid] = 0;
+            recoveryAttempts[plid] = 0;
+            failedRecoveryCycles[plid] = 0;
+            progressStates[plid] = ProgressState.Progressing;
+            return true;
         }
 
         /// <summary>
